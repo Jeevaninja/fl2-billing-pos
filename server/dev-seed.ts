@@ -1,0 +1,61 @@
+/**
+ * Demo data for running the counter locally: staff, a small catalogue with barcodes and opening
+ * stock, three waiters, a few members and an open business day. Only ever applied to an empty
+ * database (no staff rows); a real deployment never runs it.
+ */
+import type { SqlClient } from '../src/db/client.js';
+
+const PRODUCTS = [
+  { name: 'House Whisky', category: 'WHISKY', skus: [['HWHS-F', 'FULL', 'House Whisky — Full', 180_000], ['HWHS-H', 'HALF', 'House Whisky — Half', 95_000], ['HWHS-Q', 'QUARTER', 'House Whisky — Quarter', 50_000]] },
+  { name: 'House Rum', category: 'RUM', skus: [['HRUM-F', 'FULL', 'House Rum — Full', 120_000], ['HRUM-H', 'HALF', 'House Rum — Half', 65_000], ['HRUM-Q', 'QUARTER', 'House Rum — Quarter', 35_000]] },
+  { name: 'House Lager', category: 'BEER', skus: [['HLAG-650', 'BEER_650', 'House Lager — 650', 22_000], ['HLAG-330', 'BEER_330', 'House Lager — 330', 14_000]] },
+] as const;
+
+const OPENING_QTY = 48;
+
+async function insertId(db: SqlClient, sql: string, params: unknown[]): Promise<string> {
+  const { rows } = await db.query<{ id: string }>(sql, params);
+  const row = rows[0];
+  if (!row) throw new Error(`dev seed insert returned no id: ${sql}`);
+  return row.id;
+}
+
+/** Seeds an empty database and returns the demo cashier; returns null if staff already exist. */
+export async function seedDevData(db: SqlClient): Promise<{ cashierId: string } | null> {
+  const { rows } = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM staff`);
+  if ((rows[0]?.n ?? 0) > 0) return null;
+
+  const cashierId = await insertId(db, `INSERT INTO staff (display_name, role) VALUES ('Counter 1', 'CASHIER') RETURNING id`, []);
+  const managerId = await insertId(db, `INSERT INTO staff (display_name, role) VALUES ('Manager', 'MANAGER') RETURNING id`, []);
+
+  let barcode = 8_900_000_000_001;
+  for (const product of PRODUCTS) {
+    const productId = await insertId(db, `INSERT INTO products (name, category) VALUES ($1, $2) RETURNING id`, [
+      product.name,
+      product.category,
+    ]);
+    for (const [code, size, name, price] of product.skus) {
+      const skuId = await insertId(
+        db,
+        `INSERT INTO skus (product_id, sku_code, barcode, size_code, display_name, price_paise)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+        [productId, code, String(barcode++), size, name, price],
+      );
+      await db.query(`INSERT INTO stock_movements (sku_id, movement_type, qty_delta) VALUES ($1, 'OPENING', $2)`, [skuId, OPENING_QTY]);
+    }
+  }
+
+  await db.query(
+    `INSERT INTO waiters (waiter_code, display_name, is_trusted, credit_limit_paise) VALUES
+       ('W01', 'Suresh', true, NULL),
+       ('W02', 'Manoj', false, NULL),
+       ('W03', 'Prakash', true, 500000)`,
+  );
+  await db.query(
+    `INSERT INTO members (membership_no, display_name) VALUES
+       ('M-0001', 'Anil Kumar'), ('M-0002', 'Deepa Rao'), ('M-0003', 'Farhan Shaikh')`,
+  );
+  await db.query(`INSERT INTO business_days (business_date, opened_by_staff_id) VALUES (current_date, $1)`, [managerId]);
+
+  return { cashierId };
+}

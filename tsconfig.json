@@ -37,5 +37,5 @@
     "moduleDetection": "force",
     "skipLibCheck": true,
   },
-  "include": ["src", "test", "vitest.config.ts"]
+  "include": ["src", "server", "test", "vitest.config.ts"]
 }

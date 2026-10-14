@@ -140,6 +140,58 @@ export class BillingService {
     );
   }
 
+  /** Attaches, swaps or clears (`null`) the member on an open NORMAL bill. Membership stays optional. */
+  async setBillMember(billId: string, memberId: string | null): Promise<Bill> {
+    return withPosErrors(() =>
+      this.db.transaction(async (tx) => {
+        assertEditableNormalBill(await getBill(tx, billId, { forUpdate: true }), 'attach a member');
+        if (memberId !== null) {
+          const member = await maybeOne<{ membership_no: string; is_active: boolean }>(
+            tx,
+            `SELECT membership_no, is_active FROM members WHERE id = $1`,
+            [memberId],
+          );
+          if (!member) throw new NotFoundError('member', memberId);
+          if (!member.is_active) {
+            throw new PosError(PosErrorCode.ILLEGAL_TRANSITION, `member ${member.membership_no} is inactive`);
+          }
+        }
+        return mapBill(await one<BillRow>(tx, `UPDATE bills SET member_id = $2 WHERE id = $1 RETURNING *`, [billId, memberId]));
+      }),
+    );
+  }
+
+  /**
+   * Cancels bottles from a line of an open NORMAL bill by appending a negative line (the original
+   * line is never edited). Allowed only before the bill's first tender. `restock: false` keeps an
+   * opened bottle out of stock. Peak bills are corrected with reverseBill instead.
+   */
+  async cancelBillItem(billId: string, itemId: string, quantity: number, options: { restock?: boolean } = {}): Promise<BillLine> {
+    assertQuantity(quantity);
+    return withPosErrors(() =>
+      this.db.transaction(async (tx) => {
+        const bill = await getBill(tx, billId, { forUpdate: true });
+        assertEditableNormalBill(bill, 'cancel lines', 'use reverseBill');
+        if ((await tenderedPaise(tx, billId)) !== 0n) {
+          throw new PosError(
+            PosErrorCode.ILLEGAL_TRANSITION,
+            `bill ${bill.billNo} already has a tender recorded; lines can no longer be cancelled`,
+          );
+        }
+        if (!(await maybeOne(tx, `SELECT 1 FROM bill_items WHERE id = $1`, [itemId]))) throw new NotFoundError('bill item', itemId);
+        const item = mapBillItem(
+          await one<BillItemRow>(
+            tx,
+            `INSERT INTO bill_items (bill_id, reverses_item_id, qty, restock, waiter_id, created_by_staff_id)
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+            [billId, itemId, -quantity, options.restock ?? true, bill.waiterId, bill.createdByStaffId],
+          ),
+        );
+        return { bill: await getBill(tx, billId), item };
+      }),
+    );
+  }
+
   /** One scan during peak: a PEAK_UNSETTLED bill with one line, attached to the running session. No payment screen. */
   async recordPeakSale(sessionId: string, skuId: string, quantity: number, cashierId: string): Promise<BillLine> {
     assertQuantity(quantity);
@@ -215,6 +267,19 @@ export class BillingService {
 }
 
 // ── Shared steps (run inside the caller's transaction) ───────────────────────
+
+/** Open-bill edits apply only to OPEN NORMAL sale bills; frozen bills get PS001, peak or reversal bills PS002. */
+function assertEditableNormalBill(bill: Bill, action: string, peakHint = 'peak bills are counter-only'): void {
+  if (bill.mode !== 'NORMAL') {
+    throw new PosError(PosErrorCode.ILLEGAL_TRANSITION, `cannot ${action} on peak bill ${bill.billNo}: ${peakHint}`);
+  }
+  if (bill.status !== 'OPEN') {
+    throw new PosError(PosErrorCode.APPEND_ONLY, `bill ${bill.billNo} is ${bill.status} and frozen`);
+  }
+  if (bill.kind !== 'SALE') {
+    throw new PosError(PosErrorCode.ILLEGAL_TRANSITION, `cannot ${action} on reversal bill ${bill.billNo}`);
+  }
+}
 
 /** Pre-flight stock check for a friendly error before any write; the trigger re-checks under lock. */
 async function assertStockAvailable(tx: SqlClient, skuId: string, quantity: number): Promise<void> {
