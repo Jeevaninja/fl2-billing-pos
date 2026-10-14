@@ -48,7 +48,17 @@ export const MODULE_TILES: readonly PosActionId[] = ['billing', 'kots', 'expense
 /** Rail contents before the operator has used anything this session. */
 export const DEFAULT_RECENT: readonly PosActionId[] = ['new-bill', 'member', 'pay', 'kots', 'day-end']
 
+const RECENT_LIMIT = 6
+
+/** Moves `id` to the front of the recently-used list. */
+export function pushRecent(prev: readonly PosActionId[], id: PosActionId): PosActionId[] {
+  return [id, ...prev.filter((x) => x !== id)].slice(0, RECENT_LIMIT)
+}
+
 /** Placeholder until backend services are wired in. */
 export function runStub(id: PosActionId): void {
   console.info(`[FL2] ${ACTIONS[id].label}: stub handler, not wired yet`)
 }
+
+/** Actions that open the billing screen instead of a stub. */
+export const BILLING_ACTIONS: ReadonlySet<PosActionId> = new Set(['billing', 'new-bill', 'member', 'pay'])

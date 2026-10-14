@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { ChevronRight, Clock, Keyboard, WifiOff } from 'lucide-react'
+import { useCallback, useState } from 'react'
+import { ChevronRight, Keyboard, PlugZap } from 'lucide-react'
 import { useGlobalShortcuts } from '../hooks/useGlobalShortcuts'
-import { ACTIONS, DEFAULT_RECENT, MODULE_TILES, runStub, type PosActionId } from './dashboard/actions'
-
-const RECENT_LIMIT = 6
+import { ACTIONS, BILLING_ACTIONS, MODULE_TILES, runStub, type PosActionId } from './dashboard/actions'
+import { FOCUS_RING, formatTime } from '../lib/ui'
+import { Kbd, LiveClock } from './ui'
 
 const TILE_ACCENT: Record<PosActionId, string> = {
   'new-bill': 'bg-amber-400 text-zinc-950',
@@ -17,26 +17,33 @@ const TILE_ACCENT: Record<PosActionId, string> = {
   reports: 'bg-emerald-500 text-zinc-950',
 }
 
-const FOCUS_RING = 'outline-none focus-visible:ring-4 focus-visible:ring-amber-300 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950'
-
 interface LastAction {
   id: PosActionId
   at: Date
 }
 
-function formatTime(date: Date): string {
-  return date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+interface DashboardProps {
+  /** Recently used actions; held by App so the rail survives a visit to the billing screen. */
+  recent: readonly PosActionId[]
+  onUse: (id: PosActionId) => void
+  onOpenBilling: () => void
 }
 
-export default function Dashboard() {
-  const [recent, setRecent] = useState<PosActionId[]>([...DEFAULT_RECENT])
+export default function Dashboard({ recent, onUse, onOpenBilling }: DashboardProps) {
   const [lastAction, setLastAction] = useState<LastAction | null>(null)
 
-  const trigger = useCallback((id: PosActionId) => {
-    runStub(id)
-    setRecent((prev) => [id, ...prev.filter((x) => x !== id)].slice(0, RECENT_LIMIT))
-    setLastAction({ id, at: new Date() })
-  }, [])
+  const trigger = useCallback(
+    (id: PosActionId) => {
+      onUse(id)
+      if (BILLING_ACTIONS.has(id)) {
+        onOpenBilling()
+        return
+      }
+      runStub(id)
+      setLastAction({ id, at: new Date() })
+    },
+    [onUse, onOpenBilling],
+  )
 
   useGlobalShortcuts({
     F1: () => trigger('new-bill'),
@@ -51,8 +58,8 @@ export default function Dashboard() {
         <h1 className="text-lg font-bold tracking-wide uppercase">Operations</h1>
         <div className="ml-auto flex items-center gap-3 text-sm">
           <span className="flex items-center gap-1.5 rounded border border-zinc-600 px-2 py-1 font-medium text-zinc-300">
-            <WifiOff className="size-4" aria-hidden />
-            Preview: backend not connected
+            <PlugZap className="size-4" aria-hidden />
+            Billing live · other modules preview
           </span>
           <LiveClock />
         </div>
@@ -143,28 +150,5 @@ function RailButton({ id, onSelect }: { id: PosActionId; onSelect: (id: PosActio
       </span>
       {shortcut && <Kbd>{shortcut}</Kbd>}
     </button>
-  )
-}
-
-function Kbd({ children }: { children: ReactNode }) {
-  return (
-    <kbd className="rounded border border-zinc-500 border-b-2 bg-zinc-800 px-1.5 py-0.5 font-mono text-xs font-bold text-zinc-100">
-      {children}
-    </kbd>
-  )
-}
-
-/** Isolated so the per-second tick only re-renders the clock. */
-function LiveClock() {
-  const [now, setNow] = useState(() => new Date())
-  useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 1000)
-    return () => clearInterval(timer)
-  }, [])
-  return (
-    <span className="flex items-center gap-1.5 font-mono text-base font-semibold tabular-nums">
-      <Clock className="size-4 text-zinc-400" aria-hidden />
-      {formatTime(now)}
-    </span>
   )
 }

@@ -7,6 +7,7 @@
  *   FL2_CASHIER_ID   staff id the counter acts as (until staff login exists).
  *   FL2_DEV_SEED=1   seed demo data into an empty database and default to its cashier.
  */
+import { mkdirSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import pg from 'pg';
 import type { SqlDatabase } from '../src/db/client.js';
@@ -33,6 +34,7 @@ async function openDatabase(): Promise<{ db: SqlDatabase; label: string; close: 
     return { db: pgDatabase(pool), label: 'PostgreSQL', close: () => pool.end() };
   }
   const dir = process.env.FL2_PGLITE_DIR ?? '.data/pglite';
+  mkdirSync(dir, { recursive: true }); // PGlite creates only the last path segment
   const lite = new PGlite(dir);
   await runMigrations(lite);
   return { db: lite, label: `PGlite (${dir})`, close: () => lite.close() };
