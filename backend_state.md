@@ -1,6 +1,6 @@
 # FL2 POS — Backend State Reference
 
-As of commit `9b22354` on `main` (Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API). Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
+Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API (commit `9b22354`), and Phase 5 Captain API and KOT printing. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
 
 - **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`.
 - **Money:** `BIGINT` whole paise in SQL, `bigint` in TypeScript (`type Paise = bigint`). No floats anywhere.
@@ -57,6 +57,7 @@ Business-rule violations raise these SQLSTATEs. The services surface them as `Po
 
 Other error classes:
 - `NotFoundError` (`.entity`, `.id`): a referenced bill, SKU, waiter or session doesn't exist.
+- `InactiveError` (`.entity`, `.id`): a referenced waiter, member or SKU exists but is deactivated. Raised by `CaptainService.placeOrder`; the counter methods still report inactive rows as `PS002`.
 - `TypeError` / `RangeError`: invalid arguments (non-bigint money, non-positive amounts or quantities, unknown tender).
 - All service methods are `async`, so every error arrives as a rejected promise.
 
@@ -231,6 +232,56 @@ interface BillDetail {
 }
 ```
 
+### `CaptainService` (`src/services/captain.service.ts`)
+
+Waiter (Captain app) flows. Constructed with a `SqlDatabase` and a `KotPrinter`.
+
+```ts
+class CaptainService {
+  constructor(db: SqlDatabase, printer: KotPrinter);
+
+  getWaiterProfile(waiterId: string): Promise<WaiterProfile>;            // NotFoundError; inactive waiters are returned with isActive: false
+  listOpenBills(waiterId: string): Promise<BillDetail[]>;                // OPEN sale bills tagged to the waiter (app or counter), by bill_no
+  placeOrder(waiterId: string, lines: readonly OrderLine[], memberId?: string): Promise<PlacedOrder>;
+}
+
+interface WaiterProfile extends WaiterSummary { isActive: boolean; creditHeadroomPaise: Paise | null; } // max(limit − outstanding, 0); null = no limit
+interface OrderLine { skuId: string; quantity: number; }
+interface PlacedOrder { bill: Bill; items: BillItem[]; waiter: WaiterSummary; member: MemberSummary | null; kot: KotStatus; }
+interface KotStatus { station: 'COUNTER'; printed: boolean; printedAt: Date | null; error: string | null; }
+const MAX_ORDER_LINES = 50;
+```
+
+**`placeOrder`** runs in one transaction:
+1. Checks the waiter, the optional member and every SKU. A missing one is `NotFoundError`; an inactive one is `InactiveError`.
+2. Inserts a `NORMAL` / `OPEN` / `WAITER_APP` bill with `waiter_id` set, `created_by_staff_id` NULL and the trust snapshot taken by trigger.
+3. Adds one line per order line, in order, with the usual stock checks (`PS003`).
+
+Any failure saves nothing. The KOT prints **after** commit: a printer error is reported in `kot` (`printed: false`) and never undoes the order. Orders are allowed while a peak session runs, because waiter bills are always NORMAL.
+
+### `PrinterService` (`src/services/printer.service.ts`)
+
+A stub for the ESC/POS network thermal printer. It implements `KotPrinter`.
+
+```ts
+interface KotPrinter { printKOT(ticket: KotTicket): Promise<KotPrintResult>; }
+interface KotTicket {
+  kotNo: number /* = bill number */; billId: string; station: 'COUNTER';
+  waiter: { code: string; displayName: string }; member: { membershipNo: string; displayName: string } | null;
+  lines: Array<{ skuCode: string; displayName: string; sizeCode: SizeCode; quantity: number }>; createdAt: Date;
+}
+interface KotPrintResult { station: 'COUNTER'; printedAt: Date; text: string; }
+
+function formatKot(ticket: KotTicket, format?: { width?: number /* 48 = 80 mm, 32 = 58 mm */; timeZone?: string /* 'Asia/Kolkata' */ }): string;
+class PrinterService implements KotPrinter {
+  constructor(options?: { sink?: (text: string) => void /* default console.log */; width?: number; timeZone?: string });
+}
+```
+
+- Tickets show quantities and sizes, never prices.
+- Every product category is liquor, so every KOT routes to the `COUNTER` station.
+- Not yet built: the real printer (TCP to port 9100, ESC/POS init and cut), and a code-page mapping for non-ASCII characters in item names (for example `—`).
+
 ---
 
 ## 4. Local HTTP API (`server/`)
@@ -264,6 +315,7 @@ Migrations run on every boot (already-applied ones are skipped).
 | Status | `error.code` | When |
 |---|---|---|
 | 400 | `BAD_REQUEST` | Malformed JSON, missing or mistyped field, non-positive quantity |
+| 400 | `INACTIVE` | Captain order references an inactive waiter, member or SKU (adds `entity`, `id`) |
 | 403 | `FORBIDDEN` | `Host` header is not `localhost`, `127.0.0.1` or `[::1]` (blocks DNS rebinding) |
 | 404 | `NOT_FOUND` | Unknown route, or `NotFoundError` (adds `entity`, `id`) |
 | 405 | `METHOD_NOT_ALLOWED` | Known path, wrong method |
@@ -295,5 +347,17 @@ Migrations run on every boot (already-applied ones are skipped).
 | `POST /api/peak/sessions` | `{ businessDayId, declaredCash, declaredUpi }` | `startPeakSession(…, cashier)` | 201 |
 | `POST /api/peak/sessions/:sessionId/end` | `{ countedCash, countedUpi }` | `endPeakSession(…, cashier)` | 200 |
 | `POST /api/waiters/:waiterId/repayments` | `{ amount, tender: 'CASH'\|'UPI' }` | `recordWaiterRepayment(…, cashier)` | 201 |
+
+**Captain routes** (`server/captain-api.ts`)
+
+| Method & path | Body | Calls | OK | Errors |
+|---|---|---|---|---|
+| `GET /api/captain/waiter/:waiterId` | | `getWaiterProfile` | 200 `WaiterProfile` | 400 malformed id, 404 unknown waiter |
+| `GET /api/captain/waiter/:waiterId/bills` | | `listOpenBills` | 200 `BillDetail[]` | 400, 404 |
+| `POST /api/captain/kot` | `{ waiterId, memberId?: uuid \| null, items: [{ skuId, quantity }] }` (1–50 items) | `placeOrder` | 201 `PlacedOrder` | 400 `BAD_REQUEST` / `INACTIVE`, 404 unknown waiter / member / SKU, 409 `PS003` out of stock |
+
+The KOT printer is `ApiConfig.printer` (default `new PrinterService()`, which writes to the API process's stdout).
+
+**Not yet reachable from Android.** The server binds `127.0.0.1` and only accepts loopback `Host` headers. Opening it to the LAN also opens every counter route, and no route is authenticated, so it waits on a decision about device auth.
 
 The frontend dev server proxies `/api` to `http://127.0.0.1:4310`.

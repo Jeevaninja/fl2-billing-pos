@@ -297,7 +297,7 @@ async function assertStockAvailable(tx: SqlClient, skuId: string, quantity: numb
   }
 }
 
-async function insertSaleLine(tx: SqlClient, bill: Bill, skuId: string, quantity: number): Promise<BillItem> {
+export async function insertSaleLine(tx: SqlClient, bill: Bill, skuId: string, quantity: number): Promise<BillItem> {
   await assertStockAvailable(tx, skuId, quantity);
   return mapBillItem(
     await one<BillItemRow>(

@@ -1,65 +1,11 @@
-import { request } from 'node:http';
-import type { AddressInfo } from 'node:net';
-import { afterEach, describe, expect, it } from 'vitest';
-import { createApiServer } from '../../server/app.js';
+import { describe, expect, it } from 'vitest';
+import { MISSING, useApi } from '../support/api.js';
 import { useSeededDb } from '../support/db.js';
 import { OPENING_QTY, PRICE } from '../support/fixtures.js';
 
-const MISSING = '00000000-0000-0000-0000-000000000000';
-
-interface Reply {
-  status: number;
-  /** Parsed JSON from the wire. */
-  body: any;
-}
-
 describe('local HTTP API', () => {
   const ctx = useSeededDb();
-  let close: (() => Promise<void>) | undefined;
-
-  afterEach(async () => {
-    await close?.();
-    close = undefined;
-  });
-
-  /** Starts the API on an ephemeral port against this test's database. */
-  async function start() {
-    const { db, fx } = ctx();
-    const server = createApiServer({ db, cashierId: fx.cashier });
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    close = () => new Promise((resolve) => server.close(() => resolve()));
-    const { port } = server.address() as AddressInfo;
-
-    /** Raw node:http so tests control every header, including Host. */
-    function call(
-      method: string,
-      path: string,
-      body?: unknown,
-      headers: Record<string, string> = {},
-    ): Promise<Reply> {
-      const payload = body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body);
-      return new Promise((resolve, reject) => {
-        const req = request(
-          {
-            host: '127.0.0.1',
-            port,
-            method,
-            path,
-            headers: { ...(payload !== undefined ? { 'content-type': 'application/json' } : {}), ...headers },
-          },
-          (res) => {
-            let text = '';
-            res.setEncoding('utf8');
-            res.on('data', (c: string) => (text += c));
-            res.on('end', () => resolve({ status: res.statusCode ?? 0, body: text ? JSON.parse(text) : undefined }));
-          },
-        );
-        req.on('error', reject);
-        req.end(payload);
-      });
-    }
-    return { db, fx, call };
-  }
+  const start = useApi(ctx);
 
   it('reports health and the counter context with money as strings and dates as ISO', async () => {
     const { fx, call } = await start();

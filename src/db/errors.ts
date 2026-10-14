@@ -74,6 +74,19 @@ export class NotFoundError extends Error {
   }
 }
 
+/** A referenced row exists but is deactivated (inactive waiter, member or SKU). */
+export class InactiveError extends Error {
+  override readonly name = 'InactiveError';
+
+  constructor(
+    readonly entity: string,
+    readonly id: string,
+    label: string,
+  ) {
+    super(`${entity} ${label} is inactive`);
+  }
+}
+
 interface DbErrorLike {
   code: string;
   message: string;

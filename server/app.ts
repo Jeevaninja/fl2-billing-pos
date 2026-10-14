@@ -7,10 +7,14 @@ import type { SqlDatabase } from '../src/db/client.js';
 import type { CounterTender, Tender } from '../src/domain/types.js';
 import {
   BillingService,
+  CaptainService,
   CounterQueries,
+  InactiveError,
+  type KotPrinter,
   NotFoundError,
   PeakSessionService,
   PosError,
+  PrinterService,
   WaiterService,
   type CounterPayment,
 } from '../src/services/index.js';
@@ -29,11 +33,15 @@ import {
   str,
   toJson,
 } from './json.js';
+import { captainRoutes } from './captain-api.js';
+import { created, HttpError, ok, route, type Route } from './routing.js';
 
 export interface ApiConfig {
   db: SqlDatabase;
   /** Staff row the counter acts as until staff login exists. */
   cashierId: string;
+  /** KOT printer for Captain orders; defaults to the console stub. */
+  printer?: KotPrinter;
 }
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -42,39 +50,7 @@ const TENDERS = ['CASH', 'UPI', 'WAITER_CREDIT'] as const satisfies readonly Ten
 /** Loopback names only: blocks DNS-rebinding pages from reaching the till through a foreign Host. */
 const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
 
-interface Request {
-  params: Record<string, string>;
-  query: URLSearchParams;
-  body: Body;
-}
-
-type Handler = (req: Request) => Promise<{ status?: number; body: unknown }>;
-
-interface Route {
-  method: 'GET' | 'POST' | 'PUT';
-  pattern: RegExp;
-  handler: Handler;
-}
-
-class HttpError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
-function route(method: Route['method'], path: string, handler: Handler): Route {
-  const pattern = new RegExp(`^${path.replace(/:(\w+)/g, '(?<$1>[^/]+)')}$`);
-  return { method, pattern, handler };
-}
-
-const ok = (body: unknown) => ({ body });
-const created = (body: unknown) => ({ status: 201, body });
-
-function buildRoutes({ db, cashierId }: ApiConfig): Route[] {
+function buildRoutes({ db, cashierId, printer = new PrinterService() }: ApiConfig): Route[] {
   const billing = new BillingService(db);
   const peak = new PeakSessionService(db);
   const waiters = new WaiterService(db);
@@ -196,6 +172,8 @@ function buildRoutes({ db, cashierId }: ApiConfig): Route[] {
         ),
       ),
     ),
+
+    ...captainRoutes(new CaptainService(db, printer)),
   ];
 }
 
@@ -215,6 +193,9 @@ export function errorResponse(err: unknown): { status: number; body: { error: Re
   if (err instanceof HttpError) return { status: err.status, body: { error: { code: err.code, message: err.message } } };
   if (err instanceof BadRequestError || err instanceof RangeError) {
     return { status: 400, body: { error: { code: 'BAD_REQUEST', message: err.message } } };
+  }
+  if (err instanceof InactiveError) {
+    return { status: 400, body: { error: { code: 'INACTIVE', message: err.message, entity: err.entity, id: err.id } } };
   }
   if (err instanceof NotFoundError) {
     return { status: 404, body: { error: { code: 'NOT_FOUND', message: err.message, entity: err.entity, id: err.id } } };
