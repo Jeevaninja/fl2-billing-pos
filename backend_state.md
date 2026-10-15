@@ -1,8 +1,8 @@
 # FL2 POS — Backend State Reference
 
-Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`). Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
+Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`). Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
 
-- **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`, `0006_expense_category`.
+- **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`, `0006_expense_category`, `0007_peak_drawer_cash`.
 - **Money:** `BIGINT` whole paise in SQL, `bigint` in TypeScript (`type Paise = bigint`). No floats anywhere.
 - **Quantities:** `INTEGER` whole sealed bottles. No ml / peg columns.
 - **Append-only:** DELETE and TRUNCATE are blocked on every domain table. Ledger tables also block UPDATE. Corrections are made with reversing records.
@@ -36,7 +36,15 @@ Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local 
 - `v_peak_sessions`: adds `running_expected_paise`.
 - `v_invariant_violations`: nightly self-check; it must stay empty.
 
-**SQL functions:** `pos_start_peak(cash, upi, staff)`, `pos_end_peak(session, cash, upi, staff)`, `pos_peak_expected_paise(session)` (0005: subtracts cash expenses paid during the session) and `pos_day_expected_cash(day)`.
+**SQL functions:** `pos_start_peak(cash, upi, staff)`, `pos_end_peak(session, cash, upi, staff)`, `pos_peak_expected_paise(session)` (0005: subtracts cash expenses paid during the session), `pos_day_expected_cash(day)` and `pos_peak_expected_drawer_cash(session)` (0007).
+
+**Peak expected drawer total (0007):** `v_peak_sessions.expected_drawer_cash_paise` is set for a running session and NULL once it ends. It's the physical cash that should be in the till now:
+- start cash
+- \+ Σ peak bill totals (peak bills record no tender, so they're counted as cash)
+- \+ in-peak CASH bill tenders and CASH waiter repayments
+- − in-peak cash expenses
+
+UPI is excluded. A peak sale actually paid by UPI makes the drawer lower by that amount; the session variance, which reconciles cash + UPI together, is unaffected. The UI shows this figure; `running_expected_paise` (the net collection, which can be negative) stays the basis of the variance.
 
 **Day End (0005):**
 - `pos_day_expected_cash` = opening float + CASH bill tenders outside peak windows + Σ ended sessions (end cash − start cash) + CASH waiter repayments outside peak windows − cash expenses outside peak windows. Inside a peak window the counted drawer delta already contains every cash movement, so nothing is counted twice and a peak shortage appears once (as that session's variance).
@@ -281,7 +289,7 @@ interface CounterContext {
 }
 interface StaffSummary { id: string; displayName: string; role: 'CASHIER' | 'MANAGER' | 'ADMIN'; }
 interface BusinessDaySummary { id: string; businessDate: string /* 'YYYY-MM-DD' */; openedAt: Date; }
-interface PeakSessionView extends PeakSession { runningExpectedPaise: Paise; }
+interface PeakSessionView extends PeakSession { runningExpectedPaise: Paise; expectedDrawerCashPaise: Paise; }  // drawer total: see 0007
 interface SkuLookup {
   id: string; skuCode: string; barcode: string | null; displayName: string; sizeCode: SizeCode;
   pricePaise: Paise; onHandQty: number; isActive: boolean;

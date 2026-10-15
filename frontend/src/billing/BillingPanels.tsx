@@ -384,10 +384,10 @@ export function PeakSide({ session, scans, onUndo, canUndo }: { session: PeakSes
           <span>{scans}</span>
         </div>
         <div className="mt-2 flex items-baseline justify-between">
-          <span className="text-sm font-bold tracking-widest text-zinc-400 uppercase">Expected so far</span>
-          <span className="font-mono text-3xl font-black tabular-nums">{formatPaise(session.runningExpectedPaise)}</span>
+          <span className="text-sm font-bold tracking-widest text-zinc-400 uppercase">Expected drawer total</span>
+          <span className="font-mono text-3xl font-black tabular-nums">{formatPaise(session.expectedDrawerCashPaise)}</span>
         </div>
-        <p className="mt-2 text-xs text-zinc-500">Reconciled against counted cash and UPI when the session ends in Day End.</p>
+        <p className="mt-2 text-xs text-zinc-500">Cash that should be in the till now: start cash + peak sales − in-peak expenses. A sale paid by UPI lowers it; the session still reconciles cash + UPI together when it ends.</p>
       </div>
       <button
         type="button"

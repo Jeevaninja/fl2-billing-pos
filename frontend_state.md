@@ -17,7 +17,7 @@ main.tsx                      StrictMode → <App/>, imports index.css (Tailwind
 └─ App                        view: 'dashboard' | 'billing' | 'captain-orders' | 'day-end' | 'expenses'; holds the Recently Used list
    ├─ Dashboard               module tiles + Recently Used rail + key legend footer
    │  ├─ header               Start peak (F8) button when a day is open and no peak runs
-   │  ├─ PeakBanner           amber "PEAK #n running · expected so far" strip with End peak session (F8)
+   │  ├─ PeakBanner           amber "PEAK #n running · since · expected drawer total" strip with End peak session (F8)
    │  ├─ day banner           "No business day is open" strip → Day End (context polled 15 s)
    │  ├─ ModuleTile ×6        Billing Screen, Captain Orders (live "n open" badge, polled 15 s), Expense (live), Purchase,
    │  │                       Day End (reads "Open Day" and becomes the primary tile when no day is open), Reports
@@ -35,7 +35,7 @@ main.tsx                      StrictMode → <App/>, imports index.css (Tailwind
       │  └─ GridFooter        key legend for the current mode
       ├─ aside (right pane)
       │  ├─ SidePanel         NORMAL: Card(Member F2), Card(Waiter F4, TrustBadge), totals, Start peak (F8), Pay F9
-      │  └─ PeakSide          PEAK: session card, expected-so-far, Undo last scan (Ctrl+Z)
+      │  └─ PeakSide          PEAK: session card, expected drawer total, Undo last scan (Ctrl+Z)
       └─ dialogs (one at a time, all built on Modal)
          ├─ PaymentDialog     option radios C/U/S/P/L, rupee input, change / split / credit preview
          ├─ MemberDialog      Picker: debounced member search; Enter on empty = walk-in
@@ -204,7 +204,7 @@ No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDow
 
 - The peak ticker holds only this visit's scans, so Ctrl+Z can't undo a scan made before a reload. Server totals are always complete.
 - No receipt printing or KOT reprint. No Purchase or Reports screens (dashboard stubs).
-- "Expected so far" for a running peak is net of in-peak cash expenses, so it can be negative before the first sale.
+- The peak banner, the Billing peak side panel, the end dialog and Day End show the **expected drawer total** (`expectedDrawerCashPaise`: start cash + peak sales + in-peak cash − in-peak expenses). Peak bills carry no tender, so a peak sale paid by UPI makes the real drawer lower than this figure; the end-of-session variance still reconciles cash + UPI together.
 - Expense entries are stamped with the till's `FL2_CASHIER_ID`; there's no per-person attribution until staff login exists.
 - Breakage written off with `X` is a cancel line with `restock: false`; there is no separate breakage/ADJUSTMENT report yet.
 - The cashier is fixed by the API's `FL2_CASHIER_ID`; there's no login.

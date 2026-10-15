@@ -81,7 +81,7 @@ describe('dayEndReducer', () => {
   })
 
   it('counts every open bill, a running peak and each owing waiter as blockers', () => {
-    const peak = { id: 'p', sessionNo: 1, startedAt: '', startCashPaise: 0n, startUpiPaise: 0n, runningExpectedPaise: 0n }
+    const peak = { id: 'p', sessionNo: 1, startedAt: '', startCashPaise: 0n, startUpiPaise: 0n, runningExpectedPaise: 0n, expectedDrawerCashPaise: 0n }
     const bill = { billId: 'b', billNo: 3, source: 'COUNTER' as const, status: 'OPEN' as const, waiter: null, duePaise: 1n, createdAt: '' }
     expect(blockerCount(summary({ blockers: { openBills: [bill, { ...bill, billId: 'c' }], runningPeakSession: peak, waitersOwing: [owing] } }))).toBe(4)
     // Peak bills clear together when the session ends: one item, however many scans.

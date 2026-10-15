@@ -7,7 +7,15 @@ import type { SqlClient, SqlDatabase } from '../db/client.js';
 import { NotFoundError, PosError, PosErrorCode, withPosErrors } from '../db/errors.js';
 import { assertPaise, type DbInt, type Paise, paiseParam, toPaise, toPaiseOrNull } from '../domain/money.js';
 import type { BillSource, BillStatus } from '../domain/types.js';
-import { mapWaiter, type PeakSessionView, WAITER_COLUMNS, type WaiterRow, type WaiterSummary } from './counter-queries.js';
+import {
+  mapPeakSessionView,
+  mapWaiter,
+  type PeakSessionView,
+  type PeakSessionViewRow,
+  WAITER_COLUMNS,
+  type WaiterRow,
+  type WaiterSummary,
+} from './counter-queries.js';
 import { mapPeakSession, maybeOne, one, type PeakSessionRow } from './rows.js';
 
 export interface DaySummary {
@@ -322,7 +330,7 @@ async function summarise(db: SqlClient, day: DaySummary): Promise<DayEndSummary>
   const { rows: waiterRows } = await db.query<WaiterRow & { is_active: boolean }>(`SELECT ${WAITER_COLUMNS}, is_active FROM waiters`);
   const waiters = new Map(waiterRows.map((w) => [w.id, w]));
 
-  const session = await maybeOne<PeakSessionRow & { running_expected_paise: DbInt }>(
+  const session = await maybeOne<PeakSessionViewRow>(
     db,
     `SELECT * FROM v_peak_sessions WHERE business_day_id = $1 AND ended_at IS NULL`,
     [day.id],
@@ -392,7 +400,7 @@ async function summarise(db: SqlClient, day: DaySummary): Promise<DayEndSummary>
         createdAt: b.created_at,
       };
     }),
-    runningPeakSession: session ? { ...mapPeakSession(session), runningExpectedPaise: toPaise(session.running_expected_paise) } : null,
+    runningPeakSession: session ? mapPeakSessionView(session) : null,
     waitersOwing: waiterRows
       .filter((w) => toPaise(w.outstanding_balance) > 0n)
       .sort((a, b) => a.waiter_code.localeCompare(b.waiter_code))

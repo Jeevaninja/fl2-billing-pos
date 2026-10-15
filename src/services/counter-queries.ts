@@ -35,6 +35,22 @@ export interface BusinessDaySummary {
 export interface PeakSessionView extends PeakSession {
   /** What the drawer should have gained so far in this session (frozen once the session ends). */
   runningExpectedPaise: Paise;
+  /**
+   * Physical cash that should be in the drawer now: start cash + peak sales (no tender, so counted as
+   * cash) + in-peak cash tenders and waiter cash − in-peak cash expenses. See pos_peak_expected_drawer_cash.
+   */
+  expectedDrawerCashPaise: Paise;
+}
+
+export type PeakSessionViewRow = PeakSessionRow & { running_expected_paise: DbInt; expected_drawer_cash_paise: DbInt };
+
+/** Maps a running session from v_peak_sessions. */
+export function mapPeakSessionView(row: PeakSessionViewRow): PeakSessionView {
+  return {
+    ...mapPeakSession(row),
+    runningExpectedPaise: toPaise(row.running_expected_paise),
+    expectedDrawerCashPaise: toPaise(row.expected_drawer_cash_paise),
+  };
 }
 
 export interface MemberSummary {
@@ -148,7 +164,7 @@ export class CounterQueries {
     );
     if (!day) return { cashier, businessDay: null, peakSession: null, openBill: null };
 
-    const session = await maybeOne<PeakSessionRow & { running_expected_paise: DbInt }>(
+    const session = await maybeOne<PeakSessionViewRow>(
       this.db,
       `SELECT * FROM v_peak_sessions WHERE business_day_id = $1 AND ended_at IS NULL`,
       [day.id],
@@ -166,9 +182,7 @@ export class CounterQueries {
     return {
       cashier,
       businessDay: { id: day.id, businessDate: day.business_date, openedAt: day.opened_at },
-      peakSession: session
-        ? { ...mapPeakSession(session), runningExpectedPaise: toPaise(session.running_expected_paise) }
-        : null,
+      peakSession: session ? mapPeakSessionView(session) : null,
       openBill: openBill ? await this.getBillDetail(openBill.id) : null,
     };
   }

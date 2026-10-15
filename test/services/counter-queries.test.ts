@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { NotFoundError } from '../../src/db/errors.js';
-import { CaptainService, CounterQueries, type KotPrinter } from '../../src/services/index.js';
+import { CaptainService, CounterQueries, DayEndService, type KotPrinter } from '../../src/services/index.js';
 import { useSeededDb } from '../support/db.js';
 import { OPENING_QTY } from '../support/fixtures.js';
 import { one } from '../support/pos.js';
@@ -39,6 +39,33 @@ describe('CounterQueries', () => {
 
       await peak.endPeakSession(session.id, 1000_00n, 0n, fx.cashier);
       expect((await queries.getCounterContext(fx.cashier)).peakSession).toBeNull();
+    });
+
+    it('reports the expected drawer cash of a running peak: start cash + peak sales + in-peak cash − in-peak expenses', async () => {
+      const { db, fx, queries, peak, billing, waiters } = setup();
+      const dayEnd = new DayEndService(db);
+      // A trusted waiter owes for a bill from before the peak; a counter bill is still open.
+      const credit = await billing.createBill('NORMAL', fx.cashier);
+      await billing.addItemToBill(credit.id, fx.sku.quarter, 1);
+      await waiters.tagBillToWaiter(credit.id, fx.waiter.trusted);
+      await waiters.settleWaiterBill(credit.id, fx.waiter.trusted, 'WAITER_CREDIT');
+      const open = await billing.createBill('NORMAL', fx.cashier);
+      await billing.addItemToBill(open.id, fx.sku.beer330, 1);
+
+      const session = await peak.startPeakSession(fx.dayId, 1000_00n, 50_00n, fx.cashier);
+      expect((await queries.getCounterContext(fx.cashier)).peakSession?.expectedDrawerCashPaise).toBe(1000_00n);
+
+      await billing.recordPeakSale(session.id, fx.sku.beer650, 2, fx.cashier); // + 2 × 250 (no tender: counted as cash)
+      await billing.settleNormalBill(open.id, [{ mode: 'CASH', amount: PAISE.beer330 }]); // + 150 cash
+      await waiters.recordWaiterRepayment(fx.waiter.trusted, 100_00n, 'CASH', fx.cashier); // + 100 cash
+      await waiters.recordWaiterRepayment(fx.waiter.trusted, 50_00n, 'UPI', fx.cashier); // UPI: not in the drawer
+      await dayEnd.recordCashExpense(30_00n, null, fx.cashier, 'ICE'); // − 30
+
+      const expected = 1000_00n + 2n * PAISE.beer650 + PAISE.beer330 + 100_00n - 30_00n;
+      const { peakSession } = await queries.getCounterContext(fx.cashier);
+      expect(peakSession).toMatchObject({ expectedDrawerCashPaise: expected });
+      expect(peakSession?.runningExpectedPaise).toBe(2n * PAISE.beer650 + PAISE.beer330 + 100_00n + 50_00n - 30_00n);
+      expect((await dayEnd.getDayEndSummary(fx.dayId)).blockers.runningPeakSession?.expectedDrawerCashPaise).toBe(expected);
     });
 
     it("resumes this cashier's newest open NORMAL bill, not another cashier's or a settled one", async () => {

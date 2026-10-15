@@ -21,7 +21,7 @@ export function PeakBanner({ session, onEnd }: { session: PeakSessionView; onEnd
       <Zap className="size-5 shrink-0" aria-hidden />
       <span className="font-black tracking-widest uppercase">Peak #{session.sessionNo} running</span>
       <span className="font-semibold">
-        since {formatClock(session.startedAt)} · expected so far <span className="font-mono">{formatPaise(session.runningExpectedPaise)}</span>
+        since {formatClock(session.startedAt)} · expected drawer total <span className="font-mono">{formatPaise(session.expectedDrawerCashPaise)}</span>
       </span>
       <button
         type="button"
@@ -211,8 +211,8 @@ export function PeakEndDialog({ session, onEnded, onClose }: EndProps) {
         <dd className="text-right">{formatPaise(session.startCashPaise)}</dd>
         <dt className="text-zinc-400">Started with UPI</dt>
         <dd className="text-right">{formatPaise(session.startUpiPaise)}</dd>
-        <dt className="text-zinc-400">Expected so far</dt>
-        <dd className="text-right">{formatPaise(session.runningExpectedPaise)}</dd>
+        <dt className="text-zinc-400">Expected drawer total</dt>
+        <dd className="text-right">{formatPaise(session.expectedDrawerCashPaise)}</dd>
       </dl>
       <Readings cash={cash} upi={upi} onCash={setCash} onUpi={setUpi} onSubmit={submit} />
       <p className="mt-3 text-sm text-zinc-400">Enter the full drawer and UPI readings, not the difference.</p>

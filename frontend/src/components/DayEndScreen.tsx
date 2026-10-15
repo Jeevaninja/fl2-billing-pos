@@ -310,7 +310,7 @@ function Checklist({ summary, busy, onRepay, onEndPeak, onOpenBilling, onOpenCap
         {peak && (
           <div className="mt-2 flex items-center gap-3">
             <span className="text-sm text-zinc-300">
-              Since {formatClock(peak.startedAt)} · expected so far <span className="font-mono">{formatPaise(peak.runningExpectedPaise)}</span>
+              Since {formatClock(peak.startedAt)} · expected drawer total <span className="font-mono">{formatPaise(peak.expectedDrawerCashPaise)}</span>
               {peakBills > 0 && ` · ${peakBills} peak bill${peakBills === 1 ? '' : 's'} to reconcile`}
             </span>
             <SmallButton onClick={() => onEndPeak(peak)} disabled={busy} primary>

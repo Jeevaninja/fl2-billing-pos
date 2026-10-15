@@ -85,6 +85,8 @@ export interface PeakSessionView {
   startCashPaise: Paise
   startUpiPaise: Paise
   runningExpectedPaise: Paise
+  /** Cash that should be in the drawer now (peak sales counted as cash). */
+  expectedDrawerCashPaise: Paise
 }
 
 export interface CounterContext {
