@@ -61,6 +61,7 @@ describe('PeakSessionService', () => {
       billUpiPaise: 0n,
       waiterCashPaise: 0n,
       waiterUpiPaise: 200_000n,
+      cashExpensesPaise: 0n,
       expectedPaise: 5_110_000n,
       actualPaise: 5_105_000n,
       cashDeltaPaise: 3_280_000n,
@@ -110,7 +111,7 @@ describe('PeakSessionService', () => {
 
   it('only starts on the open business day (PS007)', async () => {
     const { db, fx, peak } = setup();
-    await db.query(`UPDATE business_days SET status = 'CLOSED', closed_by_staff_id = $2 WHERE id = $1`, [fx.dayId, fx.manager]);
+    await db.query(`UPDATE business_days SET status = 'CLOSED', closed_by_staff_id = $2, counted_cash_paise = 0 WHERE id = $1`, [fx.dayId, fx.manager]);
     await expectPosError(peak.startPeakSession(fx.dayId, 0n, 0n, fx.cashier), PosErrorCode.DAY_OR_PEAK_RULE, /open business day/);
   });
 

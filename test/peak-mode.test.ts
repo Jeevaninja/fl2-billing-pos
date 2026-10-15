@@ -213,7 +213,7 @@ describe('Peak Mode reconciliation math', () => {
       const { db, fx } = ctx();
       const session = await startPeak(db, 0, 0, fx.cashier);
       const close = () =>
-        db.query(`UPDATE business_days SET status = 'CLOSED', closed_by_staff_id = $2 WHERE id = $1`, [fx.dayId, fx.manager]);
+        db.query(`UPDATE business_days SET status = 'CLOSED', closed_by_staff_id = $2, counted_cash_paise = 0 WHERE id = $1`, [fx.dayId, fx.manager]);
       await expectSqlError(close(), PosErrorCode.DAY_OR_PEAK_RULE, /running peak session/);
       await endPeak(db, session.id, 0, 0, fx.cashier);
       await close();

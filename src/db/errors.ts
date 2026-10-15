@@ -38,6 +38,9 @@ const CONSTRAINT_CODES: Readonly<Record<string, PosErrorCode>> = {
   bill_payments_reverses_unique: PosErrorCode.REVERSAL_RULE,
   waiter_payments_reverses_unique: PosErrorCode.REVERSAL_RULE,
   waiter_payments_reversal_shape: PosErrorCode.REVERSAL_RULE,
+  cash_expenses_reverses_unique: PosErrorCode.REVERSAL_RULE,
+  cash_expenses_reversal_shape: PosErrorCode.REVERSAL_RULE,
+  business_days_cash_count_on_close: PosErrorCode.ILLEGAL_TRANSITION,
   bills_peak_counter_only: PosErrorCode.ILLEGAL_TRANSITION,
   bills_waiter_app_needs_waiter: PosErrorCode.ILLEGAL_TRANSITION,
   bills_mode_status_pairing: PosErrorCode.ILLEGAL_TRANSITION,
@@ -49,7 +52,7 @@ const CONSTRAINT_CODES: Readonly<Record<string, PosErrorCode>> = {
   business_days_date_unique: PosErrorCode.DAY_OR_PEAK_RULE,
 };
 
-/** A POS business-rule violation, carrying one of the PS001–PS009 codes. */
+/** A POS business-rule violation, carrying one of the PS001–PS010 codes. */
 export class PosError extends Error {
   override readonly name = 'PosError';
   readonly code: PosErrorCode;

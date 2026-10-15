@@ -5,8 +5,12 @@ import type {
   BillLine,
   CounterContext,
   CounterPayment,
+  CounterTender,
+  DayEndSummary,
+  DaySummary,
   MemberSummary,
   Paise,
+  PeakReconciliation,
   SkuLookup,
   Tender,
   WaiterSettlement,
@@ -90,4 +94,13 @@ export const api = {
   reverse: (billId: string, reason: string) => call<{ reversal: Bill }>('POST', `${bill(billId)}/reverse`, { reason }),
   peakSale: (sessionId: string, skuId: string, quantity: number) =>
     call<BillLine>('POST', '/api/peak/sales', { sessionId, skuId, quantity }),
+  endPeak: (sessionId: string, countedCash: Paise, countedUpi: Paise) =>
+    call<PeakReconciliation>('POST', `/api/peak/sessions/${encodeURIComponent(sessionId)}/end`, { countedCash, countedUpi }),
+  repayWaiter: (waiterId: string, amount: Paise, tender: CounterTender) =>
+    call<{ outstandingPaise: Paise }>('POST', `/api/waiters/${encodeURIComponent(waiterId)}/repayments`, { amount, tender }),
+
+  /** The open day's checklist and cash breakdown, else the last closed day's (404 before any day). */
+  dayEnd: () => call<DayEndSummary>('GET', '/api/day-end'),
+  closeDay: (dayId: string, countedCash: Paise) => call<DayEndSummary>('POST', `/api/days/${encodeURIComponent(dayId)}/close`, { countedCash }),
+  openDay: (openingFloat: Paise) => call<DaySummary>('POST', '/api/days', { openingFloat }),
 }

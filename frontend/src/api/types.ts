@@ -120,3 +120,64 @@ export interface WaiterSettlement {
   payment: BillPayment
   remainingDuePaise: Paise
 }
+
+// ── Day End (backend_state.md §3 DayEndService) ─────────────────────────────
+
+export interface DaySummary {
+  id: string
+  businessDate: string
+  status: 'OPEN' | 'CLOSED'
+  openedAt: string
+  openingFloatPaise: Paise
+  closedAt: string | null
+  countedCashPaise: Paise | null
+  expectedCashPaise: Paise | null
+  cashVariancePaise: Paise | null
+}
+
+export interface OpenBillBlocker {
+  billId: string
+  billNo: number
+  source: BillSource
+  status: BillStatus
+  waiter: WaiterSummary | null
+  duePaise: Paise
+  createdAt: string
+}
+
+export interface OwingWaiter extends WaiterSummary {
+  isActive: boolean
+}
+
+export interface CashBreakdown {
+  openingFloatPaise: Paise
+  normalCashPaise: Paise
+  peakCashPaise: Paise
+  waiterCashPaise: Paise
+  cashExpensesPaise: Paise
+  expectedCashPaise: Paise
+  upiTotalPaise: Paise
+}
+
+export interface PeakSessionCash {
+  id: string
+  sessionNo: number
+  startedAt: string
+  endedAt: string
+  cashDeltaPaise: Paise
+  upiDeltaPaise: Paise
+  variancePaise: Paise
+}
+
+export interface DayEndSummary {
+  day: DaySummary
+  blockers: { openBills: OpenBillBlocker[]; runningPeakSession: PeakSessionView | null; waitersOwing: OwingWaiter[] }
+  canClose: boolean
+  breakdown: CashBreakdown
+  peakSessions: PeakSessionCash[]
+}
+
+export interface PeakReconciliation {
+  session: { id: string; sessionNo: number; variancePaise: Paise | null }
+  breakdown: { expectedPaise: Paise; actualPaise: Paise; variancePaise: Paise }
+}

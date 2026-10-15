@@ -2,9 +2,10 @@ import { useCallback, useState } from 'react'
 import BillingScreen from './billing/BillingScreen'
 import CaptainOrdersScreen from './components/CaptainOrdersScreen'
 import Dashboard from './components/Dashboard'
+import DayEndScreen from './components/DayEndScreen'
 import { DEFAULT_RECENT, pushRecent, type PosActionId } from './components/dashboard/actions'
 
-type View = 'dashboard' | 'billing' | 'captain-orders'
+type View = 'dashboard' | 'billing' | 'captain-orders' | 'day-end'
 
 export default function App() {
   const [view, setView] = useState<View>('dashboard')
@@ -12,9 +13,21 @@ export default function App() {
   const onUse = useCallback((id: PosActionId) => setRecent((prev) => pushRecent(prev, id)), [])
   const openBilling = useCallback(() => setView('billing'), [])
   const openCaptainOrders = useCallback(() => setView('captain-orders'), [])
+  const openDayEnd = useCallback(() => setView('day-end'), [])
   const exitToDashboard = useCallback(() => setView('dashboard'), [])
 
   if (view === 'billing') return <BillingScreen onExit={exitToDashboard} />
   if (view === 'captain-orders') return <CaptainOrdersScreen onExit={exitToDashboard} />
-  return <Dashboard recent={recent} onUse={onUse} onOpenBilling={openBilling} onOpenCaptainOrders={openCaptainOrders} />
+  if (view === 'day-end') {
+    return <DayEndScreen onExit={exitToDashboard} onOpenBilling={openBilling} onOpenCaptainOrders={openCaptainOrders} />
+  }
+  return (
+    <Dashboard
+      recent={recent}
+      onUse={onUse}
+      onOpenBilling={openBilling}
+      onOpenCaptainOrders={openCaptainOrders}
+      onOpenDayEnd={openDayEnd}
+    />
+  )
 }

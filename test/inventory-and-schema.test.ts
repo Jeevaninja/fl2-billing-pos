@@ -103,7 +103,7 @@ describe('Business day', () => {
   it('cannot close while bills are open; once closed it is frozen and takes no postings', async () => {
     const { db, fx } = ctx();
     const close = () =>
-      db.query(`UPDATE business_days SET status = 'CLOSED', closed_by_staff_id = $2 WHERE id = $1`, [fx.dayId, fx.manager]);
+      db.query(`UPDATE business_days SET status = 'CLOSED', closed_by_staff_id = $2, counted_cash_paise = 0 WHERE id = $1`, [fx.dayId, fx.manager]);
 
     const open = await openBill(db);
     await addItem(db, open.id, fx.sku.half, 1);

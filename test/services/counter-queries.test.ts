@@ -60,7 +60,7 @@ describe('CounterQueries', () => {
 
     it('reports a null business day when none is open', async () => {
       const { db, fx, queries } = setup();
-      await db.query(`UPDATE business_days SET status = 'CLOSED', closed_at = now(), closed_by_staff_id = $1`, [fx.manager]);
+      await db.query(`UPDATE business_days SET status = 'CLOSED', closed_at = now(), closed_by_staff_id = $1, counted_cash_paise = 0`, [fx.manager]);
       expect(await queries.getCounterContext(fx.cashier)).toMatchObject({ businessDay: null, peakSession: null, openBill: null });
     });
 

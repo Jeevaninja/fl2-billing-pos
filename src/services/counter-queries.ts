@@ -92,7 +92,7 @@ export interface CounterContext {
 
 const DEFAULT_MEMBER_LIMIT = 20;
 
-interface WaiterRow {
+export interface WaiterRow {
   id: string;
   waiter_code: string;
   display_name: string;
@@ -112,9 +112,9 @@ interface SkuLookupRow {
   is_active: boolean;
 }
 
-const WAITER_COLUMNS = `id, waiter_code, display_name, is_trusted, outstanding_balance, credit_limit_paise`;
+export const WAITER_COLUMNS = `id, waiter_code, display_name, is_trusted, outstanding_balance, credit_limit_paise`;
 
-function mapWaiter(r: WaiterRow): WaiterSummary {
+export function mapWaiter(r: WaiterRow): WaiterSummary {
   return {
     id: r.id,
     code: r.waiter_code,

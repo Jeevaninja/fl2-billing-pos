@@ -1,10 +1,10 @@
 # FL2 POS — Frontend State Reference
 
-As of Phase 6 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders screen). Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
+As of Phase 7 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders screen, Phase 7 Day End screen). Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
 
 - **Stack:** Vite 8, React 19, TypeScript, Tailwind CSS 4 (`@tailwindcss/vite`), Lucide icons, Vitest. No router, no state library.
 - **Run:** `npm run api:dev` at the repo root (API on `127.0.0.1:4310`), then `npm run dev` in `frontend/` (http://localhost:5173). Vite proxies `/api` to the API.
-- **Check:** `npm test` (Vitest, 78 tests), `npx tsc -b`, `npx oxlint src`, `npm run build`.
+- **Check:** `npm test` (Vitest, 85 tests), `npx tsc -b`, `npx oxlint src`, `npm run build`.
 - **Money:** `bigint` paise end to end. The API client decodes every `…Paise` JSON string to `bigint` and encodes `bigint` back to strings. Display goes through `formatPaise`; cashier input goes through `parseRupeesToPaise`. No floats.
 - **Server is the source of truth:** bills enter screen state only as `BillDetail` responses, so the UI never adds up prices to get a total.
 
@@ -14,9 +14,11 @@ As of Phase 6 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Capt
 
 ```
 main.tsx                      StrictMode → <App/>, imports index.css (Tailwind)
-└─ App                        view: 'dashboard' | 'billing' | 'captain-orders'; holds the Recently Used list
+└─ App                        view: 'dashboard' | 'billing' | 'captain-orders' | 'day-end'; holds the Recently Used list
    ├─ Dashboard               module tiles + Recently Used rail + key legend footer
-   │  ├─ ModuleTile ×6        Billing Screen, Captain Orders (live "n open" badge, polled 15 s), Expense, Purchase, Day End, Reports
+   │  ├─ day banner           "No business day is open" strip → Day End (context polled 15 s)
+   │  ├─ ModuleTile ×6        Billing Screen, Captain Orders (live "n open" badge, polled 15 s), Expense, Purchase,
+   │  │                       Day End (reads "Open Day" and becomes the primary tile when no day is open), Reports
    │  ├─ RailButton ×≤6       most-recently-used actions
    │  └─ LiveClock, Kbd       (components/ui.tsx)
    └─ BillingScreen           useReducer(billingReducer); serial write queue; all API calls
@@ -42,6 +44,15 @@ main.tsx                      StrictMode → <App/>, imports index.css (Tailwind
       ├─ main (right)         ItemsGrid (selectable lines, custom empty state), FlashLine, receipt banner
       │  └─ OrderActions      waiter card, member card (F2), lines/bottles/paid/due, Settle F9, Remove one (−), Broken (X)
       └─ dialogs              PaymentDialog, MemberDialog (reused unchanged)
+   └─ DayEndScreen            useReducer(dayEndReducer); GET /api/day-end polled 10 s (paused in dialogs / once locked)
+      ├─ header               day + opened time, BLOCKED (n) / READY TO CLOSE / LOCKED / NO DAY OPEN badge
+      ├─ Checklist (left)     open bills (→ Billing / Captain Orders), running peak (End peak…), waiters owing
+      │                       (Repayment…); ended peak sessions with their variance
+      ├─ CashCount (right)    breakdown (float, normal cash, peak cash, waiter cash, −expenses, EXPECTED, UPI info),
+      │                       counted-cash RupeeField, live variance (short / over / exact), Confirm & Lock Day (F9)
+      ├─ ClosedDayCard        frozen figures once locked
+      ├─ OpenDayPanel         opening float + Enter → POST /api/days (after a lock, or when no day exists)
+      └─ dialogs (Modal)      ConfirmLock (Enter), RepayDialog (amount, C/U), EndPeakDialog (cash + UPI readings)
 ```
 
 | File | Exports |
@@ -57,6 +68,8 @@ main.tsx                      StrictMode → <App/>, imports index.css (Tailwind
 | `billing/Modal.tsx` | `Modal({ title, onClose, onKey?, footer?, width? })` |
 | `components/CaptainOrdersScreen.tsx` | `CaptainOrdersScreen({ onExit })` |
 | `captain/captainOrdersReducer.ts` | `captainOrdersReducer`, `initialCaptainOrdersState`, `selectedOrder`, `editBlock`, `formatAge` |
+| `components/DayEndScreen.tsx` | `DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrders })` |
+| `dayend/dayEndReducer.ts` | `dayEndReducer`, `initialDayEndState`, `dayEndView`, `blockerCount`, `openCounterBills`, `countedPaise`, `variancePreview`, `lockBlock` |
 
 Dashboard tiles other than Billing and Captain Orders (and the F1/F2/F9 actions, which open billing) still call `runStub`.
 
@@ -65,6 +78,12 @@ Dashboard tiles other than Billing and Captain Orders (and the F1/F2/F9 actions,
 - **Actions:** `ordersLoaded` (keeps the selection by bill id; a vanished selection moves to the order that took its place, with a note), `ordersFailed`, `orderUpdated` (re-read after an edit; non-OPEN leaves the list), `orderGone` (settled/closed here, sets the receipt), `select`, `selectLine`, `move` (orders or lines, by focused pane), `focus`, `dialog`, `flash`.
 - **Polling vs writes:** writes go through a serial queue and bump a sequence number; a poll that straddles a write is discarded, and every write is followed by a refresh. Polling pauses while a dialog is open, so the order being paid can't change underneath it.
 - **Keys:** ↑/↓ select · Tab orders ⇄ lines · `−`/Delete cancel one bottle (restock) · `X` cancel one bottle as broken (no restock) · F2 member · F9/Enter settle (or close a ₹0 order) · R refresh · Esc dashboard. Mutating keys ignore auto-repeat. Cancelling is disabled once a part-payment is recorded.
+
+**Day End screen** (`dayEndReducer`, pure and unit-tested):
+- **State:** `load` (`loading` / `ready` / `offline` / `none` = no day ever opened), `summary` (the open day, or the last closed one), `counted` (typed rupees), `dialog` (`confirm` / `repay` + waiter id / `endPeak`), `flash`.
+- **Selectors:** `dayEndView` → `LOADING | OFFLINE | NO_DAY | OPEN | CLOSED`. `blockerCount` counts each open bill, the running peak (its `PEAK_UNSETTLED` bills count once, with it) and each owing waiter. `variancePreview` = counted − expected, display only; the server freezes its own figure. `lockBlock` gives the reason Confirm & Lock is disabled.
+- The typed count survives polls of the same open day and is cleared when another day loads. Every checklist action re-reads the summary afterwards. A failed poll keeps the last summary and flashes the error.
+- **Keys:** type the count (the field is focused) · Enter or F9 asks to lock · Enter confirms in the modal · Esc dashboard. The repayment dialog takes C/U for the tender; Enter records it.
 
 ---
 
@@ -154,7 +173,8 @@ No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDow
 ## 6. Known gaps
 
 - The peak ticker holds only this visit's scans, so Ctrl+Z can't undo a scan made before a reload. Server totals are always complete.
-- No receipt printing or KOT reprint. No Day End, Expense, Purchase or Reports screens (dashboard stubs).
+- No receipt printing or KOT reprint. No Expense, Purchase or Reports screens (dashboard stubs). Cash expenses can only be recorded through `POST /api/expenses` until the Expense screen exists.
+- Peak sessions can be ended from Day End, but there is still no screen to *start* one (API only).
 - Breakage written off with `X` is a cancel line with `restock: false`; there is no separate breakage/ADJUSTMENT report yet.
 - The cashier is fixed by the API's `FL2_CASHIER_ID`; there's no login.
 - The headless-Chrome end-to-end script used to verify Phase 4 is not in the repo.

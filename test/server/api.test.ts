@@ -116,6 +116,50 @@ describe('local HTTP API', () => {
     expect((await call('GET', '/api/context')).body.peakSession).toBeNull();
   });
 
+  it('runs Day End: checklist, expense, blocked close, repayment, lock, then a new day with a float', async () => {
+    const { fx, call } = await start();
+    const bill = (await call('POST', '/api/bills', { mode: 'NORMAL' })).body;
+    await call('POST', `/api/bills/${bill.id}/items`, { skuId: fx.sku.quarter, quantity: 1 });
+    await call('PUT', `/api/bills/${bill.id}/waiter`, { waiterId: fx.waiter.trusted });
+    await call('POST', `/api/bills/${bill.id}/settle-waiter`, { waiterId: fx.waiter.trusted, tender: 'WAITER_CREDIT' });
+    expect(await call('POST', '/api/expenses', { amount: '5000', description: 'Ice' })).toMatchObject({
+      status: 201,
+      body: { amountPaise: '5000', description: 'Ice', businessDayId: fx.dayId },
+    });
+    expect(await call('POST', '/api/expenses', { amount: '5000', description: '  ' })).toMatchObject({ status: 400 });
+
+    const summary = await call('GET', '/api/day-end');
+    expect(summary).toMatchObject({
+      status: 200,
+      body: {
+        day: { id: fx.dayId, status: 'OPEN', openingFloatPaise: '0', countedCashPaise: null },
+        canClose: false,
+        blockers: { openBills: [], runningPeakSession: null, waitersOwing: [{ code: 'W01', outstandingPaise: String(PRICE.quarter) }] },
+        breakdown: { cashExpensesPaise: '5000', expectedCashPaise: '-5000' },
+      },
+    });
+
+    const blocked = await call('POST', `/api/days/${fx.dayId}/close`, { countedCash: '0' });
+    expect(blocked).toMatchObject({ status: 409, body: { error: { code: 'PS007' } } });
+    await call('POST', `/api/waiters/${fx.waiter.trusted}/repayments`, { amount: String(PRICE.quarter), tender: 'CASH' });
+    expect(await call('POST', `/api/days/${fx.dayId}/close`, { countedCash: 3 })).toMatchObject({ status: 400 });
+
+    const closed = await call('POST', `/api/days/${fx.dayId}/close`, { countedCash: String(PRICE.quarter - 5000 - 100) });
+    expect(closed).toMatchObject({
+      status: 200,
+      body: { day: { status: 'CLOSED', expectedCashPaise: String(PRICE.quarter - 5000), cashVariancePaise: '-100' }, canClose: false },
+    });
+    expect((await call('GET', '/api/day-end')).body.day).toMatchObject({ id: fx.dayId, status: 'CLOSED' });
+    expect((await call('GET', '/api/context')).body.businessDay).toBeNull();
+    expect(await call('POST', '/api/bills', { mode: 'NORMAL' })).toMatchObject({ status: 409, body: { error: { code: 'PS007' } } });
+
+    const opened = await call('POST', '/api/days', { openingFloat: '200000' });
+    expect(opened).toMatchObject({ status: 201, body: { status: 'OPEN', openingFloatPaise: '200000' } });
+    expect(opened.body.businessDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect((await call('GET', '/api/day-end')).body).toMatchObject({ day: { id: opened.body.id }, canClose: true, breakdown: { expectedCashPaise: '200000' } });
+    expect(await call('POST', '/api/days', { openingFloat: '0' })).toMatchObject({ status: 409, body: { error: { code: 'PS007' } } });
+  });
+
   it('searches members and returns 404 for unknown SKUs and bills', async () => {
     const { db, call } = await start();
     await db.query(`INSERT INTO members (membership_no, display_name) VALUES ('M-1', 'Asha'), ('M-2', 'Ravi')`);

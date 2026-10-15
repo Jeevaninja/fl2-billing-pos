@@ -4,7 +4,7 @@ import { assertPaise, type DbInt, type Paise, paiseParam, toPaise } from '../dom
 import type { PeakSession } from '../domain/types.js';
 import { mapPeakSession, maybeOne, one, type PeakSessionRow } from './rows.js';
 
-/** How a session's expected collection was built up. Σ components = expectedPaise. */
+/** How a session's expected collection was built up: Σ collections − cash expenses = expectedPaise. */
 export interface PeakBreakdown {
   /** Σ peak bill totals in the session (negative peak reversals included). */
   peakBillsPaise: Paise;
@@ -14,6 +14,8 @@ export interface PeakBreakdown {
   /** Waiter repayments taken during the session. */
   waiterCashPaise: Paise;
   waiterUpiPaise: Paise;
+  /** Cash expenses paid from the drawer during the session (subtracted). */
+  cashExpensesPaise: Paise;
   expectedPaise: Paise;
   /** Counted drawer + UPI movement: (end cash − start cash) + (end UPI − start UPI). */
   actualPaise: Paise;
@@ -71,14 +73,15 @@ export class PeakSessionService {
           ]),
         );
 
-        const sums = await one<Record<'peak_bills' | 'bill_cash' | 'bill_upi' | 'waiter_cash' | 'waiter_upi', DbInt>>(
+        const sums = await one<Record<'peak_bills' | 'bill_cash' | 'bill_upi' | 'waiter_cash' | 'waiter_upi' | 'expenses', DbInt>>(
           tx,
           `SELECT
              coalesce((SELECT sum(total_paise) FROM bills WHERE peak_session_id = $1), 0)::text AS peak_bills,
              coalesce((SELECT sum(amount_paise) FROM bill_payments WHERE peak_session_id = $1 AND tender_type = 'CASH'), 0)::text AS bill_cash,
              coalesce((SELECT sum(amount_paise) FROM bill_payments WHERE peak_session_id = $1 AND tender_type = 'UPI'), 0)::text AS bill_upi,
              coalesce((SELECT sum(amount_paise) FROM waiter_payments WHERE peak_session_id = $1 AND tender_type = 'CASH'), 0)::text AS waiter_cash,
-             coalesce((SELECT sum(amount_paise) FROM waiter_payments WHERE peak_session_id = $1 AND tender_type = 'UPI'), 0)::text AS waiter_upi`,
+             coalesce((SELECT sum(amount_paise) FROM waiter_payments WHERE peak_session_id = $1 AND tender_type = 'UPI'), 0)::text AS waiter_upi,
+             coalesce((SELECT sum(amount_paise) FROM cash_expenses WHERE peak_session_id = $1), 0)::text AS expenses`,
           [sessionId],
         );
         const peakBillsPaise = toPaise(sums.peak_bills);
@@ -86,9 +89,10 @@ export class PeakSessionService {
         const billUpiPaise = toPaise(sums.bill_upi);
         const waiterCashPaise = toPaise(sums.waiter_cash);
         const waiterUpiPaise = toPaise(sums.waiter_upi);
+        const cashExpensesPaise = toPaise(sums.expenses);
         const cashDeltaPaise = countedCash - session.startCashPaise;
         const upiDeltaPaise = countedUpi - session.startUpiPaise;
-        const expectedPaise = peakBillsPaise + billCashPaise + billUpiPaise + waiterCashPaise + waiterUpiPaise;
+        const expectedPaise = peakBillsPaise + billCashPaise + billUpiPaise + waiterCashPaise + waiterUpiPaise - cashExpensesPaise;
         const actualPaise = cashDeltaPaise + upiDeltaPaise;
 
         const breakdown: PeakBreakdown = {
@@ -97,6 +101,7 @@ export class PeakSessionService {
           billUpiPaise,
           waiterCashPaise,
           waiterUpiPaise,
+          cashExpensesPaise,
           expectedPaise,
           actualPaise,
           cashDeltaPaise,

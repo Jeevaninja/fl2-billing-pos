@@ -1,8 +1,8 @@
 # FL2 POS — Backend State Reference
 
-Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), and Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
+Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, and Phase 7 Day End (`0005_day_end`, `DayEndService`). Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
 
-- **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`.
+- **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`.
 - **Money:** `BIGINT` whole paise in SQL, `bigint` in TypeScript (`type Paise = bigint`). No floats anywhere.
 - **Quantities:** `INTEGER` whole sealed bottles. No ml / peg columns.
 - **Append-only:** DELETE and TRUNCATE are blocked on every domain table. Ledger tables also block UPDATE. Corrections are made with reversing records.
@@ -19,7 +19,7 @@ Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local 
 | `skus` | One row per sealed size: `FULL`, `HALF`, `QUARTER`, `BEER_650`, `BEER_330` | `product_id → products` |
 | `sku_stock` | Cached on-hand bottles, `≥ 0` (trigger-maintained) | `sku_id → skus` (PK) |
 | `stock_movements` | Stock ledger: OPENING, PURCHASE_RECEIPT, SALE, SALE_REVERSAL, ADJUSTMENT | `sku_id → skus`, `business_day_id → business_days`, `bill_item_id → bill_items` (unique) |
-| `business_days` | Trading day; one OPEN at a time; bill-number counter | `opened_by_staff_id`, `closed_by_staff_id → staff` |
+| `business_days` | Trading day; one OPEN at a time; bill-number counter; `opening_float_paise` (immutable); on close: `counted_cash_paise`, and trigger-computed `expected_cash_paise` / `cash_variance_paise` (0005) | `opened_by_staff_id`, `closed_by_staff_id → staff` |
 | `peak_sessions` | Peak windows (several per day, one running); start/end cash and UPI; frozen expected and variance | `business_day_id → business_days`, `started_by_staff_id`, `ended_by_staff_id → staff` |
 | `waiters` | `is_trusted`, `outstanding_balance` (paise, `≥ 0`, trigger-maintained), optional `credit_limit_paise` | — |
 | `waiter_payments` | Repayments against a waiter's account (append-only) | `waiter_id → waiters`, `business_day_id → business_days`, `peak_session_id → peak_sessions`, `reverses_waiter_payment_id → waiter_payments`, `received_by_staff_id → staff` |
@@ -27,6 +27,7 @@ Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local 
 | `bills` | `billing_mode` NORMAL / PEAK; `status` OPEN → SETTLED or PEAK_UNSETTLED → PEAK_RECONCILED; `bill_kind` SALE / REVERSAL; Captain orders carry `request_id` (unique idempotency key), `request_fingerprint` and `captain_device_id` (0004) | `business_day_id → business_days`, `peak_session_id → peak_sessions`, `waiter_id → waiters`, `member_id → members`, `reverses_bill_id → bills` (unique), `replaces_bill_id → bills` (unique), `created_by_staff_id`, `settled_by_staff_id → staff` |
 | `bill_items` | Lines with SKU / price snapshots; negative lines cancel or reverse | `bill_id → bills`, `sku_id → skus`, `reverses_item_id → bill_items`, `waiter_id → waiters`, `created_by_staff_id → staff` |
 | `bill_payments` | Tenders: CASH, UPI, WAITER_CREDIT; negative amounts are refunds | `bill_id → bills`, `business_day_id → business_days`, `peak_session_id → peak_sessions`, `reverses_payment_id → bill_payments` (unique), `received_by_staff_id → staff` |
+| `cash_expenses` | Petty-cash payments from the drawer (append-only; a negative row with `reverses_expense_id` corrects one); tagged to the open day and running peak by trigger (0005) | `business_day_id → business_days`, `peak_session_id → peak_sessions`, `reverses_expense_id → cash_expenses` (unique), `created_by_staff_id → staff` |
 | `sync_outbox` | Transactional outbox for cloud sync (written by trigger) | — |
 | `schema_migrations` | Applied migration versions | — |
 
@@ -35,7 +36,12 @@ Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local 
 - `v_peak_sessions`: adds `running_expected_paise`.
 - `v_invariant_violations`: nightly self-check; it must stay empty.
 
-**SQL functions:** `pos_start_peak(cash, upi, staff)` and `pos_end_peak(session, cash, upi, staff)`.
+**SQL functions:** `pos_start_peak(cash, upi, staff)`, `pos_end_peak(session, cash, upi, staff)`, `pos_peak_expected_paise(session)` (0005: subtracts cash expenses paid during the session) and `pos_day_expected_cash(day)`.
+
+**Day End (0005):**
+- `pos_day_expected_cash` = opening float + CASH bill tenders outside peak windows + Σ ended sessions (end cash − start cash) + CASH waiter repayments outside peak windows − cash expenses outside peak windows. Inside a peak window the counted drawer delta already contains every cash movement, so nothing is counted twice and a peak shortage appears once (as that session's variance).
+- Close (`status → CLOSED`) is refused with `PS007` while a peak session runs, any bill of the day is `OPEN` / `PEAK_UNSETTLED`, or **any waiter** has `outstanding_balance > 0` (active or not, whichever day the credit is from). It needs `counted_cash_paise` (`PS002`); expected cash and variance are computed by the trigger, overwriting client values, then frozen with the day (`PS001`).
+- The opening float is immutable; the close columns can't be written while the day is open (`PS002`). The `business_days_cash_count_on_close` CHECK is `NOT VALID`, so days closed before 0005 keep NULL counts.
 
 **Captain orders (0004):**
 - `bills_request_id_unique` (partial unique index) is the idempotency guarantee.
@@ -66,7 +72,7 @@ Business-rule violations raise these SQLSTATEs. The services surface them as `Po
 | `PS004` | `CREDIT_NOT_ALLOWED` | WAITER_CREDIT for an untrusted waiter, no waiter on the bill, or credit limit exceeded |
 | `PS005` | `TENDER_MISMATCH` | Payments don't match the amount due (under / over, bill-on-bill partial, tenders on a peak bill, non-empty bill passed to `closeEmptyBill`) |
 | `PS006` | `REVERSAL_RULE` | Reversal rule broken (double void, reversing a reversal, voiding an OPEN bill, incomplete reversal, refund not mirroring the original) |
-| `PS007` | `DAY_OR_PEAK_RULE` | No open business day, peak session not running / already running, day close blocked |
+| `PS007` | `DAY_OR_PEAK_RULE` | No open business day, peak session not running / already running, day close blocked (running peak, open bills, waiter balances), a day already open or a business date already traded at Day Open |
 | `PS008` | `WAITER_BALANCE` | Waiter balance would go negative (overpayment, credit reversal after repayment) |
 | `PS009` | `DERIVED_COLUMN` | Direct write to a trigger-maintained column (totals, balances, stock, bill numbers) |
 | `PS010` | `BILL_ON_BILL` | Captain order for an untrusted waiter who still has an `OPEN` bill |
@@ -181,13 +187,49 @@ interface PeakBreakdown {
   billUpiPaise: Paise;        // UPI tenders on normal bills during the session
   waiterCashPaise: Paise;     // waiter repayments in CASH during the session
   waiterUpiPaise: Paise;      // waiter repayments in UPI during the session
-  expectedPaise: Paise;       // sum of the five above
+  cashExpensesPaise: Paise;   // cash expenses paid during the session (0005)
+  expectedPaise: Paise;       // sum of the five above − cashExpensesPaise
   actualPaise: Paise;         // cashDelta + upiDelta
   cashDeltaPaise: Paise;      // counted cash − declared cash
   upiDeltaPaise: Paise;       // counted UPI − declared UPI
   variancePaise: Paise;       // actual − expected (negative = shortage)
 }
 ```
+
+### `DayEndService` (`src/services/day-end.service.ts`)
+
+```ts
+class DayEndService {
+  constructor(db: SqlDatabase);
+
+  getCurrentDayId(): Promise<string | null>;                              // open day, else the last closed one
+  getDayEndSummary(businessDayId: string): Promise<DayEndSummary>;        // NotFoundError for an unknown day
+  closeBusinessDay(businessDayId: string, countedCash: Paise, staffId: string): Promise<DayEndSummary>;
+  openBusinessDay(openingFloat: Paise, staffId: string, businessDate?: string /* default: today, Asia/Kolkata */): Promise<DaySummary>;
+  recordCashExpense(amount: Paise, description: string, staffId: string): Promise<CashExpense>;
+}
+
+interface DaySummary {
+  id: string; businessDate: string; status: 'OPEN' | 'CLOSED'; openedAt: Date; openingFloatPaise: Paise;
+  closedAt: Date | null; countedCashPaise: Paise | null; expectedCashPaise: Paise | null; cashVariancePaise: Paise | null;
+}
+interface DayEndSummary {
+  day: DaySummary;
+  blockers: {
+    openBills: OpenBillBlocker[];             // OPEN + PEAK_UNSETTLED bills of the day: billId, billNo, source, status, waiter, duePaise, createdAt
+    runningPeakSession: PeakSessionView | null;
+    waitersOwing: OwingWaiter[];              // WaiterSummary & { isActive }, any balance > 0
+  };
+  canClose: boolean;
+  breakdown: CashBreakdown;                   // openingFloat, normalCash, peakCash, waiterCash, cashExpenses, expectedCash, upiTotal (info)
+  peakSessions: PeakSessionCash[];            // ended sessions: cash / UPI deltas and frozen variance
+}
+interface CashExpense { id; businessDayId; peakSessionId: string | null; amountPaise; reversesExpenseId: string | null; description; createdByStaffId; createdAt; }
+```
+
+- **`closeBusinessDay`:** locks the day row first, so a sale racing the close either commits before it (and is counted) or fails `PS007`. The database re-checks every blocker. The returned breakdown is checked against the frozen expected figure.
+- **`openBusinessDay`:** refuses a second open day and a date that has already traded (`PS007`). A business date trades once, so closing and reopening on the same calendar day is refused.
+- **`recordCashExpense`:** amount > 0, description 1–200 characters after trimming. Corrections are negative rows that exactly negate the original (`PS006`); there's no service method for them yet.
 
 ### `WaiterService` (`src/services/waiter.service.ts`)
 
@@ -385,6 +427,10 @@ Migrations run on every boot (already-applied ones are skipped).
 | `POST /api/peak/sessions` | `{ businessDayId, declaredCash, declaredUpi }` | `startPeakSession(…, cashier)` | 201 |
 | `POST /api/peak/sessions/:sessionId/end` | `{ countedCash, countedUpi }` | `endPeakSession(…, cashier)` | 200 |
 | `POST /api/waiters/:waiterId/repayments` | `{ amount, tender: 'CASH'\|'UPI' }` | `recordWaiterRepayment(…, cashier)` | 201 |
+| `GET /api/day-end` | | `getDayEndSummary(getCurrentDayId())`: the open day, else the last closed one; 404 before any day | 200 |
+| `POST /api/days` | `{ openingFloat }` | `openBusinessDay(…, cashier)` | 201 |
+| `POST /api/days/:dayId/close` | `{ countedCash }` | `closeBusinessDay(…, cashier)` | 200 |
+| `POST /api/expenses` | `{ amount, description }` | `recordCashExpense(…, cashier)` | 201 |
 
 The frontend dev server proxies `/api` to `http://127.0.0.1:4310`.
 

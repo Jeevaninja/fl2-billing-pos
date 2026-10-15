@@ -9,6 +9,7 @@ import type { CounterTender, Tender } from '../src/domain/types.js';
 import {
   BillingService,
   CounterQueries,
+  DayEndService,
   NotFoundError,
   PeakSessionService,
   WaiterService,
@@ -45,6 +46,7 @@ function buildRoutes({ db, cashierId }: ApiConfig): Route[] {
   const peak = new PeakSessionService(db);
   const waiters = new WaiterService(db);
   const queries = new CounterQueries(db);
+  const dayEnd = new DayEndService(db);
 
   return [
     route('GET', '/api/health', async () => ok({ ok: true })),
@@ -150,6 +152,20 @@ function buildRoutes({ db, cashierId }: ApiConfig): Route[] {
           cashierId,
         ),
       ),
+    ),
+
+    // ── Day End ──
+    route('GET', '/api/day-end', async () => {
+      const dayId = await dayEnd.getCurrentDayId();
+      if (!dayId) throw new NotFoundError('business day', 'current');
+      return ok(await dayEnd.getDayEndSummary(dayId));
+    }),
+    route('POST', '/api/days', async ({ body }) => created(await dayEnd.openBusinessDay(paise(body.openingFloat, 'openingFloat'), cashierId))),
+    route('POST', '/api/days/:dayId/close', async ({ params, body }) =>
+      ok(await dayEnd.closeBusinessDay(id(params.dayId, 'dayId'), paise(body.countedCash, 'countedCash'), cashierId)),
+    ),
+    route('POST', '/api/expenses', async ({ body }) =>
+      created(await dayEnd.recordCashExpense(paise(body.amount, 'amount'), str(body.description, 'description'), cashierId)),
     ),
 
     // ── Waiter accounts ──

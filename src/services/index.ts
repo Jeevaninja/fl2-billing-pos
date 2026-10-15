@@ -15,6 +15,17 @@ export type {
   StaffSummary,
   WaiterSummary,
 } from './counter-queries.js';
+export { DayEndService } from './day-end.service.js';
+export type {
+  CashBreakdown,
+  CashExpense,
+  DayEndBlockers,
+  DayEndSummary,
+  DaySummary,
+  OpenBillBlocker,
+  OwingWaiter,
+  PeakSessionCash,
+} from './day-end.service.js';
 export { PeakSessionService } from './peak-session.service.js';
 export { formatKot, PrinterService } from './printer.service.js';
 export type { KotFormat, KotPrinter, KotPrintResult, KotStation, KotTicket } from './printer.service.js';

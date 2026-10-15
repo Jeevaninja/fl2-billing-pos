@@ -1,0 +1,105 @@
+import { describe, expect, it } from 'vitest'
+import type { DayEndSummary, OwingWaiter } from '../api/types'
+import {
+  blockerCount,
+  countedPaise,
+  dayEndReducer,
+  dayEndView,
+  initialDayEndState,
+  lockBlock,
+  variancePreview,
+  type DayEndAction,
+  type DayEndState,
+} from './dayEndReducer'
+
+function summary(over: { id?: string; status?: 'OPEN' | 'CLOSED'; expected?: bigint; blockers?: Partial<DayEndSummary['blockers']> } = {}): DayEndSummary {
+  const blockers = { openBills: [], runningPeakSession: null, waitersOwing: [], ...over.blockers }
+  const status = over.status ?? 'OPEN'
+  return {
+    day: {
+      id: over.id ?? 'day-1',
+      businessDate: '2026-10-15',
+      status,
+      openedAt: '2026-10-15T05:00:00.000Z',
+      openingFloatPaise: 2000_00n,
+      closedAt: status === 'CLOSED' ? '2026-10-16T19:00:00.000Z' : null,
+      countedCashPaise: status === 'CLOSED' ? 30500_00n : null,
+      expectedCashPaise: status === 'CLOSED' ? 30550_00n : null,
+      cashVariancePaise: status === 'CLOSED' ? -50_00n : null,
+    },
+    blockers,
+    canClose: status === 'OPEN' && blockers.openBills.length === 0 && blockers.runningPeakSession === null && blockers.waitersOwing.length === 0,
+    breakdown: {
+      openingFloatPaise: 2000_00n,
+      normalCashPaise: 0n,
+      peakCashPaise: 0n,
+      waiterCashPaise: 0n,
+      cashExpensesPaise: 0n,
+      expectedCashPaise: over.expected ?? 30550_00n,
+      upiTotalPaise: 0n,
+    },
+    peakSessions: [],
+  }
+}
+
+const owing: OwingWaiter = { id: 'w-1', code: 'W01', displayName: 'Suresh', isTrusted: true, outstandingPaise: 1200_00n, creditLimitPaise: null, isActive: true }
+const run = (state: DayEndState, ...actions: DayEndAction[]) => actions.reduce(dayEndReducer, state)
+
+describe('dayEndReducer', () => {
+  it('derives the view: loading, offline, no day yet, open, closed', () => {
+    expect(dayEndView(initialDayEndState)).toBe('LOADING')
+    expect(dayEndView(run(initialDayEndState, { type: 'failed', message: 'down' }))).toBe('OFFLINE')
+    expect(dayEndView(run(initialDayEndState, { type: 'noDay' }))).toBe('NO_DAY')
+    expect(dayEndView(run(initialDayEndState, { type: 'loaded', summary: summary() }))).toBe('OPEN')
+    expect(dayEndView(run(initialDayEndState, { type: 'loaded', summary: summary({ status: 'CLOSED' }) }))).toBe('CLOSED')
+  })
+
+  it('keeps the typed count across polls of the same day, and clears it for another day', () => {
+    const s1 = run(initialDayEndState, { type: 'loaded', summary: summary() }, { type: 'counted', text: '30,500' })
+    expect(run(s1, { type: 'loaded', summary: summary() }).counted).toBe('30,500')
+    expect(run(s1, { type: 'loaded', summary: summary({ id: 'day-2' }) }).counted).toBe('')
+  })
+
+  it('previews the variance in paise as counted − expected; blank or invalid gives none', () => {
+    const s = run(initialDayEndState, { type: 'loaded', summary: summary({ expected: 30550_00n }) })
+    expect(countedPaise(run(s, { type: 'counted', text: '30,500.50' }))).toBe(30500_50n)
+    expect(variancePreview(run(s, { type: 'counted', text: '30,500.50' }))).toBe(-49_50n)
+    expect(variancePreview(run(s, { type: 'counted', text: '30600' }))).toBe(50_00n)
+    expect(variancePreview(run(s, { type: 'counted', text: '' }))).toBeNull()
+    expect(variancePreview(run(s, { type: 'counted', text: '12.345' }))).toBeNull()
+  })
+
+  it('blocks the lock until nothing blocks the day and a valid count is entered', () => {
+    const blocked = run(initialDayEndState, { type: 'loaded', summary: summary({ blockers: { waitersOwing: [owing] } }) }, { type: 'counted', text: '100' })
+    expect(blockerCount(blocked.summary!)).toBe(1)
+    expect(lockBlock(blocked)).toMatch(/1 item/)
+
+    const ready = run(initialDayEndState, { type: 'loaded', summary: summary() })
+    expect(lockBlock(ready)).toMatch(/Enter the counted cash/)
+    expect(lockBlock(run(ready, { type: 'counted', text: 'abc' }))).toMatch(/rupees/)
+    expect(lockBlock(run(ready, { type: 'counted', text: '0' }))).toBeNull()
+  })
+
+  it('counts every open bill, a running peak and each owing waiter as blockers', () => {
+    const peak = { id: 'p', sessionNo: 1, startedAt: '', startCashPaise: 0n, startUpiPaise: 0n, runningExpectedPaise: 0n }
+    const bill = { billId: 'b', billNo: 3, source: 'COUNTER' as const, status: 'OPEN' as const, waiter: null, duePaise: 1n, createdAt: '' }
+    expect(blockerCount(summary({ blockers: { openBills: [bill, { ...bill, billId: 'c' }], runningPeakSession: peak, waitersOwing: [owing] } }))).toBe(4)
+    // Peak bills clear together when the session ends: one item, however many scans.
+    const peakBills = [1, 2, 3].map((n) => ({ ...bill, billId: `p${n}`, status: 'PEAK_UNSETTLED' as const }))
+    expect(blockerCount(summary({ blockers: { openBills: [bill, ...peakBills], runningPeakSession: peak } }))).toBe(2)
+    expect(blockerCount(summary({ blockers: { openBills: peakBills } }))).toBe(3)
+  })
+
+  it('shows the closed day after locking and closes the dialog', () => {
+    const s1 = run(initialDayEndState, { type: 'loaded', summary: summary() }, { type: 'counted', text: '30500' }, { type: 'dialog', dialog: { kind: 'confirm' } })
+    const s2 = run(s1, { type: 'loaded', summary: summary({ status: 'CLOSED' }) })
+    expect(s2).toMatchObject({ dialog: null, counted: '' })
+    expect(dayEndView(s2)).toBe('CLOSED')
+  })
+
+  it('keeps the last summary when a poll fails, but reports offline before the first load', () => {
+    const s1 = run(initialDayEndState, { type: 'loaded', summary: summary() }, { type: 'failed', message: 'down' })
+    expect(dayEndView(s1)).toBe('OPEN')
+    expect(s1.flash).toMatchObject({ kind: 'error', text: 'down' })
+  })
+})
