@@ -2,11 +2,12 @@
  * DayEndScreen state machine. Pure and unit-tested. The server computes every figure (expected
  * cash, the frozen variance); the screen only previews counted − expected while the cashier types.
  */
-import type { DayEndSummary, Paise } from '../api/types'
+import type { DayEndSummary, Paise, PeakSessionView } from '../api/types'
 import type { Flash } from '../billing/billingReducer'
 import { parseRupeesToPaise } from '../lib/money'
 
-export type DayEndDialog = { kind: 'confirm' } | { kind: 'repay'; waiterId: string } | { kind: 'endPeak' }
+/** endPeak keeps its own snapshot: the dialog outlives the session it ends (it shows the result). */
+export type DayEndDialog = { kind: 'confirm' } | { kind: 'repay'; waiterId: string } | { kind: 'endPeak'; session: PeakSessionView }
 export type DayEndView = 'LOADING' | 'OFFLINE' | 'NO_DAY' | 'OPEN' | 'CLOSED'
 
 export interface DayEndState {

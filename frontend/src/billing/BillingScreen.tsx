@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
 import { ArrowLeft, RefreshCw, WifiOff } from 'lucide-react'
 import { ApiError, api } from '../api/client'
-import type { BillDetail, CounterContext, MemberSummary, WaiterSummary } from '../api/types'
+import type { BillDetail, CounterContext, MemberSummary, PeakSessionView, WaiterSummary } from '../api/types'
 import { Kbd, LiveClock } from '../components/ui'
 import { keepFocus } from '../lib/ui'
 import { useGlobalShortcuts } from '../hooks/useGlobalShortcuts'
@@ -16,6 +16,11 @@ import { Modal } from './Modal'
 import { describePlan, type PayPlan } from './payment'
 import { PaymentDialog } from './PaymentDialog'
 import { MemberDialog, WaiterDialog } from './PickerDialogs'
+import { PeakBanner, PeakEndDialog, PeakStartDialog } from '../components/peak/PeakControls'
+import { describeVariance } from '../peak/peakMath'
+
+/** The end dialog keeps its own session snapshot: it stays up to show the result after the session ends. */
+type PeakDialog = { kind: 'start'; businessDayId: string } | { kind: 'end'; session: PeakSessionView } | null
 
 const CONTEXT_POLL_MS = 15_000
 
@@ -25,6 +30,7 @@ const CONTEXT_POLL_MS = 15_000
  */
 export default function BillingScreen({ onExit }: { onExit: () => void }) {
   const [state, dispatch] = useReducer(billingReducer, initialBillingState)
+  const [peakDialog, setPeakDialog] = useState<PeakDialog>(null)
   const mode = screenMode(state)
   const rows = useMemo(() => groupItems(state.bill?.items ?? []), [state.bill])
   const { lines, bottles } = totals(state.bill)
@@ -263,7 +269,14 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
 
   // ── Keyboard ───────────────────────────────────────────────────────────────
 
-  const keysLive = state.dialog === null && (mode === 'NORMAL' || mode === 'PEAK')
+  const keysLive = state.dialog === null && peakDialog === null && (mode === 'NORMAL' || mode === 'PEAK')
+  const peakSession = state.context?.peakSession ?? null
+
+  const togglePeak = useCallback(() => {
+    const context = contextRef.current
+    if (context?.peakSession) setPeakDialog({ kind: 'end', session: context.peakSession })
+    else if (context?.businessDay) setPeakDialog({ kind: 'start', businessDayId: context.businessDay.id })
+  }, [])
   const canEditBill = mode === 'NORMAL'
 
   const openPayment = useCallback(() => {
@@ -306,6 +319,7 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
         else if ((billRef.current?.tenderedPaise ?? 0n) > 0n) flash('error', 'Waiter is locked after the first payment')
         else dispatch({ type: 'dialog', dialog: 'waiter' })
       },
+      F8: togglePeak,
       F9: () => (canEditBill ? openPayment() : flash('error', 'Peak bills take no payment — they reconcile at session end')),
     },
     keysLive,
@@ -376,6 +390,8 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
         </div>
       </header>
 
+      {peakSession && (mode === 'NORMAL' || mode === 'PEAK') && <PeakBanner session={peakSession} onEnd={togglePeak} />}
+
       {mode === 'LOADING' && <CenterNote title="Connecting to the POS server…" />}
       {mode === 'OFFLINE' && (
         <CenterNote title="POS server unreachable" icon={<WifiOff className="size-10 text-rose-400" aria-hidden />}>
@@ -432,6 +448,7 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
               onMember={() => dispatch({ type: 'dialog', dialog: 'member' })}
               onWaiter={() => dispatch({ type: 'dialog', dialog: 'waiter' })}
               onPay={openPayment}
+              onStartPeak={peakSession ? undefined : togglePeak}
             />
           )}
         </div>
@@ -441,6 +458,27 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
         <PaymentDialog detail={state.bill} busy={state.pending.length > 0} onConfirm={pay} onClose={closeDialog} />
       )}
       {state.dialog === 'member' && <MemberDialog onPick={pickMember} onClose={closeDialog} />}
+      {peakDialog?.kind === 'start' && (
+        <PeakStartDialog
+          businessDayId={peakDialog.businessDayId}
+          onStarted={(session) => {
+            setPeakDialog(null)
+            flash('ok', `Peak #${session.sessionNo} started${billRef.current ? ' — finish this bill, then scans go to peak' : ''}`)
+            void refreshContext()
+          }}
+          onClose={() => setPeakDialog(null)}
+        />
+      )}
+      {peakDialog?.kind === 'end' && (
+        <PeakEndDialog
+          session={peakDialog.session}
+          onEnded={(r) => {
+            flash('ok', `Peak #${r.session.sessionNo} ended · ${describeVariance(r.breakdown.variancePaise).label}`)
+            void refreshContext()
+          }}
+          onClose={() => setPeakDialog(null)}
+        />
+      )}
       {state.dialog === 'waiter' && <WaiterDialog onPick={pickWaiter} onClose={closeDialog} />}
       {state.dialog === 'abandon' && state.bill && (
         <Modal

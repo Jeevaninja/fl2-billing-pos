@@ -7,6 +7,7 @@ import type { ScanState } from '../hooks/scanBuffer'
 import { formatPaise } from '../lib/money'
 import type { Flash, ItemRow, PeakEntry, PendingScan, Receipt } from './billingReducer'
 import { TrustBadge } from './PickerDialogs'
+import { StartPeakButton } from '../components/peak/PeakControls'
 
 const SIZE_LABEL: Record<SizeCode, string> = { FULL: 'Full', HALF: 'Half', QUARTER: 'Qtr', BEER_650: '650', BEER_330: '330' }
 
@@ -195,9 +196,11 @@ interface SidePanelProps {
   onMember: () => void
   onWaiter: () => void
   onPay: () => void
+  /** Shown when no peak session is running. */
+  onStartPeak?: (() => void) | undefined
 }
 
-export function SidePanel({ detail, pendingMember, pendingWaiter, lines, bottles, onMember, onWaiter, onPay }: SidePanelProps) {
+export function SidePanel({ detail, pendingMember, pendingWaiter, lines, bottles, onMember, onWaiter, onPay, onStartPeak }: SidePanelProps) {
   const member = detail?.member ?? pendingMember
   const waiter = detail?.waiter ?? pendingWaiter
   const waiterLocked = (detail?.tenderedPaise ?? 0n) > 0n
@@ -253,12 +256,13 @@ export function SidePanel({ detail, pendingMember, pendingWaiter, lines, bottles
         </div>
       </div>
 
+      {onStartPeak && <StartPeakButton onClick={onStartPeak} className="mt-auto justify-center py-2.5" />}
       <button
         type="button"
         {...keepFocus}
         onClick={onPay}
         disabled={!canPay}
-        className={`mt-auto flex items-center justify-between rounded-lg px-5 py-5 text-2xl font-black disabled:cursor-not-allowed disabled:opacity-40 ${
+        className={`${onStartPeak ? '' : 'mt-auto '}flex items-center justify-between rounded-lg px-5 py-5 text-2xl font-black disabled:cursor-not-allowed disabled:opacity-40 ${
           canPay ? 'bg-emerald-500 text-zinc-950 hover:bg-emerald-400' : 'bg-zinc-800 text-zinc-400'
         } ${FOCUS_RING}`}
       >

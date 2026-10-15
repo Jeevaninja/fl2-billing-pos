@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronRight, Keyboard, PlugZap, Sunrise } from 'lucide-react'
 import { api } from '../api/client'
+import type { CounterContext, PeakSessionView } from '../api/types'
 import { useGlobalShortcuts } from '../hooks/useGlobalShortcuts'
+import { formatPaise } from '../lib/money'
+import { describeVariance } from '../peak/peakMath'
+import { PeakBanner, PeakEndDialog, PeakStartDialog, StartPeakButton } from './peak/PeakControls'
 import { ACTIONS, BILLING_ACTIONS, MODULE_TILES, runStub, type PosActionId } from './dashboard/actions'
 import { FOCUS_RING, formatTime } from '../lib/ui'
 import { Kbd, LiveClock } from './ui'
@@ -30,6 +34,7 @@ interface DashboardProps {
   onOpenBilling: () => void
   onOpenCaptainOrders: () => void
   onOpenDayEnd: () => void
+  onOpenExpenses: () => void
 }
 
 const CAPTAIN_COUNT_POLL_MS = 15_000
@@ -54,31 +59,46 @@ function useCaptainOrderCount(): number | null {
   return count
 }
 
-/** Whether a business day is open; null while unknown or when the API is unreachable. */
-function useDayOpen(): { open: boolean; date: string | null } | null {
-  const [day, setDay] = useState<{ open: boolean; date: string | null } | null>(null)
+/** The counter context (open day, running peak), polled; null while unknown or when the API is unreachable. */
+function useCounterContext(): { context: CounterContext | null; reload: () => void } {
+  const [context, setContext] = useState<CounterContext | null>(null)
+  const live = useRef(true)
+  const reload = useCallback(() => {
+    api
+      .context()
+      .then((c) => live.current && setContext(c))
+      .catch(() => live.current && setContext(null))
+  }, [])
   useEffect(() => {
-    let live = true
-    const load = () =>
-      api
-        .context()
-        .then((c) => live && setDay({ open: c.businessDay !== null, date: c.businessDay?.businessDate ?? null }))
-        .catch(() => live && setDay(null))
-    void load()
-    const timer = setInterval(() => void load(), CAPTAIN_COUNT_POLL_MS)
+    live.current = true
+    reload()
+    const timer = setInterval(reload, CAPTAIN_COUNT_POLL_MS)
     return () => {
-      live = false
+      live.current = false
       clearInterval(timer)
     }
-  }, [])
-  return day
+  }, [reload])
+  return { context, reload }
 }
 
-export default function Dashboard({ recent, onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd }: DashboardProps) {
+/** Start dialog, or the end dialog with its own session snapshot (it outlives the session to show the result). */
+type PeakDialog = { kind: 'start'; businessDayId: string } | { kind: 'end'; session: PeakSessionView } | null
+
+export default function Dashboard({ recent, onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd, onOpenExpenses }: DashboardProps) {
   const [lastAction, setLastAction] = useState<LastAction | null>(null)
+  const [status, setStatus] = useState<string | null>(null)
+  const [peakDialog, setPeakDialog] = useState<PeakDialog>(null)
   const captainCount = useCaptainOrderCount()
-  const day = useDayOpen()
-  const dayClosed = day !== null && !day.open
+  const { context, reload } = useCounterContext()
+  const businessDay = context?.businessDay ?? null
+  const peak = context?.peakSession ?? null
+  const dayClosed = context !== null && businessDay === null
+
+  const togglePeak = useCallback(() => {
+    if (peak) setPeakDialog({ kind: 'end', session: peak })
+    else if (businessDay) setPeakDialog({ kind: 'start', businessDayId: businessDay.id })
+    else setStatus('Open a business day before starting a peak session')
+  }, [peak, businessDay])
 
   const trigger = useCallback(
     (id: PosActionId) => {
@@ -95,17 +115,25 @@ export default function Dashboard({ recent, onUse, onOpenBilling, onOpenCaptainO
         onOpenDayEnd()
         return
       }
+      if (id === 'expense') {
+        onOpenExpenses()
+        return
+      }
       runStub(id)
       setLastAction({ id, at: new Date() })
     },
-    [onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd],
+    [onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd, onOpenExpenses],
   )
 
-  useGlobalShortcuts({
-    F1: () => trigger('new-bill'),
-    F2: () => trigger('member'),
-    F9: () => trigger('pay'),
-  })
+  useGlobalShortcuts(
+    {
+      F1: () => trigger('new-bill'),
+      F2: () => trigger('member'),
+      F8: togglePeak,
+      F9: () => trigger('pay'),
+    },
+    peakDialog === null,
+  )
 
   return (
     <div className="flex h-full min-h-screen flex-col">
@@ -115,12 +143,15 @@ export default function Dashboard({ recent, onUse, onOpenBilling, onOpenCaptainO
         <div className="ml-auto flex items-center gap-3 text-sm">
           <span className="flex items-center gap-1.5 rounded border border-zinc-600 px-2 py-1 font-medium text-zinc-300">
             <PlugZap className="size-4" aria-hidden />
-            Billing, Captain Orders &amp; Day End live · other modules preview
+            Purchase &amp; Reports preview
           </span>
-          {day?.date && <span className="text-zinc-400">Day {day.date}</span>}
+          {businessDay && <span className="text-zinc-400">Day {businessDay.businessDate}</span>}
+          {businessDay && !peak && <StartPeakButton onClick={togglePeak} />}
           <LiveClock />
         </div>
       </header>
+
+      {peak && <PeakBanner session={peak} onEnd={togglePeak} />}
 
       {dayClosed && (
         <button
@@ -172,12 +203,36 @@ export default function Dashboard({ recent, onUse, onOpenBilling, onOpenCaptainO
             {ACTIONS[id].label}
           </span>
         ))}
+        <span className="flex items-center gap-2 text-zinc-300">
+          <Kbd>F8</Kbd>
+          {peak ? 'End peak' : 'Start peak'}
+        </span>
         <span className="ml-auto font-mono text-zinc-400" aria-live="polite">
-          {lastAction
-            ? `${ACTIONS[lastAction.id].label}: stub fired at ${formatTime(lastAction.at)}`
-            : 'Ready'}
+          {status ?? (lastAction ? `${ACTIONS[lastAction.id].label}: stub fired at ${formatTime(lastAction.at)}` : 'Ready')}
         </span>
       </footer>
+
+      {peakDialog?.kind === 'start' && (
+        <PeakStartDialog
+          businessDayId={peakDialog.businessDayId}
+          onStarted={(session) => {
+            setPeakDialog(null)
+            setStatus(`Peak #${session.sessionNo} started at ${formatTime(new Date(session.startedAt))}`)
+            reload()
+          }}
+          onClose={() => setPeakDialog(null)}
+        />
+      )}
+      {peakDialog?.kind === 'end' && (
+        <PeakEndDialog
+          session={peakDialog.session}
+          onEnded={(r) => {
+            setStatus(`Peak #${r.session.sessionNo} ended · ${describeVariance(r.breakdown.variancePaise).label} (expected ${formatPaise(r.breakdown.expectedPaise)})`)
+            reload()
+          }}
+          onClose={() => setPeakDialog(null)}
+        />
+      )}
     </div>
   )
 }

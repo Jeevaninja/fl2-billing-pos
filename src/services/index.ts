@@ -15,13 +15,15 @@ export type {
   StaffSummary,
   WaiterSummary,
 } from './counter-queries.js';
-export { DayEndService } from './day-end.service.js';
+export { DayEndService, EXPENSE_CATEGORIES } from './day-end.service.js';
 export type {
   CashBreakdown,
   CashExpense,
   DayEndBlockers,
   DayEndSummary,
   DaySummary,
+  ExpenseCategory,
+  ExpenseEntry,
   OpenBillBlocker,
   OwingWaiter,
   PeakSessionCash,

@@ -160,6 +160,29 @@ describe('local HTTP API', () => {
     expect(await call('POST', '/api/days', { openingFloat: '0' })).toMatchObject({ status: 409, body: { error: { code: 'PS007' } } });
   });
 
+  it('records, lists and voids categorised expenses', async () => {
+    const { fx, call } = await start();
+    const ice = await call('POST', '/api/expenses', { amount: '15000', category: 'ICE' });
+    expect(ice).toMatchObject({ status: 201, body: { category: 'ICE', description: null, amountPaise: '15000' } });
+    await call('POST', '/api/expenses', { amount: '4000', category: 'OTHER', description: 'Tea' });
+    expect(await call('POST', '/api/expenses', { amount: '4000', category: 'OTHER' })).toMatchObject({ status: 400 });
+    expect(await call('POST', '/api/expenses', { amount: '4000', category: 'PARTY', description: 'x' })).toMatchObject({ status: 400 });
+
+    const voided = await call('POST', `/api/expenses/${ice.body.id}/void`, {});
+    expect(voided).toMatchObject({ status: 201, body: { amountPaise: '-15000', reversesExpenseId: ice.body.id, category: 'ICE' } });
+    expect(await call('POST', `/api/expenses/${ice.body.id}/void`, {})).toMatchObject({ status: 409, body: { error: { code: 'PS006' } } });
+
+    const list = await call('GET', '/api/expenses');
+    expect(list.status).toBe(200);
+    expect(list.body.map((e: { description: string | null; voidedAt: string | null }) => [e.description, e.voidedAt === null])).toEqual([
+      ['Tea', true],
+      [null, false],
+    ]);
+
+    await call('POST', `/api/days/${fx.dayId}/close`, { countedCash: '0' });
+    expect(await call('GET', '/api/expenses')).toMatchObject({ status: 404 });
+  });
+
   it('searches members and returns 404 for unknown SKUs and bills', async () => {
     const { db, call } = await start();
     await db.query(`INSERT INTO members (membership_no, display_name) VALUES ('M-1', 'Asha'), ('M-2', 'Ravi')`);

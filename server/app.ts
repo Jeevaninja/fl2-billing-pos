@@ -10,6 +10,7 @@ import {
   BillingService,
   CounterQueries,
   DayEndService,
+  EXPENSE_CATEGORIES,
   NotFoundError,
   PeakSessionService,
   WaiterService,
@@ -164,8 +165,23 @@ function buildRoutes({ db, cashierId }: ApiConfig): Route[] {
     route('POST', '/api/days/:dayId/close', async ({ params, body }) =>
       ok(await dayEnd.closeBusinessDay(id(params.dayId, 'dayId'), paise(body.countedCash, 'countedCash'), cashierId)),
     ),
+    route('GET', '/api/expenses', async () => {
+      const day = await queries.getCounterContext(cashierId);
+      if (!day.businessDay) throw new NotFoundError('business day', 'open');
+      return ok(await dayEnd.listCashExpenses(day.businessDay.id));
+    }),
     route('POST', '/api/expenses', async ({ body }) =>
-      created(await dayEnd.recordCashExpense(paise(body.amount, 'amount'), str(body.description, 'description'), cashierId)),
+      created(
+        await dayEnd.recordCashExpense(
+          paise(body.amount, 'amount'),
+          body.description === undefined || body.description === null ? null : str(body.description, 'description'),
+          cashierId,
+          optOneOf(body.category, 'category', EXPENSE_CATEGORIES) ?? 'OTHER',
+        ),
+      ),
+    ),
+    route('POST', '/api/expenses/:expenseId/void', async ({ params }) =>
+      created(await dayEnd.voidCashExpense(id(params.expenseId, 'expenseId'), cashierId)),
     ),
 
     // ── Waiter accounts ──

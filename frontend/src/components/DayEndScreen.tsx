@@ -19,6 +19,8 @@ import {
 import { useGlobalShortcuts } from '../hooks/useGlobalShortcuts'
 import { beep } from '../lib/beep'
 import { formatPaise, parseRupeesToPaise } from '../lib/money'
+import { PeakEndDialog } from './peak/PeakControls'
+import { RupeeField } from './RupeeField'
 import { FOCUS_RING, keepFocus } from '../lib/ui'
 import { Kbd, LiveClock } from './ui'
 
@@ -90,14 +92,6 @@ export default function DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrder
     void write(async () => {
       const { outstandingPaise } = await api.repayWaiter(waiter.id, amount, tender)
       return `${waiter.displayName} paid ${formatPaise(amount)} by ${tender === 'CASH' ? 'cash' : 'UPI'} · still owes ${formatPaise(outstandingPaise)}`
-    })
-  }
-
-  const endPeak = (session: PeakSessionView, cash: Paise, upi: Paise) => {
-    dispatch({ type: 'dialog', dialog: null })
-    void write(async () => {
-      const { breakdown } = await api.endPeak(session.id, cash, upi)
-      return `Peak #${session.sessionNo} ended · variance ${formatPaise(breakdown.variancePaise)}`
     })
   }
 
@@ -203,7 +197,7 @@ export default function DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrder
                 summary={summary}
                 busy={busy}
                 onRepay={(waiterId) => dispatch({ type: 'dialog', dialog: { kind: 'repay', waiterId } })}
-                onEndPeak={() => dispatch({ type: 'dialog', dialog: { kind: 'endPeak' } })}
+                onEndPeak={(session) => dispatch({ type: 'dialog', dialog: { kind: 'endPeak', session } })}
                 onOpenBilling={onOpenBilling}
                 onOpenCaptainOrders={onOpenCaptainOrders}
               />
@@ -240,8 +234,15 @@ export default function DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrder
         <ConfirmLock summary={summary} counted={countedPaise(state) ?? 0n} variance={variancePreview(state) ?? 0n} onConfirm={lockDay} onClose={closeDialog} />
       )}
       {repayWaiter && <RepayDialog waiter={repayWaiter} onConfirm={repay} onClose={closeDialog} />}
-      {dialog?.kind === 'endPeak' && summary?.blockers.runningPeakSession && (
-        <EndPeakDialog session={summary.blockers.runningPeakSession} onConfirm={endPeak} onClose={closeDialog} />
+      {dialog?.kind === 'endPeak' && (
+        <PeakEndDialog
+          session={dialog.session}
+          onEnded={(r) => {
+            flash('ok', `Peak #${r.session.sessionNo} ended · variance ${formatPaise(r.breakdown.variancePaise)}`)
+            void refresh()
+          }}
+          onClose={closeDialog}
+        />
       )}
     </div>
   )
@@ -272,7 +273,7 @@ interface ChecklistProps {
   summary: DayEndSummary
   busy: boolean
   onRepay: (waiterId: string) => void
-  onEndPeak: () => void
+  onEndPeak: (session: PeakSessionView) => void
   onOpenBilling: () => void
   onOpenCaptainOrders: () => void
 }
@@ -312,7 +313,7 @@ function Checklist({ summary, busy, onRepay, onEndPeak, onOpenBilling, onOpenCap
               Since {formatClock(peak.startedAt)} · expected so far <span className="font-mono">{formatPaise(peak.runningExpectedPaise)}</span>
               {peakBills > 0 && ` · ${peakBills} peak bill${peakBills === 1 ? '' : 's'} to reconcile`}
             </span>
-            <SmallButton onClick={onEndPeak} disabled={busy} primary>
+            <SmallButton onClick={() => onEndPeak(peak)} disabled={busy} primary>
               End peak…
             </SmallButton>
           </div>
@@ -466,43 +467,6 @@ function VarianceText({ variance }: { variance: Paise | null }) {
   )
 }
 
-interface RupeeFieldProps {
-  label: string
-  value: string
-  onChange: (text: string) => void
-  onEnter?: () => void
-  autoFocus?: boolean
-  dataAutofocus?: boolean
-}
-
-function RupeeField({ label, value, onChange, onEnter, autoFocus = false, dataAutofocus = false }: RupeeFieldProps) {
-  const invalid = value.trim() !== '' && parseRupeesToPaise(value) === null
-  return (
-    <label className="block">
-      <span className="text-sm font-semibold text-zinc-300">{label}</span>
-      <div className={`mt-1 flex items-center rounded-md border-2 bg-zinc-950 px-3 focus-within:border-amber-400 ${invalid ? 'border-rose-500' : 'border-zinc-600'}`}>
-        <span className="font-mono text-2xl text-zinc-500">₹</span>
-        <input
-          autoFocus={autoFocus}
-          {...(dataAutofocus ? { 'data-autofocus': true } : {})}
-          inputMode="decimal"
-          autoComplete="off"
-          value={value}
-          onChange={(e) => onChange(e.target.value.replace(/[^\d.,]/g, ''))}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && onEnter) {
-              e.preventDefault()
-              onEnter()
-            }
-          }}
-          className="w-full bg-transparent px-2 py-2 font-mono text-2xl tabular-nums outline-none"
-        />
-      </div>
-      {invalid && <span className="mt-1 block text-sm text-rose-400">Enter rupees, e.g. 30500 or 30,500.50</span>}
-    </label>
-  )
-}
-
 // ── Closed day and Day Open ──────────────────────────────────────────────────
 
 function ClosedDayCard({ summary }: { summary: DayEndSummary }) {
@@ -649,52 +613,6 @@ function RepayDialog({ waiter, onConfirm, onClose }: { waiter: OwingWaiter; onCo
         ))}
       </div>
       {error && amount !== null && <p className="mt-3 text-sm font-semibold text-rose-400">{error}</p>}
-    </Modal>
-  )
-}
-
-function EndPeakDialog({ session, onConfirm, onClose }: { session: PeakSessionView; onConfirm: (s: PeakSessionView, cash: Paise, upi: Paise) => void; onClose: () => void }) {
-  const [cashText, setCashText] = useState('')
-  const [upiText, setUpiText] = useState('')
-  const cash = cashText.trim() === '' ? null : parseRupeesToPaise(cashText)
-  const upi = upiText.trim() === '' ? null : parseRupeesToPaise(upiText)
-  const ready = cash !== null && upi !== null
-  const confirm = () => {
-    if (cash !== null && upi !== null) onConfirm(session, cash, upi)
-  }
-  return (
-    <Modal
-      title={`End peak session #${session.sessionNo}`}
-      onClose={onClose}
-      onKey={(e) => {
-        if (e.key !== 'Enter') return false
-        confirm()
-        return true
-      }}
-      footer={
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-sm text-zinc-400">
-            <Kbd>Enter</Kbd> end and reconcile
-          </span>
-          <button type="button" onClick={confirm} disabled={!ready} className="rounded-md bg-violet-500 px-5 py-2 font-bold text-zinc-950 disabled:opacity-50">
-            End peak
-          </button>
-        </div>
-      }
-    >
-      <dl className="mb-4 grid grid-cols-2 gap-y-1 font-mono text-sm">
-        <dt className="text-zinc-400">Started with cash</dt>
-        <dd className="text-right">{formatPaise(session.startCashPaise)}</dd>
-        <dt className="text-zinc-400">Started with UPI</dt>
-        <dd className="text-right">{formatPaise(session.startUpiPaise)}</dd>
-        <dt className="text-zinc-400">Expected so far</dt>
-        <dd className="text-right">{formatPaise(session.runningExpectedPaise)}</dd>
-      </dl>
-      <div className="flex flex-col gap-3">
-        <RupeeField label="Cash in the drawer now" value={cashText} onChange={setCashText} dataAutofocus />
-        <RupeeField label="UPI reading now" value={upiText} onChange={setUpiText} />
-      </div>
-      <p className="mt-3 text-sm text-zinc-400">Enter the full drawer and UPI readings, not the difference. Peak bills are reconciled against the change since the start.</p>
     </Modal>
   )
 }

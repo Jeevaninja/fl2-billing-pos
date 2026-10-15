@@ -8,9 +8,13 @@ import type {
   CounterTender,
   DayEndSummary,
   DaySummary,
+  CashExpense,
+  ExpenseCategory,
+  ExpenseEntry,
   MemberSummary,
   Paise,
   PeakReconciliation,
+  PeakSession,
   SkuLookup,
   Tender,
   WaiterSettlement,
@@ -94,6 +98,8 @@ export const api = {
   reverse: (billId: string, reason: string) => call<{ reversal: Bill }>('POST', `${bill(billId)}/reverse`, { reason }),
   peakSale: (sessionId: string, skuId: string, quantity: number) =>
     call<BillLine>('POST', '/api/peak/sales', { sessionId, skuId, quantity }),
+  startPeak: (businessDayId: string, declaredCash: Paise, declaredUpi: Paise) =>
+    call<PeakSession>('POST', '/api/peak/sessions', { businessDayId, declaredCash, declaredUpi }),
   endPeak: (sessionId: string, countedCash: Paise, countedUpi: Paise) =>
     call<PeakReconciliation>('POST', `/api/peak/sessions/${encodeURIComponent(sessionId)}/end`, { countedCash, countedUpi }),
   repayWaiter: (waiterId: string, amount: Paise, tender: CounterTender) =>
@@ -103,4 +109,10 @@ export const api = {
   dayEnd: () => call<DayEndSummary>('GET', '/api/day-end'),
   closeDay: (dayId: string, countedCash: Paise) => call<DayEndSummary>('POST', `/api/days/${encodeURIComponent(dayId)}/close`, { countedCash }),
   openDay: (openingFloat: Paise) => call<DaySummary>('POST', '/api/days', { openingFloat }),
+
+  /** The open day's expenses, newest first (404 when no day is open). */
+  listExpenses: () => call<ExpenseEntry[]>('GET', '/api/expenses'),
+  addExpense: (amount: Paise, category: ExpenseCategory, description: string | null) =>
+    call<CashExpense>('POST', '/api/expenses', { amount, category, description }),
+  voidExpense: (expenseId: string) => call<CashExpense>('POST', `/api/expenses/${encodeURIComponent(expenseId)}/void`),
 }

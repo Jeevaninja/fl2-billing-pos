@@ -1,8 +1,8 @@
 # FL2 POS — Backend State Reference
 
-Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, and Phase 7 Day End (`0005_day_end`, `DayEndService`). Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
+Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`). Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
 
-- **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`.
+- **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`, `0006_expense_category`.
 - **Money:** `BIGINT` whole paise in SQL, `bigint` in TypeScript (`type Paise = bigint`). No floats anywhere.
 - **Quantities:** `INTEGER` whole sealed bottles. No ml / peg columns.
 - **Append-only:** DELETE and TRUNCATE are blocked on every domain table. Ledger tables also block UPDATE. Corrections are made with reversing records.
@@ -27,7 +27,7 @@ Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local 
 | `bills` | `billing_mode` NORMAL / PEAK; `status` OPEN → SETTLED or PEAK_UNSETTLED → PEAK_RECONCILED; `bill_kind` SALE / REVERSAL; Captain orders carry `request_id` (unique idempotency key), `request_fingerprint` and `captain_device_id` (0004) | `business_day_id → business_days`, `peak_session_id → peak_sessions`, `waiter_id → waiters`, `member_id → members`, `reverses_bill_id → bills` (unique), `replaces_bill_id → bills` (unique), `created_by_staff_id`, `settled_by_staff_id → staff` |
 | `bill_items` | Lines with SKU / price snapshots; negative lines cancel or reverse | `bill_id → bills`, `sku_id → skus`, `reverses_item_id → bill_items`, `waiter_id → waiters`, `created_by_staff_id → staff` |
 | `bill_payments` | Tenders: CASH, UPI, WAITER_CREDIT; negative amounts are refunds | `bill_id → bills`, `business_day_id → business_days`, `peak_session_id → peak_sessions`, `reverses_payment_id → bill_payments` (unique), `received_by_staff_id → staff` |
-| `cash_expenses` | Petty-cash payments from the drawer (append-only; a negative row with `reverses_expense_id` corrects one); tagged to the open day and running peak by trigger (0005) | `business_day_id → business_days`, `peak_session_id → peak_sessions`, `reverses_expense_id → cash_expenses` (unique), `created_by_staff_id → staff` |
+| `cash_expenses` | Petty-cash payments from the drawer (append-only; a negative row with `reverses_expense_id` voids one); tagged to the open day and running peak by trigger (0005). `category` ∈ ICE, STAFF_FOOD, TRANSPORT, CLEANING, REPAIRS, OTHER; `description` optional except for OTHER (0006) | `business_day_id → business_days`, `peak_session_id → peak_sessions`, `reverses_expense_id → cash_expenses` (unique), `created_by_staff_id → staff` |
 | `sync_outbox` | Transactional outbox for cloud sync (written by trigger) | — |
 | `schema_migrations` | Applied migration versions | — |
 
@@ -41,6 +41,7 @@ Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local 
 **Day End (0005):**
 - `pos_day_expected_cash` = opening float + CASH bill tenders outside peak windows + Σ ended sessions (end cash − start cash) + CASH waiter repayments outside peak windows − cash expenses outside peak windows. Inside a peak window the counted drawer delta already contains every cash movement, so nothing is counted twice and a peak shortage appears once (as that session's variance).
 - Close (`status → CLOSED`) is refused with `PS007` while a peak session runs, any bill of the day is `OPEN` / `PEAK_UNSETTLED`, or **any waiter** has `outstanding_balance > 0` (active or not, whichever day the credit is from). It needs `counted_cash_paise` (`PS002`); expected cash and variance are computed by the trigger, overwriting client values, then frozen with the day (`PS001`).
+- **Expense voids (0006):** a void copies the original's category and note, must exactly negate it (`PS006`), can happen only once (`PS006`), and must be posted on the original's business day (`PS007`: a closed day's cash has already been counted).
 - The opening float is immutable; the close columns can't be written while the day is open (`PS002`). The `business_days_cash_count_on_close` CHECK is `NOT VALID`, so days closed before 0005 keep NULL counts.
 
 **Captain orders (0004):**
@@ -206,8 +207,13 @@ class DayEndService {
   getDayEndSummary(businessDayId: string): Promise<DayEndSummary>;        // NotFoundError for an unknown day
   closeBusinessDay(businessDayId: string, countedCash: Paise, staffId: string): Promise<DayEndSummary>;
   openBusinessDay(openingFloat: Paise, staffId: string, businessDate?: string /* default: today, Asia/Kolkata */): Promise<DaySummary>;
-  recordCashExpense(amount: Paise, description: string, staffId: string): Promise<CashExpense>;
+  recordCashExpense(amount: Paise, description: string | null, staffId: string, category?: ExpenseCategory /* default OTHER */): Promise<CashExpense>;
+  listCashExpenses(businessDayId: string): Promise<ExpenseEntry[]>;        // originals only, newest first, with voidedAt
+  voidCashExpense(expenseId: string, staffId: string): Promise<CashExpense>; // appends the negating row
 }
+
+type ExpenseCategory = 'ICE' | 'STAFF_FOOD' | 'TRANSPORT' | 'CLEANING' | 'REPAIRS' | 'OTHER';  // EXPENSE_CATEGORIES
+interface ExpenseEntry extends CashExpense { voidedAt: Date | null; }
 
 interface DaySummary {
   id: string; businessDate: string; status: 'OPEN' | 'CLOSED'; openedAt: Date; openingFloatPaise: Paise;
@@ -224,12 +230,13 @@ interface DayEndSummary {
   breakdown: CashBreakdown;                   // openingFloat, normalCash, peakCash, waiterCash, cashExpenses, expectedCash, upiTotal (info)
   peakSessions: PeakSessionCash[];            // ended sessions: cash / UPI deltas and frozen variance
 }
-interface CashExpense { id; businessDayId; peakSessionId: string | null; amountPaise; reversesExpenseId: string | null; description; createdByStaffId; createdAt; }
+interface CashExpense { id; businessDayId; peakSessionId: string | null; amountPaise; reversesExpenseId: string | null; category: ExpenseCategory; description: string | null; createdByStaffId; createdAt; }
 ```
 
 - **`closeBusinessDay`:** locks the day row first, so a sale racing the close either commits before it (and is counted) or fails `PS007`. The database re-checks every blocker. The returned breakdown is checked against the frozen expected figure.
 - **`openBusinessDay`:** refuses a second open day and a date that has already traded (`PS007`). A business date trades once, so closing and reopening on the same calendar day is refused.
-- **`recordCashExpense`:** amount > 0, description 1–200 characters after trimming. Corrections are negative rows that exactly negate the original (`PS006`); there's no service method for them yet.
+- **`recordCashExpense`:** amount > 0; the note is trimmed (blank → null), at most 200 characters, and required for OTHER (`RangeError`, also a CHECK). Unknown categories are a `RangeError`.
+- **`voidCashExpense`:** `NotFoundError` for an unknown id; double void or voiding a void row is `PS006`; an expense from a closed day is `PS007`.
 
 ### `WaiterService` (`src/services/waiter.service.ts`)
 
@@ -430,7 +437,9 @@ Migrations run on every boot (already-applied ones are skipped).
 | `GET /api/day-end` | | `getDayEndSummary(getCurrentDayId())`: the open day, else the last closed one; 404 before any day | 200 |
 | `POST /api/days` | `{ openingFloat }` | `openBusinessDay(…, cashier)` | 201 |
 | `POST /api/days/:dayId/close` | `{ countedCash }` | `closeBusinessDay(…, cashier)` | 200 |
-| `POST /api/expenses` | `{ amount, description }` | `recordCashExpense(…, cashier)` | 201 |
+| `GET /api/expenses` | | `listCashExpenses(open day)`; 404 when no day is open | 200 |
+| `POST /api/expenses` | `{ amount, category?, description? }` (category defaults to OTHER) | `recordCashExpense(…, cashier, category)` | 201 |
+| `POST /api/expenses/:expenseId/void` | | `voidCashExpense(…, cashier)` | 201 |
 
 The frontend dev server proxies `/api` to `http://127.0.0.1:4310`.
 

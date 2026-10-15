@@ -179,5 +179,33 @@ export interface DayEndSummary {
 
 export interface PeakReconciliation {
   session: { id: string; sessionNo: number; variancePaise: Paise | null }
-  breakdown: { expectedPaise: Paise; actualPaise: Paise; variancePaise: Paise }
+  breakdown: { expectedPaise: Paise; actualPaise: Paise; cashDeltaPaise: Paise; upiDeltaPaise: Paise; variancePaise: Paise }
+}
+
+export interface PeakSession {
+  id: string
+  businessDayId: string
+  sessionNo: number
+  startedAt: string
+  startCashPaise: Paise
+  startUpiPaise: Paise
+}
+
+// ── Expenses ────────────────────────────────────────────────────────────────
+
+export type ExpenseCategory = 'ICE' | 'STAFF_FOOD' | 'TRANSPORT' | 'CLEANING' | 'REPAIRS' | 'OTHER'
+
+export interface CashExpense {
+  id: string
+  businessDayId: string
+  peakSessionId: string | null
+  amountPaise: Paise
+  reversesExpenseId: string | null
+  category: ExpenseCategory
+  description: string | null
+  createdAt: string
+}
+
+export interface ExpenseEntry extends CashExpense {
+  voidedAt: string | null
 }
