@@ -1,10 +1,10 @@
 # FL2 POS — Frontend State Reference
 
-As of Phase 8 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders, Phase 7 Day End, Phase 8 Expenses and peak controls). Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
+As of Phase 9 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders, Phase 7 Day End, Phase 8 Expenses and peak controls, Phase 9 Purchase / GRN). Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
 
 - **Stack:** Vite 8, React 19, TypeScript, Tailwind CSS 4 (`@tailwindcss/vite`), Lucide icons, Vitest. No router, no state library.
 - **Run:** `npm run api:dev` at the repo root (API on `127.0.0.1:4310`), then `npm run dev` in `frontend/` (http://localhost:5173). Vite proxies `/api` to the API.
-- **Check:** `npm test` (Vitest, 94 tests), `npx tsc -b`, `npx oxlint src`, `npm run build`.
+- **Check:** `npm test` (Vitest, 111 tests), `npx tsc -b`, `npx oxlint src`, `npm run build`.
 - **Money:** `bigint` paise end to end. The API client decodes every `…Paise` JSON string to `bigint` and encodes `bigint` back to strings. Display goes through `formatPaise`; cashier input goes through `parseRupeesToPaise`. No floats.
 - **Server is the source of truth:** bills enter screen state only as `BillDetail` responses, so the UI never adds up prices to get a total.
 
@@ -14,12 +14,12 @@ As of Phase 8 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Capt
 
 ```
 main.tsx                      StrictMode → <App/>, imports index.css (Tailwind)
-└─ App                        view: 'dashboard' | 'billing' | 'captain-orders' | 'day-end' | 'expenses'; holds the Recently Used list
+└─ App                        view: 'dashboard' | 'billing' | 'captain-orders' | 'day-end' | 'expenses' | 'purchase'; holds the Recently Used list
    ├─ Dashboard               module tiles + Recently Used rail + key legend footer
    │  ├─ header               Start peak (F8) button when a day is open and no peak runs
    │  ├─ PeakBanner           amber "PEAK #n running · since · expected drawer total" strip with End peak session (F8)
    │  ├─ day banner           "No business day is open" strip → Day End (context polled 15 s)
-   │  ├─ ModuleTile ×6        Billing Screen, Captain Orders (live "n open" badge, polled 15 s), Expense (live), Purchase,
+   │  ├─ ModuleTile ×6        Billing Screen, Captain Orders (live "n open" badge, polled 15 s), Expense (live), Purchase (→ PurchaseScreen),
    │  │                       Day End (reads "Open Day" and becomes the primary tile when no day is open), Reports
    │  ├─ RailButton ×≤6       most-recently-used actions
    │  └─ LiveClock, Kbd       (components/ui.tsx)
@@ -62,6 +62,15 @@ main.tsx                      StrictMode → <App/>, imports index.css (Tailwind
       ├─ list (right)         today's expenses newest first: time, category, note, ⚡ = during a peak, amount, Void /
       │                       VOIDED (struck through); header shows today's live total and count
       └─ void confirm         Modal: Enter appends the negating row
+   └─ PurchaseScreen          useReducer(purchaseReducer); GET /api/context + /api/purchases polled 15 s
+      ├─ header               day, "Received by <till cashier>", "Today n receipts · m btl"
+      ├─ invoice strip        Invoice no (focused on load) → Enter → Vendor (optional) → Enter → SKU; both turn red on a duplicate
+      ├─ Add line (left)      SKU combobox (scan or type; debounced GET /api/skus; ↑/↓ + Enter; results show SizeChip and on-hand),
+      │                       Qty → Enter → Unit cost RupeeField (₹0 = free) → Enter stages the line and refocuses SKU
+      ├─ This invoice (right) staged lines (#, SKU + code, size, qty, unit / FREE, line total, × remove; click selects, Del removes),
+      │                       FlashLine, footer: lines · bottles · invoice total, Post GRN (F9)
+      ├─ Today's receipts     time, invoice, vendor, lines · bottles, total cost
+      └─ confirm              Modal: vendor, lines, bottles, total; Enter / F9 posts
 
 Shared: components/peak/PeakControls.tsx: PeakBanner, StartPeakButton, PeakStartDialog (cash + UPI readings → start),
         PeakEndDialog (closing readings → end → result view: expected, cash/UPI change, actual, variance; Enter closes).
@@ -84,13 +93,15 @@ Shared: components/peak/PeakControls.tsx: PeakBanner, StartPeakButton, PeakStart
 | `captain/captainOrdersReducer.ts` | `captainOrdersReducer`, `initialCaptainOrdersState`, `selectedOrder`, `editBlock`, `formatAge` |
 | `components/DayEndScreen.tsx` | `DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrders })` |
 | `components/ExpenseScreen.tsx` | `ExpenseScreen({ onExit, onOpenDayEnd })` |
+| `components/PurchaseScreen.tsx` | `PurchaseScreen({ onExit, onOpenDayEnd })` |
 | `components/peak/PeakControls.tsx` | `PeakBanner`, `StartPeakButton`, `PeakStartDialog`, `PeakEndDialog` |
 | `components/RupeeField.tsx` | `RupeeField` |
 | `expense/expenseReducer.ts` | `expenseReducer`, `initialExpenseState`, `CATEGORIES`, `CATEGORY_LABEL`, `formError`, `formPayload`, `todayTotals` |
+| `purchase/purchaseReducer.ts` | `purchaseReducer`, `initialPurchaseState`, `MAX_LINE_QTY`, `lineError`, `submitError`, `submitPayload`, `lineTotal`, `stagedTotals`, `pickFromSearch` |
 | `peak/peakMath.ts` | `parseReadings`, `describeVariance` |
 | `dayend/dayEndReducer.ts` | `dayEndReducer`, `initialDayEndState`, `dayEndView`, `blockerCount`, `openCounterBills`, `countedPaise`, `variancePreview`, `lockBlock` |
 
-Dashboard tiles other than Billing and Captain Orders (and the F1/F2/F9 actions, which open billing) still call `runStub`.
+Only the Reports tile still calls `runStub`; every other tile (and F1/F2/F9, which open billing) opens its screen.
 
 **Captain Orders screen** (`captainOrdersReducer`, pure and unit-tested):
 - **State:** `orders` (server list, oldest first), `selectedId`, `selectedKey` (line), `focus: 'list' | 'detail'`, `seenIds` / `freshIds` (new-order detection; nothing is "new" on the first load), `lastUpdated`, `dialog: 'payment' | 'member' | null`, `receipt`, `flash`.
@@ -112,6 +123,18 @@ Dashboard tiles other than Billing and Captain Orders (and the F1/F2/F9 actions,
   - `todayTotals` excludes voided entries.
 - `recorded` clears the amount and note but keeps the category, ready for a run of similar entries. A void confirmation is dropped once the list no longer offers that entry.
 - **Keys:** 1–6 pick a category when no text field has focus (and move focus to the amount) · Enter records · Enter confirms a void · Esc dashboard.
+
+**Purchase screen (GRN)** (`purchaseReducer`, pure and unit-tested):
+- **State:** `load` (`loading` / `ready` / `offline` / `noDay`), `till`, `receipts` (today's, newest first), `invoiceNo`, `vendorName`, `invoiceError` (set by a PS011 duplicate, cleared on edit), the picker (`query`, `results`, `highlighted`, `picked`), `qty`, `cost`, `lines: StagedLine[]` (`sku`, `quantity`, `unitCostPaise`), `selectedLine`, `confirming`, `submitting`, `flash`.
+- **Selectors:**
+  - `lineError` checks a picked SKU, then qty 1–100,000, then a unit cost in valid rupees (₹0 allowed).
+  - `submitError` checks the invoice number, then at least one line. `submitPayload` trims both, blank vendor → null.
+  - `stagedTotals` / `lineTotal` are bigint paise. `pickFromSearch` takes an exact barcode / SKU code match (a scan), else the only result, else the highlighted one.
+- **Staging:** re-adding a staged SKU at the same cost adds to its qty (capped at 100,000); at a different cost it's refused ("already on this invoice at ₹X — remove it first"). An inactive SKU can't be picked. Search results for a stale query are dropped.
+- **Posting:** `posted` clears the invoice, vendor and lines; `duplicate` keeps everything, closes the dialog and flags the invoice fields. Once the form is up, a failed poll only flashes (the invoice being keyed in stays).
+- **Keys:** Enter moves invoice → vendor → SKU → qty → cost → stage · ↑/↓ in SKU results · F9 asks to post, Enter / F9 confirms · Del removes the selected line (outside text fields) · Esc clears the line being entered; with lines staged, the first Esc warns and a second within 3 s leaves.
+
+**Billing scan stock note:** each scan's flash now ends with the bottles left (`stockLeft`: "57 left", or "last in stock"), computed from the `lookupSku` taken just before the sale. Stock received in Purchase shows on the very next scan.
 
 **Peak controls:** F8 toggles on the Dashboard and the Billing screen: it starts a session when none is running and ends the running one otherwise. Both screens disable their other shortcuts while a peak dialog is open, and re-read `/api/context` once a session starts or ends. `parseReadings` needs both readings (₹0 allowed); `describeVariance` words the result as short, over or exact.
 
@@ -184,7 +207,7 @@ No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDow
 
 | File | Contents |
 |---|---|
-| `api/client.ts` | `api.*` (`context`, `lookupSku`, `searchMembers`, `listWaiters`, `getBill`, `captainOrders`, `createBill`, `addItem`, `cancelItem` (optional `restock`), `setMember`, `tagWaiter`, `settle`, `settleWaiter`, `closeEmpty`, `reverse`, `peakSale`), `ApiError` (`status`, `code`; `NETWORK` when unreachable or the proxy answers non-JSON 5xx), `reviveJson`, `encodeJson` |
+| `api/client.ts` | `api.*` (`context`, `lookupSku`, `searchMembers`, `listWaiters`, `getBill`, `captainOrders`, `createBill`, `addItem`, `cancelItem` (optional `restock`), `setMember`, `tagWaiter`, `settle`, `settleWaiter`, `closeEmpty`, `reverse`, `peakSale`, `searchSkus`, `listPurchases`, `postPurchase`), `ApiError` (`status`, `code`; `NETWORK` when unreachable or the proxy answers non-JSON 5xx), `reviveJson`, `encodeJson` |
 | `api/types.ts` | Frontend mirrors of the API DTOs (`Bill`, `BillDetail`, `CounterContext`, `SkuLookup`, …) with `Paise = bigint`; dates stay ISO strings |
 | `billing/payment.ts` | `payOptions(detail)`, `planPayment(detail, input)` → counter tenders or waiter settle steps plus change, credit-limit pre-check, `describePlan` |
 | `billing/errors.ts` | `CounterError` (screen-raised), `counterErrorMessage(err)` (PS code → cashier wording) |
@@ -203,9 +226,10 @@ No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDow
 ## 6. Known gaps
 
 - The peak ticker holds only this visit's scans, so Ctrl+Z can't undo a scan made before a reload. Server totals are always complete.
-- No receipt printing or KOT reprint. No Purchase or Reports screens (dashboard stubs).
+- No receipt printing or KOT reprint. No Reports screen (dashboard stub).
+- A posted GRN is final: there's no return-to-vendor / void receipt yet, and no stock-adjustment UI.
 - The peak banner, the Billing peak side panel, the end dialog and Day End show the **expected drawer total** (`expectedDrawerCashPaise`: start cash + peak sales + in-peak cash − in-peak expenses). Peak bills carry no tender, so a peak sale paid by UPI makes the real drawer lower than this figure; the end-of-session variance still reconciles cash + UPI together.
 - Expense entries are stamped with the till's `FL2_CASHIER_ID`; there's no per-person attribution until staff login exists.
 - Breakage written off with `X` is a cancel line with `restock: false`; there is no separate breakage/ADJUSTMENT report yet.
 - The cashier is fixed by the API's `FL2_CASHIER_ID`; there's no login.
-- The headless-Chrome end-to-end script used to verify Phase 4 is not in the repo.
+- The headless-Chrome end-to-end scripts used to verify Phases 4 and 9 are not in the repo.

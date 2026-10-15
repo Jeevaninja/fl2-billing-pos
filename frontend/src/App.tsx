@@ -4,9 +4,10 @@ import CaptainOrdersScreen from './components/CaptainOrdersScreen'
 import Dashboard from './components/Dashboard'
 import DayEndScreen from './components/DayEndScreen'
 import ExpenseScreen from './components/ExpenseScreen'
+import PurchaseScreen from './components/PurchaseScreen'
 import { DEFAULT_RECENT, pushRecent, type PosActionId } from './components/dashboard/actions'
 
-type View = 'dashboard' | 'billing' | 'captain-orders' | 'day-end' | 'expenses'
+type View = 'dashboard' | 'billing' | 'captain-orders' | 'day-end' | 'expenses' | 'purchase'
 
 export default function App() {
   const [view, setView] = useState<View>('dashboard')
@@ -16,11 +17,13 @@ export default function App() {
   const openCaptainOrders = useCallback(() => setView('captain-orders'), [])
   const openDayEnd = useCallback(() => setView('day-end'), [])
   const openExpenses = useCallback(() => setView('expenses'), [])
+  const openPurchase = useCallback(() => setView('purchase'), [])
   const exitToDashboard = useCallback(() => setView('dashboard'), [])
 
   if (view === 'billing') return <BillingScreen onExit={exitToDashboard} />
   if (view === 'captain-orders') return <CaptainOrdersScreen onExit={exitToDashboard} />
   if (view === 'expenses') return <ExpenseScreen onExit={exitToDashboard} onOpenDayEnd={openDayEnd} />
+  if (view === 'purchase') return <PurchaseScreen onExit={exitToDashboard} onOpenDayEnd={openDayEnd} />
   if (view === 'day-end') {
     return <DayEndScreen onExit={exitToDashboard} onOpenBilling={openBilling} onOpenCaptainOrders={openCaptainOrders} />
   }
@@ -32,6 +35,7 @@ export default function App() {
       onOpenCaptainOrders={openCaptainOrders}
       onOpenDayEnd={openDayEnd}
       onOpenExpenses={openExpenses}
+      onOpenPurchase={openPurchase}
     />
   )
 }

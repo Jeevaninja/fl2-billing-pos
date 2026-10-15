@@ -37,7 +37,7 @@ export const ACTIONS: Record<PosActionId, PosAction> = {
   billing: { id: 'billing', label: 'Billing Screen', hint: 'Scan bottles, take Cash / UPI', icon: ReceiptText },
   'captain-orders': { id: 'captain-orders', label: 'Captain Orders', hint: 'Edit and settle waiter handset orders', icon: Smartphone },
   expense: { id: 'expense', label: 'Expense', hint: 'Petty cash and daily spends', icon: Wallet },
-  purchase: { id: 'purchase', label: 'Purchase', hint: 'Stock receipts and POs', icon: PackagePlus },
+  purchase: { id: 'purchase', label: 'Purchase', hint: 'Stock inwarding (GRN)', icon: PackagePlus },
   'day-end': { id: 'day-end', label: 'Day End', hint: 'Peak reconciliation and close', icon: CalendarCheck },
   reports: { id: 'reports', label: 'Reports', hint: 'Sales, stock and F.Ac.2', icon: ChartColumn },
 }

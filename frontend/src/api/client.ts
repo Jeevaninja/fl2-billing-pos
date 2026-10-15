@@ -15,13 +15,16 @@ import type {
   Paise,
   PeakReconciliation,
   PeakSession,
+  ReceiptLinePayload,
   SkuLookup,
+  StockReceipt,
+  StockReceiptDetail,
   Tender,
   WaiterSettlement,
   WaiterSummary,
 } from './types'
 
-/** A failed API call. `code` is the server's error code (PS001–PS010, NOT_FOUND, …) or NETWORK. */
+/** A failed API call. `code` is the server's error code (PS001–PS011, NOT_FOUND, …) or NETWORK. */
 export class ApiError extends Error {
   override readonly name = 'ApiError'
   readonly status: number
@@ -77,6 +80,7 @@ const bill = (billId: string) => `/api/bills/${encodeURIComponent(billId)}`
 export const api = {
   context: () => call<CounterContext>('GET', '/api/context'),
   lookupSku: (code: string) => call<SkuLookup>('GET', `/api/skus/lookup?code=${encodeURIComponent(code)}`),
+  searchSkus: (q: string) => call<SkuLookup[]>('GET', `/api/skus?q=${encodeURIComponent(q)}&limit=12`),
   searchMembers: (q: string) => call<MemberSummary[]>('GET', `/api/members?q=${encodeURIComponent(q)}&limit=12`),
   listWaiters: () => call<WaiterSummary[]>('GET', '/api/waiters'),
   getBill: (billId: string) => call<BillDetail>('GET', bill(billId)),
@@ -115,4 +119,9 @@ export const api = {
   addExpense: (amount: Paise, category: ExpenseCategory, description: string | null) =>
     call<CashExpense>('POST', '/api/expenses', { amount, category, description }),
   voidExpense: (expenseId: string) => call<CashExpense>('POST', `/api/expenses/${encodeURIComponent(expenseId)}/void`),
+
+  /** The open day's stock receipts, newest first (404 when no day is open). */
+  listPurchases: () => call<StockReceipt[]>('GET', '/api/purchases'),
+  postPurchase: (invoiceNo: string, vendorName: string | null, lines: ReceiptLinePayload[]) =>
+    call<StockReceiptDetail>('POST', '/api/purchases', { invoiceNo, vendorName, lines }),
 }

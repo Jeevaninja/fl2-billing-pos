@@ -13,8 +13,10 @@ import {
   EXPENSE_CATEGORIES,
   NotFoundError,
   PeakSessionService,
+  PurchaseService,
   WaiterService,
   type CounterPayment,
+  type ReceiptLineInput,
 } from '../src/services/index.js';
 import {
   BadRequestError,
@@ -48,6 +50,7 @@ function buildRoutes({ db, cashierId }: ApiConfig): Route[] {
   const waiters = new WaiterService(db);
   const queries = new CounterQueries(db);
   const dayEnd = new DayEndService(db);
+  const purchases = new PurchaseService(db);
 
   return [
     route('GET', '/api/health', async () => ok({ ok: true })),
@@ -58,6 +61,11 @@ function buildRoutes({ db, cashierId }: ApiConfig): Route[] {
       const sku = await queries.lookupSku(code);
       if (!sku) throw new NotFoundError('sku', code);
       return ok(sku);
+    }),
+    route('GET', '/api/skus', async ({ query }) => {
+      const limit = query.has('limit') ? int(Number(query.get('limit')), 'limit') : undefined;
+      if (limit !== undefined && (limit < 1 || limit > 50)) throw new BadRequestError('limit must be 1–50');
+      return ok(await queries.searchSkus(query.get('q') ?? '', limit));
     }),
     route('GET', '/api/members', async ({ query }) => {
       const limit = query.has('limit') ? int(Number(query.get('limit')), 'limit') : undefined;
@@ -183,6 +191,27 @@ function buildRoutes({ db, cashierId }: ApiConfig): Route[] {
     route('POST', '/api/expenses/:expenseId/void', async ({ params }) =>
       created(await dayEnd.voidCashExpense(id(params.expenseId, 'expenseId'), cashierId)),
     ),
+
+    // ── Purchase (GRN) ──
+    route('GET', '/api/purchases', async () => {
+      const day = await queries.getCounterContext(cashierId);
+      if (!day.businessDay) throw new NotFoundError('business day', 'open');
+      return ok(await purchases.listReceipts(day.businessDay.id));
+    }),
+    route('GET', '/api/purchases/:receiptId', async ({ params }) => ok(await purchases.getReceipt(id(params.receiptId, 'receiptId')))),
+    route('POST', '/api/purchases', async ({ body }) => {
+      if (!Array.isArray(body.lines)) throw new BadRequestError('lines must be an array');
+      const lines = body.lines.map((l: unknown, i): ReceiptLineInput => {
+        const line = (l ?? {}) as Body;
+        return {
+          skuId: id(line.skuId, `lines[${i}].skuId`),
+          quantity: int(line.quantity, `lines[${i}].quantity`),
+          unitCostPaise: paise(line.unitCost, `lines[${i}].unitCost`),
+        };
+      });
+      const vendorName = body.vendorName === undefined || body.vendorName === null ? null : str(body.vendorName, 'vendorName');
+      return created(await purchases.recordReceipt({ invoiceNo: str(body.invoiceNo, 'invoiceNo'), vendorName, lines }, cashierId));
+    }),
 
     // ── Waiter accounts ──
     route('POST', '/api/waiters/:waiterId/repayments', async ({ params, body }) =>

@@ -107,6 +107,7 @@ export interface CounterContext {
 }
 
 const DEFAULT_MEMBER_LIMIT = 20;
+const DEFAULT_SKU_LIMIT = 20;
 
 export interface WaiterRow {
   id: string;
@@ -126,6 +127,19 @@ interface SkuLookupRow {
   price_paise: DbInt;
   on_hand_qty: number;
   is_active: boolean;
+}
+
+function mapSkuLookup(row: SkuLookupRow): SkuLookup {
+  return {
+    id: row.id,
+    skuCode: row.sku_code,
+    barcode: row.barcode,
+    displayName: row.display_name,
+    sizeCode: row.size_code,
+    pricePaise: toPaise(row.price_paise),
+    onHandQty: row.on_hand_qty,
+    isActive: row.is_active,
+  };
 }
 
 export const WAITER_COLUMNS = `id, waiter_code, display_name, is_trusted, outstanding_balance, credit_limit_paise`;
@@ -202,17 +216,30 @@ export class CounterQueries {
         LIMIT 1`,
       [text],
     );
-    if (!row) return null;
-    return {
-      id: row.id,
-      skuCode: row.sku_code,
-      barcode: row.barcode,
-      displayName: row.display_name,
-      sizeCode: row.size_code,
-      pricePaise: toPaise(row.price_paise),
-      onHandQty: row.on_hand_qty,
-      isActive: row.is_active,
-    };
+    return row ? mapSkuLookup(row) : null;
+  }
+
+  /**
+   * SKUs for a picker (Purchase screen): exact barcode, SKU code prefix, or name contains `query`.
+   * An exact barcode ranks first, inactive SKUs last; then by name and size (FULL → QUARTER, 650 → 330).
+   */
+  async searchSkus(query: string, limit = DEFAULT_SKU_LIMIT): Promise<SkuLookup[]> {
+    const text = query.trim();
+    if (text === '') return [];
+    const { rows } = await this.db.query<SkuLookupRow>(
+      `SELECT k.id, k.sku_code, k.barcode, k.display_name, k.size_code, k.price_paise, k.is_active,
+              coalesce(s.on_hand_qty, 0) AS on_hand_qty
+         FROM skus k
+         JOIN products p ON p.id = k.product_id
+         LEFT JOIN sku_stock s ON s.sku_id = k.id
+        WHERE k.barcode = $2 OR k.sku_code ILIKE $1 || '%' OR k.display_name ILIKE '%' || $1 || '%'
+        ORDER BY (k.barcode = $2) IS TRUE DESC, k.is_active DESC, lower(p.name),
+                 array_position(ARRAY['FULL', 'HALF', 'QUARTER', 'BEER_650', 'BEER_330'], k.size_code),
+                 k.sku_code
+        LIMIT $3`,
+      [likeLiteral(text), text, limit],
+    );
+    return rows.map(mapSkuLookup);
   }
 
   /** Active members whose number starts with, or name contains, `query`. An exact number ranks first. */

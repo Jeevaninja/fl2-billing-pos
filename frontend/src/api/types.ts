@@ -211,3 +211,42 @@ export interface CashExpense {
 export interface ExpenseEntry extends CashExpense {
   voidedAt: string | null
 }
+
+// ── Purchase (GRN) ──────────────────────────────────────────────────────────
+
+export interface StockReceipt {
+  id: string
+  businessDayId: string
+  invoiceNo: string
+  vendorName: string | null
+  receivedByStaffId: string
+  receivedBy: string
+  createdAt: string
+  lineCount: number
+  bottles: number
+  totalCostPaise: Paise
+}
+
+export interface StockReceiptLine {
+  id: string
+  lineNo: number
+  skuId: string
+  skuCode: string
+  displayName: string
+  sizeCode: SizeCode
+  quantity: number
+  unitCostPaise: Paise
+  lineTotalPaise: Paise
+}
+
+export interface StockReceiptDetail {
+  receipt: StockReceipt
+  lines: StockReceiptLine[]
+}
+
+/** One invoice line as posted: `unitCost` is whole paise (0 for scheme / free bottles). */
+export interface ReceiptLinePayload {
+  skuId: string
+  quantity: number
+  unitCost: Paise
+}

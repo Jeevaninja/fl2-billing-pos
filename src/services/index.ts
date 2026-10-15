@@ -29,6 +29,8 @@ export type {
   PeakSessionCash,
 } from './day-end.service.js';
 export { PeakSessionService } from './peak-session.service.js';
+export { MAX_RECEIPT_LINES, MAX_RECEIPT_QTY, PurchaseService } from './purchase.service.js';
+export type { ReceiptInput, ReceiptLineInput, StockReceipt, StockReceiptDetail, StockReceiptLine } from './purchase.service.js';
 export { formatKot, PrinterService } from './printer.service.js';
 export type { KotFormat, KotPrinter, KotPrintResult, KotStation, KotTicket } from './printer.service.js';
 export type { PeakBreakdown, PeakReconciliation } from './peak-session.service.js';

@@ -35,6 +35,7 @@ interface DashboardProps {
   onOpenCaptainOrders: () => void
   onOpenDayEnd: () => void
   onOpenExpenses: () => void
+  onOpenPurchase: () => void
 }
 
 const CAPTAIN_COUNT_POLL_MS = 15_000
@@ -84,7 +85,7 @@ function useCounterContext(): { context: CounterContext | null; reload: () => vo
 /** Start dialog, or the end dialog with its own session snapshot (it outlives the session to show the result). */
 type PeakDialog = { kind: 'start'; businessDayId: string } | { kind: 'end'; session: PeakSessionView } | null
 
-export default function Dashboard({ recent, onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd, onOpenExpenses }: DashboardProps) {
+export default function Dashboard({ recent, onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd, onOpenExpenses, onOpenPurchase }: DashboardProps) {
   const [lastAction, setLastAction] = useState<LastAction | null>(null)
   const [status, setStatus] = useState<string | null>(null)
   const [peakDialog, setPeakDialog] = useState<PeakDialog>(null)
@@ -119,10 +120,14 @@ export default function Dashboard({ recent, onUse, onOpenBilling, onOpenCaptainO
         onOpenExpenses()
         return
       }
+      if (id === 'purchase') {
+        onOpenPurchase()
+        return
+      }
       runStub(id)
       setLastAction({ id, at: new Date() })
     },
-    [onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd, onOpenExpenses],
+    [onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd, onOpenExpenses, onOpenPurchase],
   )
 
   useGlobalShortcuts(

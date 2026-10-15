@@ -201,3 +201,9 @@ export function billingReducer(state: BillingState, action: BillingAction): Bill
       return { ...state, flash: { kind: action.kind, text: action.text, seq: (state.flash?.seq ?? 0) + 1 } }
   }
 }
+
+/** Scan-flash stock note: bottles left after this sale, read from the lookup taken just before it. */
+export function stockLeft(onHandBefore: number, sold: number): string {
+  const left = Math.max(0, onHandBefore - sold)
+  return left === 0 ? 'last in stock' : `${left} left`
+}

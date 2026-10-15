@@ -1,4 +1,4 @@
-/** SQLSTATE codes raised by the rules in migrations/0002_core_rules.sql. */
+/** SQLSTATE codes raised by the rules in migrations/ (0002_core_rules.sql and later). */
 export const PosErrorCode = {
   APPEND_ONLY: 'PS001',
   ILLEGAL_TRANSITION: 'PS002',
@@ -10,6 +10,7 @@ export const PosErrorCode = {
   WAITER_BALANCE: 'PS008',
   DERIVED_COLUMN: 'PS009',
   BILL_ON_BILL: 'PS010',
+  DUPLICATE_RECEIPT: 'PS011',
 } as const;
 
 export type PosErrorCode = (typeof PosErrorCode)[keyof typeof PosErrorCode];
@@ -50,9 +51,10 @@ const CONSTRAINT_CODES: Readonly<Record<string, PosErrorCode>> = {
   peak_sessions_one_active_per_day: PosErrorCode.DAY_OR_PEAK_RULE,
   business_days_one_open: PosErrorCode.DAY_OR_PEAK_RULE,
   business_days_date_unique: PosErrorCode.DAY_OR_PEAK_RULE,
+  stock_receipts_invoice_unique: PosErrorCode.DUPLICATE_RECEIPT,
 };
 
-/** A POS business-rule violation, carrying one of the PS001–PS010 codes. */
+/** A POS business-rule violation, carrying one of the PS001–PS011 codes. */
 export class PosError extends Error {
   override readonly name = 'PosError';
   readonly code: PosErrorCode;

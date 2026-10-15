@@ -1,8 +1,8 @@
 # FL2 POS — Backend State Reference
 
-Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`). Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
+Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), and Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`). Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
 
-- **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`, `0006_expense_category`, `0007_peak_drawer_cash`.
+- **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`, `0006_expense_category`, `0007_peak_drawer_cash`, `0008_stock_receipts`.
 - **Money:** `BIGINT` whole paise in SQL, `bigint` in TypeScript (`type Paise = bigint`). No floats anywhere.
 - **Quantities:** `INTEGER` whole sealed bottles. No ml / peg columns.
 - **Append-only:** DELETE and TRUNCATE are blocked on every domain table. Ledger tables also block UPDATE. Corrections are made with reversing records.
@@ -18,7 +18,9 @@ Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local 
 | `products` | Brand family (category: WHISKY, RUM, BEER…) | — |
 | `skus` | One row per sealed size: `FULL`, `HALF`, `QUARTER`, `BEER_650`, `BEER_330` | `product_id → products` |
 | `sku_stock` | Cached on-hand bottles, `≥ 0` (trigger-maintained) | `sku_id → skus` (PK) |
-| `stock_movements` | Stock ledger: OPENING, PURCHASE_RECEIPT, SALE, SALE_REVERSAL, ADJUSTMENT | `sku_id → skus`, `business_day_id → business_days`, `bill_item_id → bill_items` (unique) |
+| `stock_movements` | Stock ledger: OPENING, PURCHASE_RECEIPT, SALE, SALE_REVERSAL, ADJUSTMENT. SALE / SALE_REVERSAL are posted only by `bill_items`, PURCHASE_RECEIPT only by `stock_receipt_lines` (0008) | `sku_id → skus`, `business_day_id → business_days`, `bill_item_id → bill_items` (unique), `receipt_line_id → stock_receipt_lines` (unique, set exactly on PURCHASE_RECEIPT rows; 0008) |
+| `stock_receipts` | GRN header: one supplier invoice received on the open day (append-only). `invoice_no` required, `vendor_name` optional; unique per (invoice no, vendor), case- and space-insensitive (0008) | `business_day_id → business_days` (stamped), `received_by_staff_id → staff` |
+| `stock_receipt_lines` | GRN lines: `qty` whole bottles > 0 of one SKU at `unit_cost_paise` ≥ 0 (₹0 = scheme / free); one line per SKU per receipt; append-only (0008) | `receipt_id → stock_receipts`, `sku_id → skus` |
 | `business_days` | Trading day; one OPEN at a time; bill-number counter; `opening_float_paise` (immutable); on close: `counted_cash_paise`, and trigger-computed `expected_cash_paise` / `cash_variance_paise` (0005) | `opened_by_staff_id`, `closed_by_staff_id → staff` |
 | `peak_sessions` | Peak windows (several per day, one running); start/end cash and UPI; frozen expected and variance | `business_day_id → business_days`, `started_by_staff_id`, `ended_by_staff_id → staff` |
 | `waiters` | `is_trusted`, `outstanding_balance` (paise, `≥ 0`, trigger-maintained), optional `credit_limit_paise` | — |
@@ -51,6 +53,13 @@ UPI is excluded. A peak sale actually paid by UPI makes the drawer lower by that
 - Close (`status → CLOSED`) is refused with `PS007` while a peak session runs, any bill of the day is `OPEN` / `PEAK_UNSETTLED`, or **any waiter** has `outstanding_balance > 0` (active or not, whichever day the credit is from). It needs `counted_cash_paise` (`PS002`); expected cash and variance are computed by the trigger, overwriting client values, then frozen with the day (`PS001`).
 - **Expense voids (0006):** a void copies the original's category and note, must exactly negate it (`PS006`), can happen only once (`PS006`), and must be posted on the original's business day (`PS007`: a closed day's cash has already been counted).
 - The opening float is immutable; the close columns can't be written while the day is open (`PS002`). The `business_days_cash_count_on_close` CHECK is `NOT VALID`, so days closed before 0005 keep NULL counts.
+
+**Stock receipts / GRN (0008):**
+- Inserting a `stock_receipt_lines` row posts one `PURCHASE_RECEIPT` movement (`qty_delta = qty`, the header's day and staff, `receipt_line_id = line.id`), which raises `sku_stock`. A direct `PURCHASE_RECEIPT` insert is refused (`PS009`), so a receipt is the only way to inward stock and every inwarded bottle traces back to an invoice line.
+- The header needs an open business day (`PS007`). A line for an inactive SKU is `PS002`.
+- No stored totals: line total = `qty × unit_cost_paise`, summed in queries. No tax fields, no drawer-cash effect.
+- `stock_movements_receipt_line_link` is `NOT VALID` (no PURCHASE_RECEIPT rows existed before 0008).
+- A posted receipt is final. Corrections (return / void receipt) are a later phase.
 
 **Captain orders (0004):**
 - `bills_request_id_unique` (partial unique index) is the idempotency guarantee.
@@ -85,10 +94,11 @@ Business-rule violations raise these SQLSTATEs. The services surface them as `Po
 | `PS008` | `WAITER_BALANCE` | Waiter balance would go negative (overpayment, credit reversal after repayment) |
 | `PS009` | `DERIVED_COLUMN` | Direct write to a trigger-maintained column (totals, balances, stock, bill numbers) |
 | `PS010` | `BILL_ON_BILL` | Captain order for an untrusted waiter who still has an `OPEN` bill |
+| `PS011` | `DUPLICATE_RECEIPT` | Stock receipt with an invoice number already received from the same vendor (`stock_receipts_invoice_unique`) |
 
 Other error classes:
 - `NotFoundError` (`.entity`, `.id`): a referenced bill, SKU, waiter or session doesn't exist.
-- `InactiveError` (`.entity`, `.id`): a referenced waiter, member or SKU exists but is deactivated. Raised by `CaptainService.placeOrder`; the counter methods still report inactive rows as `PS002`.
+- `InactiveError` (`.entity`, `.id`): a referenced waiter, member or SKU exists but is deactivated. Raised by `CaptainService.placeOrder` and `PurchaseService.recordReceipt`; the counter methods still report inactive rows as `PS002`.
 - `IdempotencyConflictError` (`.requestId`): a Captain `requestId` was reused for a different order, or from a different handset.
 - `TypeError` / `RangeError`: invalid arguments (non-bigint money, non-positive amounts or quantities, unknown tender).
 - All service methods are `async`, so every error arrives as a rejected promise.
@@ -275,6 +285,8 @@ class CounterQueries {
 
   getCounterContext(cashierId: string): Promise<CounterContext>;   // NotFoundError for an unknown cashier
   lookupSku(code: string): Promise<SkuLookup | null>;              // exact barcode first, then case-insensitive sku_code
+  searchSkus(query: string, limit?: number): Promise<SkuLookup[]>; // exact barcode, code prefix or name substring; barcode first,
+                                                                   // inactive last, then product name and size FULL→QUARTER, 650→330; default 20
   searchMembers(query: string, limit?: number): Promise<MemberSummary[]>; // active; number prefix or name substring; default limit 20
   listWaiters(): Promise<WaiterSummary[]>;                         // active, by waiter_code
   getBillDetail(billId: string): Promise<BillDetail>;              // NotFoundError for a missing bill
@@ -306,6 +318,32 @@ interface BillDetail {
   tenderedPaise: Paise; duePaise: Paise;
 }
 ```
+
+### `PurchaseService` (`src/services/purchase.service.ts`)
+
+```ts
+class PurchaseService {
+  constructor(db: SqlDatabase);
+
+  recordReceipt(input: ReceiptInput, staffId: string): Promise<StockReceiptDetail>;  // one transaction
+  listReceipts(businessDayId: string): Promise<StockReceipt[]>;                      // newest first
+  getReceipt(receiptId: string): Promise<StockReceiptDetail>;                        // NotFoundError for an unknown id
+}
+
+interface ReceiptInput { invoiceNo: string; vendorName?: string | null; lines: ReceiptLineInput[]; }
+interface ReceiptLineInput { skuId: string; quantity: number; unitCostPaise: Paise; }
+interface StockReceipt {
+  id; businessDayId; invoiceNo; vendorName: string | null; receivedByStaffId; receivedBy: string /* staff name */; createdAt: Date;
+  lineCount: number; bottles: number; totalCostPaise: Paise;
+}
+interface StockReceiptLine { id; lineNo; skuId; skuCode; displayName; sizeCode: SizeCode; quantity: number; unitCostPaise: Paise; lineTotalPaise: Paise; }
+interface StockReceiptDetail { receipt: StockReceipt; lines: StockReceiptLine[]; }
+```
+
+- **`recordReceipt`:** trims the invoice (required, ≤ 60 chars) and vendor (blank → null, ≤ 100 chars).
+  - Lines: 1–200 (`MAX_RECEIPT_LINES`); each a whole quantity of 1–100,000 bottles (`MAX_RECEIPT_QTY`) and a cost ≥ 0 paise; no SKU twice. Breaking any of these is a `RangeError`.
+  - Unknown SKU → `NotFoundError`, inactive SKU → `InactiveError`, no open day → `PS007`, same invoice and vendor already received → `PS011`. Any failure writes nothing.
+  - Lines are numbered in input order. Stock rises by trigger in the same transaction.
 
 ### `CaptainService` (`src/services/captain.service.ts`)
 
@@ -407,12 +445,12 @@ Migrations run on every boot (already-applied ones are skipped).
 | Status | `error.code` | When |
 |---|---|---|
 | 400 | `BAD_REQUEST` | Malformed JSON, missing or mistyped field, non-positive quantity |
-| 400 | `INACTIVE` | Captain order references an inactive waiter, member or SKU (adds `entity`, `id`) |
+| 400 | `INACTIVE` | Captain order or stock receipt references an inactive waiter, member or SKU (adds `entity`, `id`) |
 | 401 | `UNAUTHORIZED` | Captain server: missing, unknown or revoked device token |
 | 403 | `FORBIDDEN` | `Host` header is not `localhost`, `127.0.0.1` or `[::1]` (blocks DNS rebinding) |
 | 404 | `NOT_FOUND` | Unknown route, or `NotFoundError` (adds `entity`, `id`) |
 | 405 | `METHOD_NOT_ALLOWED` | Known path, wrong method |
-| 409 | `PS001`–`PS010` | Business-rule violation (adds `constraint` when one fired) |
+| 409 | `PS001`–`PS011` | Business-rule violation (adds `constraint` when one fired) |
 | 409 | `IDEMPOTENCY_CONFLICT` | Captain `requestId` reused for a different order or handset (adds `requestId`) |
 | 413 | `PAYLOAD_TOO_LARGE` | Body over 64 KB |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | POST/PUT without `Content-Type: application/json` (forces a CORS preflight, which is never approved) |
@@ -425,6 +463,7 @@ Migrations run on every boot (already-applied ones are skipped).
 | `GET /api/health` | | | 200 `{ ok: true }` |
 | `GET /api/context` | | `getCounterContext(cashier)` | 200 |
 | `GET /api/skus/lookup` | `?code=` | `lookupSku` (404 if none) | 200 |
+| `GET /api/skus` | `?q=&limit=` (1–50) | `searchSkus` (empty `q` → `[]`) | 200 `SkuLookup[]` |
 | `GET /api/members` | `?q=&limit=` (1–100) | `searchMembers` | 200 |
 | `GET /api/waiters` | | `listWaiters` | 200 |
 | `GET /api/captain-orders` | | `listCaptainOrders` (cashier's settle queue; not on the Wi-Fi server) | 200 `BillDetail[]` |
@@ -448,6 +487,9 @@ Migrations run on every boot (already-applied ones are skipped).
 | `GET /api/expenses` | | `listCashExpenses(open day)`; 404 when no day is open | 200 |
 | `POST /api/expenses` | `{ amount, category?, description? }` (category defaults to OTHER) | `recordCashExpense(…, cashier, category)` | 201 |
 | `POST /api/expenses/:expenseId/void` | | `voidCashExpense(…, cashier)` | 201 |
+| `GET /api/purchases` | | `listReceipts(open day)`; 404 when no day is open | 200 `StockReceipt[]` |
+| `GET /api/purchases/:receiptId` | | `getReceipt` | 200 `StockReceiptDetail` |
+| `POST /api/purchases` | `{ invoiceNo, vendorName?, lines: [{ skuId, quantity, unitCost }] }` (`unitCost` in paise, `"0"` allowed) | `recordReceipt(…, cashier)` | 201 `StockReceiptDetail` |
 
 The frontend dev server proxies `/api` to `http://127.0.0.1:4310`.
 

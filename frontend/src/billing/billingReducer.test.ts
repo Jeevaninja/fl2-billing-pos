@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { billingReducer, groupItems, initialBillingState, screenMode, totals, type BillingState, type PeakEntry } from './billingReducer'
+import { billingReducer, groupItems, initialBillingState, screenMode, stockLeft, totals, type BillingState, type PeakEntry } from './billingReducer'
 import { context, detail, line, PEAK } from './testData'
 
 const ready = (over: Partial<BillingState> = {}): BillingState => ({
@@ -140,5 +140,13 @@ describe('billingReducer', () => {
       load: 'offline',
       offlineMessage: 'down',
     })
+  })
+})
+
+describe('stockLeft', () => {
+  it('shows the bottles left after a sale, and flags the last one', () => {
+    expect(stockLeft(58, 1)).toBe('57 left')
+    expect(stockLeft(3, 3)).toBe('last in stock')
+    expect(stockLeft(1, 2)).toBe('last in stock')
   })
 })

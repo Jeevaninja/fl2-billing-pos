@@ -10,7 +10,7 @@ import type { ScanEffect } from '../hooks/scanBuffer'
 import { beep } from '../lib/beep'
 import { formatPaise } from '../lib/money'
 import { GridFooter, ItemsGrid, PeakSide, PeakTicker, ScanBar, SidePanel } from './BillingPanels'
-import { billingReducer, groupItems, initialBillingState, screenMode, totals, type Receipt } from './billingReducer'
+import { billingReducer, groupItems, initialBillingState, screenMode, stockLeft, totals, type Receipt } from './billingReducer'
 import { CounterError, counterErrorMessage } from './errors'
 import { Modal } from './Modal'
 import { describePlan, type PayPlan } from './payment'
@@ -147,7 +147,7 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
                 undone: false,
               },
             })
-            flash('ok', `Peak #${bill.billNo}: ${quantity} × ${sku.displayName}`)
+            flash('ok', `Peak #${bill.billNo}: ${quantity} × ${sku.displayName} · ${stockLeft(sku.onHandQty, quantity)}`)
             void refreshContext()
             return
           }
@@ -163,7 +163,7 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
           }
           await api.addItem(billId, sku.id, quantity)
           setBill(await api.getBill(billId), sku.id)
-          flash('ok', `Added ${quantity} × ${sku.displayName}`)
+          flash('ok', `Added ${quantity} × ${sku.displayName} · ${stockLeft(sku.onHandQty, quantity)}`)
         } finally {
           dispatch({ type: 'scanDone', id })
         }
