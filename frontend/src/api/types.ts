@@ -6,6 +6,7 @@ export type Paise = bigint
 
 export type BillingMode = 'NORMAL' | 'PEAK'
 export type BillStatus = 'OPEN' | 'SETTLED' | 'PEAK_UNSETTLED' | 'PEAK_RECONCILED'
+export type BillSource = 'COUNTER' | 'WAITER_APP'
 export type SizeCode = 'FULL' | 'HALF' | 'QUARTER' | 'BEER_650' | 'BEER_330'
 export type CounterTender = 'CASH' | 'UPI'
 export type Tender = CounterTender | 'WAITER_CREDIT'
@@ -16,6 +17,9 @@ export interface Bill {
   kind: 'SALE' | 'REVERSAL'
   mode: BillingMode
   status: BillStatus
+  source: BillSource
+  /** Handset that placed a Captain order; null on counter bills. */
+  captainDeviceId: string | null
   peakSessionId: string | null
   waiterId: string | null
   waiterTrustedAtBilling: boolean | null

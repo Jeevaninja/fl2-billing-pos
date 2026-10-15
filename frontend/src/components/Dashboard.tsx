@@ -1,5 +1,6 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { ChevronRight, Keyboard, PlugZap } from 'lucide-react'
+import { api } from '../api/client'
 import { useGlobalShortcuts } from '../hooks/useGlobalShortcuts'
 import { ACTIONS, BILLING_ACTIONS, MODULE_TILES, runStub, type PosActionId } from './dashboard/actions'
 import { FOCUS_RING, formatTime } from '../lib/ui'
@@ -10,7 +11,7 @@ const TILE_ACCENT: Record<PosActionId, string> = {
   member: 'bg-sky-500 text-zinc-950',
   pay: 'bg-emerald-500 text-zinc-950',
   billing: 'bg-zinc-950 text-amber-400',
-  kots: 'bg-sky-500 text-zinc-950',
+  'captain-orders': 'bg-sky-500 text-zinc-950',
   expense: 'bg-rose-500 text-zinc-950',
   purchase: 'bg-violet-400 text-zinc-950',
   'day-end': 'bg-orange-500 text-zinc-950',
@@ -27,10 +28,34 @@ interface DashboardProps {
   recent: readonly PosActionId[]
   onUse: (id: PosActionId) => void
   onOpenBilling: () => void
+  onOpenCaptainOrders: () => void
 }
 
-export default function Dashboard({ recent, onUse, onOpenBilling }: DashboardProps) {
+const CAPTAIN_COUNT_POLL_MS = 15_000
+
+/** Open Captain orders for the tile badge; null while unknown or when the API is unreachable. */
+function useCaptainOrderCount(): number | null {
+  const [count, setCount] = useState<number | null>(null)
+  useEffect(() => {
+    let live = true
+    const load = () =>
+      api
+        .captainOrders()
+        .then((orders) => live && setCount(orders.length))
+        .catch(() => live && setCount(null))
+    void load()
+    const timer = setInterval(() => void load(), CAPTAIN_COUNT_POLL_MS)
+    return () => {
+      live = false
+      clearInterval(timer)
+    }
+  }, [])
+  return count
+}
+
+export default function Dashboard({ recent, onUse, onOpenBilling, onOpenCaptainOrders }: DashboardProps) {
   const [lastAction, setLastAction] = useState<LastAction | null>(null)
+  const captainCount = useCaptainOrderCount()
 
   const trigger = useCallback(
     (id: PosActionId) => {
@@ -39,10 +64,14 @@ export default function Dashboard({ recent, onUse, onOpenBilling }: DashboardPro
         onOpenBilling()
         return
       }
+      if (id === 'captain-orders') {
+        onOpenCaptainOrders()
+        return
+      }
       runStub(id)
       setLastAction({ id, at: new Date() })
     },
-    [onUse, onOpenBilling],
+    [onUse, onOpenBilling, onOpenCaptainOrders],
   )
 
   useGlobalShortcuts({
@@ -59,7 +88,7 @@ export default function Dashboard({ recent, onUse, onOpenBilling }: DashboardPro
         <div className="ml-auto flex items-center gap-3 text-sm">
           <span className="flex items-center gap-1.5 rounded border border-zinc-600 px-2 py-1 font-medium text-zinc-300">
             <PlugZap className="size-4" aria-hidden />
-            Billing live · other modules preview
+            Billing &amp; Captain Orders live · other modules preview
           </span>
           <LiveClock />
         </div>
@@ -68,7 +97,7 @@ export default function Dashboard({ recent, onUse, onOpenBilling }: DashboardPro
       <div className="flex min-h-0 flex-1">
         <main className="grid flex-1 grid-cols-2 grid-rows-3 gap-4 p-5 lg:grid-cols-3 lg:grid-rows-2" aria-label="Modules">
           {MODULE_TILES.map((id) => (
-            <ModuleTile key={id} id={id} primary={id === 'billing'} onSelect={trigger} />
+            <ModuleTile key={id} id={id} primary={id === 'billing'} badge={id === 'captain-orders' ? captainCount : null} onSelect={trigger} />
           ))}
         </main>
 
@@ -104,7 +133,15 @@ export default function Dashboard({ recent, onUse, onOpenBilling }: DashboardPro
   )
 }
 
-function ModuleTile({ id, primary, onSelect }: { id: PosActionId; primary: boolean; onSelect: (id: PosActionId) => void }) {
+interface ModuleTileProps {
+  id: PosActionId
+  primary: boolean
+  /** Live count shown on the tile (e.g. open Captain orders); null hides it. */
+  badge: number | null
+  onSelect: (id: PosActionId) => void
+}
+
+function ModuleTile({ id, primary, badge, onSelect }: ModuleTileProps) {
   const { label, hint, icon: Icon } = ACTIONS[id]
   const surface = primary
     ? 'border-amber-300 bg-amber-400 text-zinc-950 hover:bg-amber-300'
@@ -116,8 +153,18 @@ function ModuleTile({ id, primary, onSelect }: { id: PosActionId; primary: boole
       onClick={() => onSelect(id)}
       className={`group flex flex-col justify-between rounded-lg border-2 p-5 text-left transition-colors ${surface} ${FOCUS_RING}`}
     >
-      <span className={`flex size-14 items-center justify-center rounded-md ${TILE_ACCENT[id]}`}>
-        <Icon className="size-8" strokeWidth={2.25} aria-hidden />
+      <span className="flex items-start justify-between gap-3">
+        <span className={`flex size-14 items-center justify-center rounded-md ${TILE_ACCENT[id]}`}>
+          <Icon className="size-8" strokeWidth={2.25} aria-hidden />
+        </span>
+        {badge !== null && (
+          <span
+            className={`rounded-full px-3 py-1 font-mono text-lg font-black tabular-nums ${badge > 0 ? 'bg-sky-500 text-zinc-950' : 'bg-zinc-800 text-zinc-400'}`}
+            aria-label={`${badge} open`}
+          >
+            {badge} open
+          </span>
+        )}
       </span>
       <span className="flex items-end justify-between gap-3">
         <span>

@@ -1,6 +1,6 @@
 # Phase 6 — Captain Orders Screen: Component Plan
 
-Status: **APPROVED (2026-10-15), with one change: counter edits are allowed** (see §6). No component code written yet.
+Status: **IMPLEMENTED (2026-10-15).** Approved with counter edits allowed (§6). One addition: `X` cancels a bottle *without* restocking (broken bottle), next to `−` which restocks. The screen lives at `frontend/src/components/CaptainOrdersScreen.tsx`; state in `frontend/src/captain/captainOrdersReducer.ts`.
 
 Goal: the cashier sees a live list of every OPEN bill created by the Captain app, opens one, and settles it through the standard payment flow.
 

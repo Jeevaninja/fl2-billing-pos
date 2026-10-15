@@ -3,8 +3,8 @@ import {
   ChartColumn,
   CreditCard,
   PackagePlus,
-  Printer,
   ReceiptText,
+  Smartphone,
   UserSearch,
   Wallet,
   type LucideIcon,
@@ -16,7 +16,7 @@ export type PosActionId =
   | 'member'
   | 'pay'
   | 'billing'
-  | 'kots'
+  | 'captain-orders'
   | 'expense'
   | 'purchase'
   | 'day-end'
@@ -35,7 +35,7 @@ export const ACTIONS: Record<PosActionId, PosAction> = {
   member: { id: 'member', label: 'Member', hint: 'Attach a member (optional)', icon: UserSearch, shortcut: 'F2' },
   pay: { id: 'pay', label: 'Pay', hint: 'Settle with Cash / UPI', icon: CreditCard, shortcut: 'F9' },
   billing: { id: 'billing', label: 'Billing Screen', hint: 'Scan bottles, take Cash / UPI', icon: ReceiptText },
-  kots: { id: 'kots', label: 'KOTs', hint: 'Waiter orders to counter printer', icon: Printer },
+  'captain-orders': { id: 'captain-orders', label: 'Captain Orders', hint: 'Edit and settle waiter handset orders', icon: Smartphone },
   expense: { id: 'expense', label: 'Expense', hint: 'Petty cash and daily spends', icon: Wallet },
   purchase: { id: 'purchase', label: 'Purchase', hint: 'Stock receipts and POs', icon: PackagePlus },
   'day-end': { id: 'day-end', label: 'Day End', hint: 'Peak reconciliation and close', icon: CalendarCheck },
@@ -43,10 +43,10 @@ export const ACTIONS: Record<PosActionId, PosAction> = {
 }
 
 /** Dashboard tiles, in grid order. */
-export const MODULE_TILES: readonly PosActionId[] = ['billing', 'kots', 'expense', 'purchase', 'day-end', 'reports']
+export const MODULE_TILES: readonly PosActionId[] = ['billing', 'captain-orders', 'expense', 'purchase', 'day-end', 'reports']
 
 /** Rail contents before the operator has used anything this session. */
-export const DEFAULT_RECENT: readonly PosActionId[] = ['new-bill', 'member', 'pay', 'kots', 'day-end']
+export const DEFAULT_RECENT: readonly PosActionId[] = ['new-bill', 'member', 'pay', 'captain-orders', 'day-end']
 
 const RECENT_LIMIT = 6
 

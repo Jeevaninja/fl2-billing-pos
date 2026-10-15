@@ -41,7 +41,7 @@ export function ScanBar({ scan, flash, enabled }: { scan: ScanState; flash: Flas
   )
 }
 
-function FlashLine({ flash }: { flash: Flash | null }) {
+export function FlashLine({ flash }: { flash: Flash | null }) {
   if (!flash) return <div className="w-[38%] shrink-0" />
   const ok = flash.kind === 'ok'
   return (
@@ -66,12 +66,15 @@ export function ItemsGrid({
   selectedKey,
   onSelect,
   receipt,
+  empty,
 }: {
   rows: ItemRow[]
   pending: PendingScan[]
   selectedKey: string | null
   onSelect: (key: string) => void
   receipt: Receipt | null
+  /** Shown instead of the scan hint / receipt when there are no rows. */
+  empty?: ReactNode
 }) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
@@ -121,7 +124,7 @@ export function ItemsGrid({
           ))}
         </tbody>
       </table>
-      {rows.length === 0 && pending.length === 0 && <EmptyBill receipt={receipt} />}
+      {rows.length === 0 && pending.length === 0 && (empty ?? <EmptyBill receipt={receipt} />)}
     </div>
   )
 }

@@ -454,4 +454,41 @@ describe('Captain API (Wi-Fi server)', () => {
       expect(await call('GET', `/api/captain/waiter/${MISSING}/bills`)).toMatchObject({ status: 404, body: { error: { entity: 'waiter' } } });
     });
   });
+
+  describe('counter: GET /api/captain-orders and edits before settling', () => {
+    it('lists open app orders oldest first, lets the cashier cancel a line and attach a member, then settle', async () => {
+      const { fx, call, counter } = await start({ printer: fakePrinter().printer });
+      const memberId = await addMember();
+      const first = await kot(call, { waiterId: fx.waiter.untrusted, items: [{ skuId: fx.sku.half, quantity: 2 }, { skuId: fx.sku.beer650, quantity: 1 }] });
+      const second = await kot(call, { waiterId: fx.waiter.trusted, items: [{ skuId: fx.sku.quarter, quantity: 1 }] });
+      const counterBill = (await counter('POST', '/api/bills', { mode: 'NORMAL' })).body;
+      await counter('POST', `/api/bills/${counterBill.id}/items`, { skuId: fx.sku.full, quantity: 1 });
+
+      const listed = await counter('GET', '/api/captain-orders');
+      expect(listed.status).toBe(200);
+      expect(listed.body.map((o: { bill: { id: string } }) => o.bill.id)).toEqual([first.body.bill.id, second.body.bill.id]);
+      expect(listed.body[0]).toMatchObject({
+        bill: { source: 'WAITER_APP', captainDeviceId: HANDSETS.one.id, totalPaise: String(2 * PRICE.half + PRICE.beer650) },
+        waiter: { code: 'W02', isTrusted: false },
+        member: null,
+      });
+
+      const billId: string = first.body.bill.id;
+      const beerLine = first.body.items[1].id;
+      const cancelled = await counter('POST', `/api/bills/${billId}/items/${beerLine}/cancel`, { quantity: 1 });
+      expect(cancelled).toMatchObject({ status: 201, body: { bill: { totalPaise: String(2 * PRICE.half) } } });
+      expect(await onHand(ctx().db, fx.sku.beer650)).toBe(OPENING_QTY);
+      expect(await counter('PUT', `/api/bills/${billId}/member`, { memberId })).toMatchObject({ status: 200, body: { memberId } });
+
+      const settled = await counter('POST', `/api/bills/${billId}/settle-waiter`, { waiterId: fx.waiter.untrusted, tender: 'CASH' });
+      expect(settled).toMatchObject({ status: 200, body: { bill: { status: 'SETTLED' }, remainingDuePaise: '0' } });
+      const after = await counter('GET', '/api/captain-orders');
+      expect(after.body.map((o: { bill: { id: string } }) => o.bill.id)).toEqual([second.body.bill.id]);
+    });
+
+    it('is not served on the Wi-Fi Captain server', async () => {
+      const { call } = await start();
+      expect(await call('GET', '/api/captain-orders')).toMatchObject({ status: 404 });
+    });
+  });
 });

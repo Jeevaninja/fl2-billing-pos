@@ -1,12 +1,14 @@
+import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { NotFoundError } from '../../src/db/errors.js';
-import { CounterQueries } from '../../src/services/index.js';
+import { CaptainService, CounterQueries, type KotPrinter } from '../../src/services/index.js';
 import { useSeededDb } from '../support/db.js';
 import { OPENING_QTY } from '../support/fixtures.js';
 import { one } from '../support/pos.js';
 import { makeServices, PAISE } from '../support/services.js';
 
 const MISSING = '00000000-0000-0000-0000-000000000000';
+const silentPrinter: KotPrinter = { printKOT: async (t) => ({ station: t.station, printedAt: new Date(), text: '' }) };
 
 describe('CounterQueries', () => {
   const ctx = useSeededDb();
@@ -186,6 +188,37 @@ describe('CounterQueries', () => {
         duePaise: 0n,
       });
       await expect(queries.getBillDetail(MISSING)).rejects.toBeInstanceOf(NotFoundError);
+    });
+  });
+
+  describe('listCaptainOrders', () => {
+    it('lists only OPEN WAITER_APP sale bills, oldest first, with full detail', async () => {
+      const { db, fx, queries, billing, waiters } = setup();
+      const captain = new CaptainService(db, silentPrinter);
+      const order = (waiterId: string, skuId: string, quantity = 1) =>
+        captain.placeOrder({ requestId: randomUUID(), deviceId: 'handset-01', waiterId, items: [{ skuId, quantity }] });
+
+      const first = await order(fx.waiter.trusted, fx.sku.half, 2);
+      const settled = await order(fx.waiter.trusted, fx.sku.quarter);
+      await waiters.settleWaiterBill(settled.bill.id, fx.waiter.trusted, 'CASH');
+      const counter = await billing.createBill('NORMAL', fx.cashier);
+      await billing.addItemToBill(counter.id, fx.sku.full, 1);
+      await waiters.tagBillToWaiter(counter.id, fx.waiter.limited);
+      const second = await order(fx.waiter.untrusted, fx.sku.beer650, 3);
+
+      const orders = await queries.listCaptainOrders();
+      expect(orders.map((o) => o.bill.id)).toEqual([first.bill.id, second.bill.id]);
+      expect(orders[0]).toMatchObject({
+        bill: { source: 'WAITER_APP', status: 'OPEN', captainDeviceId: 'handset-01', totalPaise: 2n * PAISE.half },
+        waiter: { id: fx.waiter.trusted, code: 'W01' },
+        duePaise: 2n * PAISE.half,
+      });
+      expect(orders[1]?.items.map((i) => [i.quantity, i.remainingQuantity])).toEqual([[3, 3]]);
+    });
+
+    it('returns an empty list when no Captain order is open', async () => {
+      const { queries } = setup();
+      expect(await queries.listCaptainOrders()).toEqual([]);
     });
   });
 });

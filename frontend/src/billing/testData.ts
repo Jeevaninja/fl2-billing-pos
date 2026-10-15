@@ -32,6 +32,8 @@ export function detail(items: BillDetailItem[] = [], over: Partial<BillDetail> =
       kind: 'SALE',
       mode: 'NORMAL',
       status: 'OPEN',
+      source: 'COUNTER',
+      captainDeviceId: null,
       peakSessionId: null,
       waiterId: null,
       waiterTrustedAtBilling: null,

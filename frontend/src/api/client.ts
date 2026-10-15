@@ -13,7 +13,7 @@ import type {
   WaiterSummary,
 } from './types'
 
-/** A failed API call. `code` is the server's error code (PS001–PS009, NOT_FOUND, …) or NETWORK. */
+/** A failed API call. `code` is the server's error code (PS001–PS010, NOT_FOUND, …) or NETWORK. */
 export class ApiError extends Error {
   override readonly name = 'ApiError'
   readonly status: number
@@ -72,13 +72,15 @@ export const api = {
   searchMembers: (q: string) => call<MemberSummary[]>('GET', `/api/members?q=${encodeURIComponent(q)}&limit=12`),
   listWaiters: () => call<WaiterSummary[]>('GET', '/api/waiters'),
   getBill: (billId: string) => call<BillDetail>('GET', bill(billId)),
+  captainOrders: () => call<BillDetail[]>('GET', '/api/captain-orders'),
 
   createBill: (mode: BillingMode, memberId?: string) =>
     call<Bill>('POST', '/api/bills', memberId === undefined ? { mode } : { mode, memberId }),
   addItem: (billId: string, skuId: string, quantity: number) =>
     call<BillLine>('POST', `${bill(billId)}/items`, { skuId, quantity }),
-  cancelItem: (billId: string, itemId: string, quantity: number) =>
-    call<BillLine>('POST', `${bill(billId)}/items/${encodeURIComponent(itemId)}/cancel`, { quantity }),
+  /** `restock: false` keeps the bottle out of stock (broken or opened). */
+  cancelItem: (billId: string, itemId: string, quantity: number, restock = true) =>
+    call<BillLine>('POST', `${bill(billId)}/items/${encodeURIComponent(itemId)}/cancel`, { quantity, restock }),
   setMember: (billId: string, memberId: string | null) => call<Bill>('PUT', `${bill(billId)}/member`, { memberId }),
   tagWaiter: (billId: string, waiterId: string) => call<Bill>('PUT', `${bill(billId)}/waiter`, { waiterId }),
   settle: (billId: string, payments: CounterPayment[]) => call<{ bill: Bill }>('POST', `${bill(billId)}/settle`, { payments }),

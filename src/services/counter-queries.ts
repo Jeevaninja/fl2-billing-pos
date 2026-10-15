@@ -222,6 +222,18 @@ export class CounterQueries {
     return rows.map(mapWaiter);
   }
 
+  /** Every OPEN sale bill placed from the Captain app, oldest first: the cashier's settle queue. */
+  async listCaptainOrders(): Promise<BillDetail[]> {
+    const { rows } = await this.db.query<{ id: string }>(
+      `SELECT id FROM bills
+        WHERE source = 'WAITER_APP' AND status = 'OPEN' AND bill_kind = 'SALE'
+        ORDER BY created_at, id`,
+    );
+    const orders: BillDetail[] = [];
+    for (const { id } of rows) orders.push(await this.getBillDetail(id));
+    return orders;
+  }
+
   async getBillDetail(billId: string): Promise<BillDetail> {
     const bill = await getBill(this.db, billId);
     const { rows: itemRows } = await this.db.query<BillItemRow & { remaining_qty: number }>(

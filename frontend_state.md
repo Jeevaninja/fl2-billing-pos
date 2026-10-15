@@ -1,10 +1,10 @@
 # FL2 POS — Frontend State Reference
 
-As of commit `9a83f72` on `main` (Phase 3 dashboard, Phase 4 billing screen). Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
+As of Phase 6 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders screen). Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
 
 - **Stack:** Vite 8, React 19, TypeScript, Tailwind CSS 4 (`@tailwindcss/vite`), Lucide icons, Vitest. No router, no state library.
 - **Run:** `npm run api:dev` at the repo root (API on `127.0.0.1:4310`), then `npm run dev` in `frontend/` (http://localhost:5173). Vite proxies `/api` to the API.
-- **Check:** `npm test` (Vitest, 66 tests), `npx tsc -b`, `npx oxlint src`, `npm run build`.
+- **Check:** `npm test` (Vitest, 78 tests), `npx tsc -b`, `npx oxlint src`, `npm run build`.
 - **Money:** `bigint` paise end to end. The API client decodes every `…Paise` JSON string to `bigint` and encodes `bigint` back to strings. Display goes through `formatPaise`; cashier input goes through `parseRupeesToPaise`. No floats.
 - **Server is the source of truth:** bills enter screen state only as `BillDetail` responses, so the UI never adds up prices to get a total.
 
@@ -14,9 +14,9 @@ As of commit `9a83f72` on `main` (Phase 3 dashboard, Phase 4 billing screen). Ba
 
 ```
 main.tsx                      StrictMode → <App/>, imports index.css (Tailwind)
-└─ App                        view: 'dashboard' | 'billing'; holds the Recently Used list
+└─ App                        view: 'dashboard' | 'billing' | 'captain-orders'; holds the Recently Used list
    ├─ Dashboard               module tiles + Recently Used rail + key legend footer
-   │  ├─ ModuleTile ×6        Billing Screen, KOTs, Expense, Purchase, Day End, Reports
+   │  ├─ ModuleTile ×6        Billing Screen, Captain Orders (live "n open" badge, polled 15 s), Expense, Purchase, Day End, Reports
    │  ├─ RailButton ×≤6       most-recently-used actions
    │  └─ LiveClock, Kbd       (components/ui.tsx)
    └─ BillingScreen           useReducer(billingReducer); serial write queue; all API calls
@@ -36,6 +36,12 @@ main.tsx                      StrictMode → <App/>, imports index.css (Tailwind
          ├─ MemberDialog      Picker: debounced member search; Enter on empty = walk-in
          ├─ WaiterDialog      Picker: filter waiters, TrustBadge, outstanding / limit
          └─ abandon confirm   Modal: cancel every line, then close the ₹0 bill
+   └─ CaptainOrdersScreen     useReducer(captainOrdersReducer); polls GET /api/captain-orders every 5 s
+      ├─ header               "n open", updated-ago / OFFLINE pill, Refresh (R), LiveClock
+      ├─ OrderList (left)     #bill · waiter code/name + TrustBadge · handset · bottles · due · age; new orders tinted + beep
+      ├─ main (right)         ItemsGrid (selectable lines, custom empty state), FlashLine, receipt banner
+      │  └─ OrderActions      waiter card, member card (F2), lines/bottles/paid/due, Settle F9, Remove one (−), Broken (X)
+      └─ dialogs              PaymentDialog, MemberDialog (reused unchanged)
 ```
 
 | File | Exports |
@@ -49,8 +55,16 @@ main.tsx                      StrictMode → <App/>, imports index.css (Tailwind
 | `billing/PaymentDialog.tsx` | `PaymentDialog({ detail, busy, onConfirm, onClose })` |
 | `billing/PickerDialogs.tsx` | `MemberDialog`, `WaiterDialog`, `TrustBadge` |
 | `billing/Modal.tsx` | `Modal({ title, onClose, onKey?, footer?, width? })` |
+| `components/CaptainOrdersScreen.tsx` | `CaptainOrdersScreen({ onExit })` |
+| `captain/captainOrdersReducer.ts` | `captainOrdersReducer`, `initialCaptainOrdersState`, `selectedOrder`, `editBlock`, `formatAge` |
 
-Dashboard tiles other than Billing (and the F1/F2/F9 actions, which open billing) still call `runStub`.
+Dashboard tiles other than Billing and Captain Orders (and the F1/F2/F9 actions, which open billing) still call `runStub`.
+
+**Captain Orders screen** (`captainOrdersReducer`, pure and unit-tested):
+- **State:** `orders` (server list, oldest first), `selectedId`, `selectedKey` (line), `focus: 'list' | 'detail'`, `seenIds` / `freshIds` (new-order detection; nothing is "new" on the first load), `lastUpdated`, `dialog: 'payment' | 'member' | null`, `receipt`, `flash`.
+- **Actions:** `ordersLoaded` (keeps the selection by bill id; a vanished selection moves to the order that took its place, with a note), `ordersFailed`, `orderUpdated` (re-read after an edit; non-OPEN leaves the list), `orderGone` (settled/closed here, sets the receipt), `select`, `selectLine`, `move` (orders or lines, by focused pane), `focus`, `dialog`, `flash`.
+- **Polling vs writes:** writes go through a serial queue and bump a sequence number; a poll that straddles a write is discarded, and every write is followed by a refresh. Polling pauses while a dialog is open, so the order being paid can't change underneath it.
+- **Keys:** ↑/↓ select · Tab orders ⇄ lines · `−`/Delete cancel one bottle (restock) · `X` cancel one bottle as broken (no restock) · F2 member · F9/Enter settle (or close a ₹0 order) · R refresh · Esc dashboard. Mutating keys ignore auto-repeat. Cancelling is disabled once a part-payment is recorded.
 
 ---
 
@@ -121,7 +135,7 @@ No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDow
 
 | File | Contents |
 |---|---|
-| `api/client.ts` | `api.*` (`context`, `lookupSku`, `searchMembers`, `listWaiters`, `getBill`, `createBill`, `addItem`, `cancelItem`, `setMember`, `tagWaiter`, `settle`, `settleWaiter`, `closeEmpty`, `reverse`, `peakSale`), `ApiError` (`status`, `code`; `NETWORK` when unreachable or the proxy answers non-JSON 5xx), `reviveJson`, `encodeJson` |
+| `api/client.ts` | `api.*` (`context`, `lookupSku`, `searchMembers`, `listWaiters`, `getBill`, `captainOrders`, `createBill`, `addItem`, `cancelItem` (optional `restock`), `setMember`, `tagWaiter`, `settle`, `settleWaiter`, `closeEmpty`, `reverse`, `peakSale`), `ApiError` (`status`, `code`; `NETWORK` when unreachable or the proxy answers non-JSON 5xx), `reviveJson`, `encodeJson` |
 | `api/types.ts` | Frontend mirrors of the API DTOs (`Bill`, `BillDetail`, `CounterContext`, `SkuLookup`, …) with `Paise = bigint`; dates stay ISO strings |
 | `billing/payment.ts` | `payOptions(detail)`, `planPayment(detail, input)` → counter tenders or waiter settle steps plus change, credit-limit pre-check, `describePlan` |
 | `billing/errors.ts` | `CounterError` (screen-raised), `counterErrorMessage(err)` (PS code → cashier wording) |
@@ -140,7 +154,7 @@ No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDow
 ## 6. Known gaps
 
 - The peak ticker holds only this visit's scans, so Ctrl+Z can't undo a scan made before a reload. Server totals are always complete.
-- No screen yet lists or settles a waiter's Captain-app bills; the API supports it (`/api/captain/waiter/:id/bills`, `settle-waiter`).
-- No receipt printing. No Day End, Expense, Purchase, KOT or Reports screens (dashboard stubs).
+- No receipt printing or KOT reprint. No Day End, Expense, Purchase or Reports screens (dashboard stubs).
+- Breakage written off with `X` is a cancel line with `restock: false`; there is no separate breakage/ADJUSTMENT report yet.
 - The cashier is fixed by the API's `FL2_CASHIER_ID`; there's no login.
 - The headless-Chrome end-to-end script used to verify Phase 4 is not in the repo.

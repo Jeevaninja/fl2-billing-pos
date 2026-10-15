@@ -221,6 +221,7 @@ class CounterQueries {
   searchMembers(query: string, limit?: number): Promise<MemberSummary[]>; // active; number prefix or name substring; default limit 20
   listWaiters(): Promise<WaiterSummary[]>;                         // active, by waiter_code
   getBillDetail(billId: string): Promise<BillDetail>;              // NotFoundError for a missing bill
+  listCaptainOrders(): Promise<BillDetail[]>;                      // OPEN WAITER_APP sale bills, oldest first (any day)
 }
 
 interface CounterContext {
@@ -369,10 +370,11 @@ Migrations run on every boot (already-applied ones are skipped).
 | `GET /api/skus/lookup` | `?code=` | `lookupSku` (404 if none) | 200 |
 | `GET /api/members` | `?q=&limit=` (1–100) | `searchMembers` | 200 |
 | `GET /api/waiters` | | `listWaiters` | 200 |
+| `GET /api/captain-orders` | | `listCaptainOrders` (cashier's settle queue; not on the Wi-Fi server) | 200 `BillDetail[]` |
 | `GET /api/bills/:billId` | | `getBillDetail` | 200 |
 | `POST /api/bills` | `{ mode, memberId? }` | `createBill(mode, cashier, memberId)` | 201 |
 | `POST /api/bills/:billId/items` | `{ skuId, quantity }` | `addItemToBill` | 201 |
-| `POST /api/bills/:billId/items/:itemId/cancel` | `{ quantity, restock? }` | `cancelBillItem` | 201 |
+| `POST /api/bills/:billId/items/:itemId/cancel` | `{ quantity, restock? }` | `cancelBillItem` (works on Captain orders too) | 201 |
 | `PUT /api/bills/:billId/member` | `{ memberId: uuid \| null }` | `setBillMember` | 200 |
 | `PUT /api/bills/:billId/waiter` | `{ waiterId }` | `tagBillToWaiter` | 200 |
 | `POST /api/bills/:billId/settle` | `{ payments: [{ mode: 'CASH'\|'UPI', amount }] }` | `settleNormalBill` | 200 |
