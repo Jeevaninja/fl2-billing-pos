@@ -1,20 +1,16 @@
 /**
- * Local HTTP API: a thin JSON bridge from the POS frontend to the service layer. It holds no
- * business rules of its own; every rule is enforced by the services and the database.
+ * Counter HTTP API (loopback only): a thin JSON bridge from the POS frontend to the service layer.
+ * It holds no business rules of its own; every rule is enforced by the services and the database.
+ * The Captain app has its own server (captain-server.ts).
  */
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { createServer, type IncomingMessage, type RequestListener, type Server } from 'node:http';
 import type { SqlDatabase } from '../src/db/client.js';
 import type { CounterTender, Tender } from '../src/domain/types.js';
 import {
   BillingService,
-  CaptainService,
   CounterQueries,
-  InactiveError,
-  type KotPrinter,
   NotFoundError,
   PeakSessionService,
-  PosError,
-  PrinterService,
   WaiterService,
   type CounterPayment,
 } from '../src/services/index.js';
@@ -29,28 +25,22 @@ import {
   optOneOf,
   optPaise,
   paise,
-  parseBody,
   str,
-  toJson,
 } from './json.js';
-import { captainRoutes } from './captain-api.js';
-import { created, HttpError, ok, route, type Route } from './routing.js';
+import { created, createJsonHandler, HttpError, ok, type RequestContext, route, type Route } from './routing.js';
 
 export interface ApiConfig {
   db: SqlDatabase;
   /** Staff row the counter acts as until staff login exists. */
   cashierId: string;
-  /** KOT printer for Captain orders; defaults to the console stub. */
-  printer?: KotPrinter;
 }
 
-const MAX_BODY_BYTES = 64 * 1024;
 const COUNTER_TENDERS = ['CASH', 'UPI'] as const satisfies readonly CounterTender[];
 const TENDERS = ['CASH', 'UPI', 'WAITER_CREDIT'] as const satisfies readonly Tender[];
 /** Loopback names only: blocks DNS-rebinding pages from reaching the till through a foreign Host. */
 const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
 
-function buildRoutes({ db, cashierId, printer = new PrinterService() }: ApiConfig): Route[] {
+function buildRoutes({ db, cashierId }: ApiConfig): Route[] {
   const billing = new BillingService(db);
   const peak = new PeakSessionService(db);
   const waiters = new WaiterService(db);
@@ -172,79 +162,17 @@ function buildRoutes({ db, cashierId, printer = new PrinterService() }: ApiConfi
         ),
       ),
     ),
-
-    ...captainRoutes(new CaptainService(db, printer)),
   ];
 }
 
-async function readBody(req: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req) {
-    size += (chunk as Buffer).length;
-    if (size > MAX_BODY_BYTES) throw new HttpError(413, 'PAYLOAD_TOO_LARGE', `request body exceeds ${MAX_BODY_BYTES} bytes`);
-    chunks.push(chunk as Buffer);
-  }
-  return Buffer.concat(chunks).toString('utf8');
+/** Counter API admission: loopback Host names only (blocks DNS-rebinding pages). */
+function admitLocal(req: IncomingMessage): RequestContext {
+  if (!LOCAL_HOST.test(req.headers.host ?? '')) throw new HttpError(403, 'FORBIDDEN', 'the POS API only answers on localhost');
+  return {};
 }
 
-/** Maps any thrown error to an HTTP status and a `{ error: { code, message, … } }` body. */
-export function errorResponse(err: unknown): { status: number; body: { error: Record<string, unknown> } } {
-  if (err instanceof HttpError) return { status: err.status, body: { error: { code: err.code, message: err.message } } };
-  if (err instanceof BadRequestError || err instanceof RangeError) {
-    return { status: 400, body: { error: { code: 'BAD_REQUEST', message: err.message } } };
-  }
-  if (err instanceof InactiveError) {
-    return { status: 400, body: { error: { code: 'INACTIVE', message: err.message, entity: err.entity, id: err.id } } };
-  }
-  if (err instanceof NotFoundError) {
-    return { status: 404, body: { error: { code: 'NOT_FOUND', message: err.message, entity: err.entity, id: err.id } } };
-  }
-  if (err instanceof PosError) {
-    return {
-      status: 409,
-      body: { error: { code: err.code, message: err.message, ...(err.constraint ? { constraint: err.constraint } : {}) } },
-    };
-  }
-  console.error('[fl2-api] unhandled error', err);
-  return { status: 500, body: { error: { code: 'INTERNAL', message: 'internal error' } } };
-}
-
-export function createApiHandler(config: ApiConfig): (req: IncomingMessage, res: ServerResponse) => void {
-  const routes = buildRoutes(config);
-
-  async function handle(req: IncomingMessage): Promise<{ status: number; body: unknown }> {
-    if (!LOCAL_HOST.test(req.headers.host ?? '')) throw new HttpError(403, 'FORBIDDEN', 'the POS API only answers on localhost');
-    const url = new URL(req.url ?? '/', 'http://localhost');
-    const matches = routes
-      .map((r) => ({ r, m: r.pattern.exec(url.pathname) }))
-      .filter((x): x is { r: Route; m: RegExpExecArray } => x.m !== null);
-    if (matches.length === 0) throw new HttpError(404, 'NOT_FOUND', `no route for ${url.pathname}`);
-    const match = matches.find((x) => x.r.method === req.method);
-    if (!match) throw new HttpError(405, 'METHOD_NOT_ALLOWED', `${req.method ?? ''} not allowed on ${url.pathname}`);
-
-    let body: Body = {};
-    if (req.method !== 'GET') {
-      // Requiring JSON forces a CORS preflight for cross-origin pages, which this server never approves.
-      if (!/^application\/json\b/i.test(req.headers['content-type'] ?? '')) {
-        throw new HttpError(415, 'UNSUPPORTED_MEDIA_TYPE', 'send Content-Type: application/json');
-      }
-      body = parseBody(await readBody(req));
-    }
-
-    // Path params are only ever UUIDs, validated by each handler, so they are used undecoded.
-    const result = await match.r.handler({ params: { ...match.m.groups }, query: url.searchParams, body });
-    return { status: result.status ?? 200, body: result.body };
-  }
-
-  return (req, res) => {
-    handle(req)
-      .catch(errorResponse)
-      .then(({ status, body }) => {
-        res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-        res.end(toJson(body));
-      });
-  };
+export function createApiHandler(config: ApiConfig): RequestListener {
+  return createJsonHandler(buildRoutes(config), admitLocal);
 }
 
 export function createApiServer(config: ApiConfig): Server {

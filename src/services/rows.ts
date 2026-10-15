@@ -41,6 +41,9 @@ export interface BillRow {
   settled_at: Date | null;
   settled_by_staff_id: string | null;
   peak_reconciled_at: Date | null;
+  request_id: string | null;
+  request_fingerprint: string | null;
+  captain_device_id: string | null;
 }
 
 export interface BillItemRow {
@@ -118,6 +121,8 @@ export function mapBill(r: BillRow): Bill {
     settledAt: r.settled_at,
     settledByStaffId: r.settled_by_staff_id,
     peakReconciledAt: r.peak_reconciled_at,
+    requestId: r.request_id,
+    captainDeviceId: r.captain_device_id,
   };
 }
 

@@ -29,6 +29,10 @@ export interface Bill {
   settledAt: Date | null;
   settledByStaffId: string | null;
   peakReconciledAt: Date | null;
+  /** Captain-app idempotency key; null on counter bills. */
+  requestId: string | null;
+  /** Paired handset that placed a Captain-app order. */
+  captainDeviceId: string | null;
 }
 
 export interface BillItem {

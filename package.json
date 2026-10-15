@@ -8,7 +8,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "api": "tsx server/main.ts",
-    "api:dev": "FL2_DEV_SEED=1 tsx server/main.ts"
+    "api:dev": "FL2_DEV_SEED=1 tsx server/main.ts",
+    "captain:devices": "tsx server/captain-devices-cli.ts"
   },
   "keywords": [],
   "author": "",

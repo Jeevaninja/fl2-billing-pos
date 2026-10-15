@@ -1,8 +1,8 @@
 # FL2 POS — Backend State Reference
 
-Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API (commit `9b22354`), and Phase 5 Captain API and KOT printing. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
+Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), and Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
 
-- **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`.
+- **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`.
 - **Money:** `BIGINT` whole paise in SQL, `bigint` in TypeScript (`type Paise = bigint`). No floats anywhere.
 - **Quantities:** `INTEGER` whole sealed bottles. No ml / peg columns.
 - **Append-only:** DELETE and TRUNCATE are blocked on every domain table. Ledger tables also block UPDATE. Corrections are made with reversing records.
@@ -24,7 +24,7 @@ Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local 
 | `waiters` | `is_trusted`, `outstanding_balance` (paise, `≥ 0`, trigger-maintained), optional `credit_limit_paise` | — |
 | `waiter_payments` | Repayments against a waiter's account (append-only) | `waiter_id → waiters`, `business_day_id → business_days`, `peak_session_id → peak_sessions`, `reverses_waiter_payment_id → waiter_payments`, `received_by_staff_id → staff` |
 | `waiter_ledger_entries` | Waiter running account: BILL_CREDIT, BILL_CREDIT_REVERSAL, PAYMENT, PAYMENT_REVERSAL, MANUAL_ADJUSTMENT | `waiter_id → waiters`, `business_day_id → business_days`, `bill_payment_id → bill_payments`, `waiter_payment_id → waiter_payments`, `created_by_staff_id → staff` |
-| `bills` | `billing_mode` NORMAL / PEAK; `status` OPEN → SETTLED or PEAK_UNSETTLED → PEAK_RECONCILED; `bill_kind` SALE / REVERSAL | `business_day_id → business_days`, `peak_session_id → peak_sessions`, `waiter_id → waiters`, `member_id → members`, `reverses_bill_id → bills` (unique), `replaces_bill_id → bills` (unique), `created_by_staff_id`, `settled_by_staff_id → staff` |
+| `bills` | `billing_mode` NORMAL / PEAK; `status` OPEN → SETTLED or PEAK_UNSETTLED → PEAK_RECONCILED; `bill_kind` SALE / REVERSAL; Captain orders carry `request_id` (unique idempotency key), `request_fingerprint` and `captain_device_id` (0004) | `business_day_id → business_days`, `peak_session_id → peak_sessions`, `waiter_id → waiters`, `member_id → members`, `reverses_bill_id → bills` (unique), `replaces_bill_id → bills` (unique), `created_by_staff_id`, `settled_by_staff_id → staff` |
 | `bill_items` | Lines with SKU / price snapshots; negative lines cancel or reverse | `bill_id → bills`, `sku_id → skus`, `reverses_item_id → bill_items`, `waiter_id → waiters`, `created_by_staff_id → staff` |
 | `bill_payments` | Tenders: CASH, UPI, WAITER_CREDIT; negative amounts are refunds | `bill_id → bills`, `business_day_id → business_days`, `peak_session_id → peak_sessions`, `reverses_payment_id → bill_payments` (unique), `received_by_staff_id → staff` |
 | `sync_outbox` | Transactional outbox for cloud sync (written by trigger) | — |
@@ -36,6 +36,21 @@ Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local 
 - `v_invariant_violations`: nightly self-check; it must stay empty.
 
 **SQL functions:** `pos_start_peak(cash, upi, staff)` and `pos_end_peak(session, cash, upi, staff)`.
+
+**Captain orders (0004):**
+- `bills_request_id_unique` (partial unique index) is the idempotency guarantee.
+- CHECKs:
+  - key and fingerprint go together;
+  - both, and the handset, appear only on `WAITER_APP` bills;
+  - fingerprint is 64 lowercase hex;
+  - handset id matches `^[a-z0-9][a-z0-9_-]{0,62}$`.
+- Trigger `bills_waiter_app_before_insert`:
+  - New `WAITER_APP` bills need `request_id` and `captain_device_id` (`PS002`).
+  - It locks the waiter row, so orders for one waiter run one at a time.
+  - It refuses an untrusted waiter who has any `OPEN` sale bill (`PS010`), whether an app order or a counter bill tagged to them. Counter tagging is not affected.
+- Trigger `bills_request_immutable`: the key, fingerprint and handset never change (`PS001`).
+- Bills created before 0004 keep NULL keys.
+- Design: `docs/db/phase5-captain-idempotency-plan.md`.
 
 ---
 
@@ -54,10 +69,12 @@ Business-rule violations raise these SQLSTATEs. The services surface them as `Po
 | `PS007` | `DAY_OR_PEAK_RULE` | No open business day, peak session not running / already running, day close blocked |
 | `PS008` | `WAITER_BALANCE` | Waiter balance would go negative (overpayment, credit reversal after repayment) |
 | `PS009` | `DERIVED_COLUMN` | Direct write to a trigger-maintained column (totals, balances, stock, bill numbers) |
+| `PS010` | `BILL_ON_BILL` | Captain order for an untrusted waiter who still has an `OPEN` bill |
 
 Other error classes:
 - `NotFoundError` (`.entity`, `.id`): a referenced bill, SKU, waiter or session doesn't exist.
 - `InactiveError` (`.entity`, `.id`): a referenced waiter, member or SKU exists but is deactivated. Raised by `CaptainService.placeOrder`; the counter methods still report inactive rows as `PS002`.
+- `IdempotencyConflictError` (`.requestId`): a Captain `requestId` was reused for a different order, or from a different handset.
 - `TypeError` / `RangeError`: invalid arguments (non-bigint money, non-positive amounts or quantities, unknown tender).
 - All service methods are `async`, so every error arrives as a rejected promise.
 
@@ -242,22 +259,35 @@ class CaptainService {
 
   getWaiterProfile(waiterId: string): Promise<WaiterProfile>;            // NotFoundError; inactive waiters are returned with isActive: false
   listOpenBills(waiterId: string): Promise<BillDetail[]>;                // OPEN sale bills tagged to the waiter (app or counter), by bill_no
-  placeOrder(waiterId: string, lines: readonly OrderLine[], memberId?: string): Promise<PlacedOrder>;
+  placeOrder(request: OrderRequest): Promise<PlacedOrder>;
 }
 
 interface WaiterProfile extends WaiterSummary { isActive: boolean; creditHeadroomPaise: Paise | null; } // max(limit − outstanding, 0); null = no limit
 interface OrderLine { skuId: string; quantity: number; }
-interface PlacedOrder { bill: Bill; items: BillItem[]; waiter: WaiterSummary; member: MemberSummary | null; kot: KotStatus; }
+interface OrderRequest { requestId: string; deviceId: string; waiterId: string; memberId?: string; items: readonly OrderLine[]; }
+interface PlacedOrder {
+  bill: Bill; items: BillItem[]; waiter: WaiterSummary; member: MemberSummary | null;
+  kot: KotStatus | null;   // null on a replay (never reprints)
+  replayed: boolean;
+}
+function orderFingerprint(request: Omit<OrderRequest, 'requestId'>): string;   // sha256 hex of handset, waiter, member, lines (ids case-insensitive)
 interface KotStatus { station: 'COUNTER'; printed: boolean; printedAt: Date | null; error: string | null; }
 const MAX_ORDER_LINES = 50;
 ```
 
-**`placeOrder`** runs in one transaction:
-1. Checks the waiter, the optional member and every SKU. A missing one is `NotFoundError`; an inactive one is `InactiveError`.
-2. Inserts a `NORMAL` / `OPEN` / `WAITER_APP` bill with `waiter_id` set, `created_by_staff_id` NULL and the trust snapshot taken by trigger.
-3. Adds one line per order line, in order, with the usual stock checks (`PS003`).
+**`placeOrder`** is idempotent on `requestId`:
+1. **Look up the key.** If it exists with the same fingerprint, the order is **replayed**:
+   - no writes and no print;
+   - `items` are the bill's first *N* lines, so later counter edits are excluded.
 
-Any failure saves nothing. The KOT prints **after** commit: a printer error is reported in `kot` (`printed: false`) and never undoes the order. Orders are allowed while a peak session runs, because waiter bills are always NORMAL.
+   If the fingerprint differs, it throws `IdempotencyConflictError`.
+2. **Write, in one transaction:**
+   - Check the waiter, the optional member and every SKU. A missing one is `NotFoundError`; an inactive one is `InactiveError`.
+   - Insert a `NORMAL` / `OPEN` / `WAITER_APP` bill with `waiter_id`, `request_id`, `request_fingerprint` and `captain_device_id` set, and `created_by_staff_id` NULL. The trust snapshot is taken by trigger, and so is bill-on-bill (`PS010`).
+   - Add one line per order line, in order, with the usual stock checks (`PS003`).
+3. **On a collision with a concurrent attempt** (the unique key, or `PS010` from its own committed order), look the key up again and replay or report the conflict.
+
+Any failure saves nothing and leaves the key unused, and bill numbers stay gap-free. The KOT prints **after** commit: a printer error is reported in `kot` (`printed: false`) and never undoes the order. Orders are allowed while a peak session runs, because waiter bills are always NORMAL.
 
 ### `PrinterService` (`src/services/printer.service.ts`)
 
@@ -286,7 +316,11 @@ class PrinterService implements KotPrinter {
 
 ## 4. Local HTTP API (`server/`)
 
-A thin JSON bridge from the frontend to the services above. It holds no business rules.
+Two servers in one process (`npm run api` / `npm run api:dev`), sharing `server/routing.ts`:
+- **Counter API** (`server/app.ts`): `127.0.0.1:4310`, loopback `Host` only, for the POS frontend.
+- **Captain API** (`server/captain-server.ts`): Wi-Fi-facing, `0.0.0.0:4311`, only `/api/captain/*`, with device-token auth (§4.2). It starts only when at least one handset is paired.
+
+Neither server holds business rules.
 
 **Running it**
 
@@ -316,10 +350,12 @@ Migrations run on every boot (already-applied ones are skipped).
 |---|---|---|
 | 400 | `BAD_REQUEST` | Malformed JSON, missing or mistyped field, non-positive quantity |
 | 400 | `INACTIVE` | Captain order references an inactive waiter, member or SKU (adds `entity`, `id`) |
+| 401 | `UNAUTHORIZED` | Captain server: missing, unknown or revoked device token |
 | 403 | `FORBIDDEN` | `Host` header is not `localhost`, `127.0.0.1` or `[::1]` (blocks DNS rebinding) |
 | 404 | `NOT_FOUND` | Unknown route, or `NotFoundError` (adds `entity`, `id`) |
 | 405 | `METHOD_NOT_ALLOWED` | Known path, wrong method |
-| 409 | `PS001`–`PS009` | Business-rule violation (adds `constraint` when one fired) |
+| 409 | `PS001`–`PS010` | Business-rule violation (adds `constraint` when one fired) |
+| 409 | `IDEMPOTENCY_CONFLICT` | Captain `requestId` reused for a different order or handset (adds `requestId`) |
 | 413 | `PAYLOAD_TOO_LARGE` | Body over 64 KB |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | POST/PUT without `Content-Type: application/json` (forces a CORS preflight, which is never approved) |
 | 500 | `INTERNAL` | Anything else (details only in the server log) |
@@ -348,16 +384,45 @@ Migrations run on every boot (already-applied ones are skipped).
 | `POST /api/peak/sessions/:sessionId/end` | `{ countedCash, countedUpi }` | `endPeakSession(…, cashier)` | 200 |
 | `POST /api/waiters/:waiterId/repayments` | `{ amount, tender: 'CASH'\|'UPI' }` | `recordWaiterRepayment(…, cashier)` | 201 |
 
-**Captain routes** (`server/captain-api.ts`)
+The frontend dev server proxies `/api` to `http://127.0.0.1:4310`.
+
+### 4.2 Captain API (Wi-Fi, `server/captain-server.ts`)
+
+**Auth.**
+- Every request needs `Authorization: Bearer <token>` from an active paired handset. That includes unknown paths, since auth runs before routing.
+- A missing, malformed, unknown or revoked token all get the same response: `401 UNAUTHORIZED` with `WWW-Authenticate: Bearer realm="fl2-captain"`.
+- Counter routes don't exist on this server (404 after auth).
+
+**Paired handsets** (`server/captain-devices.ts`):
+- Each handset gets a random 256-bit token. The server stores only its SHA-256, in `FL2_CAPTAIN_DEVICES` (default `.data/captain-devices.json`, mode 0600, git-ignored).
+- Tokens are compared in constant time.
+- The running server re-reads the file when it changes, so pairing and revoking need no restart.
+- Revoked records are kept for audit, and their ids stay reserved.
+
+| Command | Effect |
+|---|---|
+| `npm run captain:devices -- pair <id> "<label>"` | Pairs a handset (`id` like `handset-01`) and prints its token **once** |
+| `npm run captain:devices -- revoke <id>` | Token stops working on the next request |
+| `npm run captain:devices -- list` | Active and revoked handsets |
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `FL2_CAPTAIN_HOST` | `0.0.0.0` | Bind address (all interfaces, so handsets can reach it) |
+| `FL2_CAPTAIN_PORT` | `4311` | Port |
+| `FL2_CAPTAIN_DEVICES` | `.data/captain-devices.json` | Devices file |
+
+**Transport.** It's plain HTTP, so tokens cross the Wi-Fi in clear text. Run it on a staff-only WPA2/WPA3 network; TLS is a follow-up. The KOT printer is `CaptainServerConfig.printer` (default `new PrinterService()`, stdout).
+
+**Routes** (`server/captain-api.ts`; same JSON conventions as the counter API)
 
 | Method & path | Body | Calls | OK | Errors |
 |---|---|---|---|---|
+| `GET /api/captain/health` | | | 200 `{ ok, deviceId }` | 401 |
 | `GET /api/captain/waiter/:waiterId` | | `getWaiterProfile` | 200 `WaiterProfile` | 400 malformed id, 404 unknown waiter |
 | `GET /api/captain/waiter/:waiterId/bills` | | `listOpenBills` | 200 `BillDetail[]` | 400, 404 |
-| `POST /api/captain/kot` | `{ waiterId, memberId?: uuid \| null, items: [{ skuId, quantity }] }` (1–50 items) | `placeOrder` | 201 `PlacedOrder` | 400 `BAD_REQUEST` / `INACTIVE`, 404 unknown waiter / member / SKU, 409 `PS003` out of stock |
+| `POST /api/captain/kot` | `{ requestId: uuid, waiterId, memberId?: uuid \| null, items: [{ skuId, quantity }] }` (1–50 items) | `placeOrder` (handset from the token) | **201** new order · **200** `replayed: true` | 400 `BAD_REQUEST` / `INACTIVE`, 404 unknown waiter / member / SKU, 409 `PS003` out of stock, 409 `PS010` bill-on-bill, 409 `IDEMPOTENCY_CONFLICT` |
 
-The KOT printer is `ApiConfig.printer` (default `new PrinterService()`, which writes to the API process's stdout).
-
-**Not yet reachable from Android.** The server binds `127.0.0.1` and only accepts loopback `Host` headers. Opening it to the LAN also opens every counter route, and no route is authenticated, so it waits on a decision about device auth.
-
-The frontend dev server proxies `/api` to `http://127.0.0.1:4310`.
+**`requestId` contract for the app:**
+- Generate one UUID per order when the waiter taps send, and reuse it on every retry of that order.
+- A 200 replay means the order already went through.
+- `IDEMPOTENCY_CONFLICT` means the app reused a key for a different order, which is a client bug.

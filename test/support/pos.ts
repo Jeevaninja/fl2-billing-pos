@@ -95,7 +95,7 @@ export function openBill(db: SqlClient, opts: OpenBillOptions = {}): Promise<Bil
     [
       mode,
       mode === 'PEAK' ? 'PEAK_UNSETTLED' : 'OPEN',
-      opts.source ?? (opts.waiterId ? 'WAITER_APP' : 'COUNTER'),
+      opts.source ?? 'COUNTER', // waiter-tagged counter bills; WAITER_APP bills need a 0004 request key
       opts.waiterId ?? null,
       opts.staffId ?? null,
       opts.memberId ?? null,

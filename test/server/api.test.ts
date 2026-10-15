@@ -9,7 +9,7 @@ describe('local HTTP API', () => {
 
   it('reports health and the counter context with money as strings and dates as ISO', async () => {
     const { fx, call } = await start();
-    expect(await call('GET', '/api/health')).toEqual({ status: 200, body: { ok: true } });
+    expect(await call('GET', '/api/health')).toMatchObject({ status: 200, body: { ok: true } });
 
     const started = await call('POST', '/api/peak/sessions', { businessDayId: fx.dayId, declaredCash: '50000', declaredUpi: '0' });
     expect(started.status).toBe(201);

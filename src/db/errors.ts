@@ -9,6 +9,7 @@ export const PosErrorCode = {
   DAY_OR_PEAK_RULE: 'PS007',
   WAITER_BALANCE: 'PS008',
   DERIVED_COLUMN: 'PS009',
+  BILL_ON_BILL: 'PS010',
 } as const;
 
 export type PosErrorCode = (typeof PosErrorCode)[keyof typeof PosErrorCode];
@@ -84,6 +85,15 @@ export class InactiveError extends Error {
     label: string,
   ) {
     super(`${entity} ${label} is inactive`);
+  }
+}
+
+/** A Captain idempotency key was reused for a different order (or from a different handset). */
+export class IdempotencyConflictError extends Error {
+  override readonly name = 'IdempotencyConflictError';
+
+  constructor(readonly requestId: string) {
+    super(`request ${requestId} was already used for a different order`);
   }
 }
 
