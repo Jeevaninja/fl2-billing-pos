@@ -173,6 +173,11 @@ function buildRoutes({ db, cashierId }: ApiConfig): Route[] {
     }),
 
     // ── Peak ──
+    route('GET', '/api/peak/baseline', async () => {
+      const day = await queries.getCounterContext(cashierId);
+      if (!day.businessDay) throw new NotFoundError('business day', 'open');
+      return ok(await peak.getStartBaseline(day.businessDay.id));
+    }),
     route('POST', '/api/peak/sales', async ({ body }) =>
       created(
         await billing.recordPeakSale(id(body.sessionId, 'sessionId'), id(body.skuId, 'skuId'), int(body.quantity, 'quantity'), cashierId),

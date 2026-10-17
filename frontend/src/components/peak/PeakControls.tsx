@@ -1,12 +1,12 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Zap } from 'lucide-react'
 import { api } from '../../api/client'
-import type { PeakReconciliation, PeakSession, PeakSessionView } from '../../api/types'
+import type { PeakReconciliation, PeakSession, PeakSessionView, PeakStartBaseline } from '../../api/types'
 import { counterErrorMessage } from '../../billing/errors'
 import { Modal } from '../../billing/Modal'
 import { formatPaise } from '../../lib/money'
 import { FOCUS_RING, keepFocus } from '../../lib/ui'
-import { describeVariance, parseReadings } from '../../peak/peakMath'
+import { compareReading, describeBaseline, describeVariance, parseReadings, type ReadingComparison } from '../../peak/peakMath'
 import { RupeeField } from '../RupeeField'
 import { Kbd } from '../ui'
 
@@ -49,14 +49,73 @@ export function StartPeakButton({ onClick, className = '' }: { onClick: () => vo
   )
 }
 
-/** Two drawer readings with Enter moving cash → UPI → submit. */
-function Readings({ cash, upi, onCash, onUpi, onSubmit }: { cash: string; upi: string; onCash: (t: string) => void; onUpi: (t: string) => void; onSubmit: () => void }) {
+/** Two drawer readings with Enter moving cash → UPI → submit; optional live comparisons under each. */
+function Readings({
+  cash,
+  upi,
+  onCash,
+  onUpi,
+  onSubmit,
+  hints,
+}: {
+  cash: string
+  upi: string
+  onCash: (t: string) => void
+  onUpi: (t: string) => void
+  onSubmit: () => void
+  hints?: { cash: ReadingComparison; upi: ReadingComparison }
+}) {
   const upiRef = useRef<HTMLInputElement>(null)
   return (
     <div className="flex flex-col gap-3">
-      <RupeeField label="Cash in the drawer now" value={cash} onChange={onCash} onEnter={() => upiRef.current?.focus()} dataAutofocus />
-      <RupeeField label="UPI reading now (0 if none)" value={upi} onChange={onUpi} onEnter={onSubmit} inputRef={upiRef} />
+      <div>
+        <RupeeField label="Cash in the drawer now" value={cash} onChange={onCash} onEnter={() => upiRef.current?.focus()} dataAutofocus />
+        {hints && <ComparisonHint comparison={hints.cash} />}
+      </div>
+      <div>
+        <RupeeField label="UPI reading now (0 if none)" value={upi} onChange={onUpi} onEnter={onSubmit} inputRef={upiRef} />
+        {hints && <ComparisonHint comparison={hints.upi} />}
+      </div>
     </div>
+  )
+}
+
+function ComparisonHint({ comparison }: { comparison: ReadingComparison }) {
+  if (comparison.kind === 'none') return <span className="mt-1 block h-5" aria-hidden />
+  const tone = comparison.kind === 'match' ? 'text-emerald-400' : comparison.kind === 'short' ? 'text-rose-400' : 'text-amber-300'
+  return (
+    <span role="status" className={`mt-1 block h-5 text-sm font-semibold ${tone}`}>
+      {comparison.label}
+    </span>
+  )
+}
+
+type BaselineState = { kind: 'loading' } | { kind: 'ready'; baseline: PeakStartBaseline } | { kind: 'failed' }
+
+/** The read-only expected figures shown before the cashier counts. */
+function ExpectedFigures({ state }: { state: BaselineState }) {
+  if (state.kind === 'failed') {
+    return <p className="mb-4 rounded-md border-2 border-zinc-700 px-3 py-2 text-sm text-zinc-400">Expected figures unavailable — count and start as usual.</p>
+  }
+  const b = state.kind === 'ready' ? state.baseline : null
+  const terms = b ? describeBaseline(b) : null
+  return (
+    <dl className="mb-4 flex flex-col gap-2 rounded-lg border-2 border-zinc-700 bg-zinc-950 p-3">
+      <div>
+        <div className="flex items-baseline justify-between gap-3">
+          <dt className="font-semibold text-zinc-300">Expected cash in drawer</dt>
+          <dd className="font-mono text-xl font-black tabular-nums">{b ? formatPaise(b.expectedCashPaise) : '…'}</dd>
+        </div>
+        {terms && <p className="text-xs text-zinc-500">{terms.cash}</p>}
+      </div>
+      <div>
+        <div className="flex items-baseline justify-between gap-3">
+          <dt className="font-semibold text-zinc-300">Expected UPI so far</dt>
+          <dd className="font-mono text-xl font-black tabular-nums">{b ? formatPaise(b.expectedUpiPaise) : '…'}</dd>
+        </div>
+        {terms && <p className="text-xs text-zinc-500">{terms.upi}</p>}
+      </div>
+    </dl>
   )
 }
 
@@ -72,6 +131,19 @@ export function PeakStartDialog({ businessDayId, onStarted, onClose }: StartProp
   const [upi, setUpi] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [baseline, setBaseline] = useState<BaselineState>({ kind: 'loading' })
+
+  useEffect(() => {
+    let live = true
+    api
+      .peakBaseline()
+      .then((b) => live && setBaseline({ kind: 'ready', baseline: b }))
+      .catch(() => live && setBaseline({ kind: 'failed' }))
+    return () => {
+      live = false
+    }
+  }, [])
+  const expected = baseline.kind === 'ready' ? baseline.baseline : null
 
   const submit = () => {
     if (saving) return
@@ -108,7 +180,15 @@ export function PeakStartDialog({ businessDayId, onStarted, onClose }: StartProp
       <p className="mb-4 text-zinc-300">
         During peak every scan is saved as its own bill with no payment screen. The drawer is reconciled against these readings when the session ends.
       </p>
-      <Readings cash={cash} upi={upi} onCash={setCash} onUpi={setUpi} onSubmit={submit} />
+      <ExpectedFigures state={baseline} />
+      <Readings
+        cash={cash}
+        upi={upi}
+        onCash={setCash}
+        onUpi={setUpi}
+        onSubmit={submit}
+        hints={{ cash: compareReading(cash, expected?.expectedCashPaise ?? null), upi: compareReading(upi, expected?.expectedUpiPaise ?? null) }}
+      />
       {error && <p className="mt-3 text-sm font-semibold text-rose-400">{error}</p>}
     </Modal>
   )

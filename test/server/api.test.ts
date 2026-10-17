@@ -160,6 +160,27 @@ describe('local HTTP API', () => {
     expect(await call('POST', '/api/days', { openingFloat: '0' })).toMatchObject({ status: 409, body: { error: { code: 'PS007' } } });
   });
 
+  it('serves the peak start baseline for the open day and the sales breakdown on Day End', async () => {
+    const { fx, call } = await start();
+    const bill = (await call('POST', '/api/bills', { mode: 'NORMAL' })).body;
+    await call('POST', `/api/bills/${bill.id}/items`, { skuId: fx.sku.half, quantity: 1 });
+    await call('POST', `/api/bills/${bill.id}/settle`, { payments: [{ mode: 'UPI', amount: String(PRICE.half) }] });
+
+    expect(await call('GET', '/api/peak/baseline')).toMatchObject({
+      status: 200,
+      body: { businessDayId: fx.dayId, expectedCashPaise: '0', billUpiPaise: String(PRICE.half), expectedUpiPaise: String(PRICE.half) },
+    });
+    expect((await call('GET', '/api/day-end')).body.sales).toEqual({
+      normal: { cashPaise: '0', upiPaise: String(PRICE.half), creditPaise: '0', totalPaise: String(PRICE.half) },
+      peak: { salesPaise: '0', cashPaise: '0', upiPaise: '0', sessionCount: 0, runningSessionNo: null },
+      waiterRepayments: { cashPaise: '0', upiPaise: '0' },
+      total: { cashPaise: '0', upiPaise: String(PRICE.half), creditPaise: '0', salesPaise: String(PRICE.half) },
+    });
+
+    await call('POST', `/api/days/${fx.dayId}/close`, { countedCash: '0' });
+    expect(await call('GET', '/api/peak/baseline')).toMatchObject({ status: 404 });
+  });
+
   it('records, lists and voids categorised expenses', async () => {
     const { fx, call } = await start();
     const ice = await call('POST', '/api/expenses', { amount: '15000', category: 'ICE' });

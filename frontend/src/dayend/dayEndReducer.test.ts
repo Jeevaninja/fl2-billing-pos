@@ -38,6 +38,12 @@ function summary(over: { id?: string; status?: 'OPEN' | 'CLOSED'; expected?: big
       expectedCashPaise: over.expected ?? 30550_00n,
       upiTotalPaise: 0n,
     },
+    sales: {
+      normal: { cashPaise: 0n, upiPaise: 0n, creditPaise: 0n, totalPaise: 0n },
+      peak: { salesPaise: 0n, cashPaise: 0n, upiPaise: 0n, sessionCount: 0, runningSessionNo: null },
+      waiterRepayments: { cashPaise: 0n, upiPaise: 0n },
+      total: { cashPaise: 0n, upiPaise: 0n, creditPaise: 0n, salesPaise: 0n },
+    },
     peakSessions: [],
   }
 }

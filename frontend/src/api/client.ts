@@ -18,6 +18,7 @@ import type {
   Paise,
   PeakReconciliation,
   PeakSession,
+  PeakStartBaseline,
   ProductPatch,
   ReceiptLinePayload,
   SkuLookup,
@@ -110,6 +111,8 @@ export const api = {
   reverse: (billId: string, reason: string) => call<{ reversal: Bill }>('POST', `${bill(billId)}/reverse`, { reason }),
   peakSale: (sessionId: string, skuId: string, quantity: number) =>
     call<BillLine>('POST', '/api/peak/sales', { sessionId, skuId, quantity }),
+  /** Expected drawer cash and UPI so far on the open day (404 when no day is open). */
+  peakBaseline: () => call<PeakStartBaseline>('GET', '/api/peak/baseline'),
   startPeak: (businessDayId: string, declaredCash: Paise, declaredUpi: Paise) =>
     call<PeakSession>('POST', '/api/peak/sessions', { businessDayId, declaredCash, declaredUpi }),
   endPeak: (sessionId: string, countedCash: Paise, countedUpi: Paise) =>

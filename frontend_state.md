@@ -1,6 +1,6 @@
 # FL2 POS — Frontend State Reference
 
-As of Phase 10 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders, Phase 7 Day End, Phase 8 Expenses and peak controls, Phase 9 Purchase / GRN, Phase 10 Inventory Catalog and case-based GRN; plan `docs/ui/phase10-catalog-case-grn-plan.md`). Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
+As of Phase 11 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders, Phase 7 Day End, Phase 8 Expenses and peak controls, Phase 9 Purchase / GRN, Phase 10 Inventory Catalog and case-based GRN, Phase 11 peak start baseline and Day End sales breakdown; plan `docs/ui/phase11-peak-day-end-visibility-plan.md`). Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
 
 - **Stack:** Vite 8, React 19, TypeScript, Tailwind CSS 4 (`@tailwindcss/vite`), Lucide icons, Vitest. No router, no state library.
 - **Run:** `npm run api:dev` at the repo root (API on `127.0.0.1:4310`), then `npm run dev` in `frontend/` (http://localhost:5173). Vite proxies `/api` to the API.
@@ -88,10 +88,13 @@ main.tsx                      StrictMode → <App/>, imports index.css (Tailwind
                               Footer shows the live validation hint or the server's refusal; deactivating turns Save into
                               "Deactivate & save" with a warning. A PS012 duplicate keeps the form and outlines the clashing field.
 
-Shared: components/peak/PeakControls.tsx: PeakBanner, StartPeakButton, PeakStartDialog (cash + UPI readings → start),
+Shared: components/peak/PeakControls.tsx: PeakBanner, StartPeakButton, PeakStartDialog (expected cash / UPI from
+        /api/peak/baseline with their terms, then cash + UPI readings with a live short / over / matches hint → start),
         PeakEndDialog (closing readings → end → result view: expected, cash/UPI change, actual, variance; Enter closes).
         Each screen gives the end dialog a session snapshot, so it outlives the session to show the result.
         components/RupeeField.tsx: rupee input shared by Day End, Expenses and the peak dialogs.
+        components/dayend/SalesBreakdownCard.tsx: Day End sales table (above the cash count on an open day, under the
+        closed-day card otherwise).
 ```
 
 | File | Exports |
@@ -113,10 +116,12 @@ Shared: components/peak/PeakControls.tsx: PeakBanner, StartPeakButton, PeakStart
 | `components/CatalogScreen.tsx` | `CatalogScreen({ onExit })` |
 | `components/peak/PeakControls.tsx` | `PeakBanner`, `StartPeakButton`, `PeakStartDialog`, `PeakEndDialog` |
 | `components/RupeeField.tsx` | `RupeeField` |
+| `components/dayend/SalesBreakdownCard.tsx` | `SalesBreakdownCard({ sales })` |
 | `expense/expenseReducer.ts` | `expenseReducer`, `initialExpenseState`, `CATEGORIES`, `CATEGORY_LABEL`, `formError`, `formPayload`, `todayTotals` |
 | `purchase/purchaseReducer.ts` | `purchaseReducer`, `initialPurchaseState`, `MAX_LINE_QTY`, `lineError`, `submitError`, `submitPayload`, `lineTotal`, `stagedTotals`, `pickFromSearch`, `entryCount`, `bottlesFor`, `mergeCounts`, `countLabel` |
 | `catalog/catalogReducer.ts` | `catalogReducer`, `initialCatalogState`, `catalogRows`, `suggestPrefix`, `skuCodePreview`, `formError`, `newProductPayload`, `productPatch`, `addSkuPayload`, `skuPatch`, `deactivates`, `conflictField`, `DEFAULT_CASE_SIZE` |
-| `peak/peakMath.ts` | `parseReadings`, `describeVariance` |
+| `peak/peakMath.ts` | `parseReadings`, `describeVariance`, `compareReading`, `describeBaseline` |
+| `dayend/salesRows.ts` | `salesCard` (rows, repayments, warnings) |
 | `dayend/dayEndReducer.ts` | `dayEndReducer`, `initialDayEndState`, `dayEndView`, `blockerCount`, `openCounterBills`, `countedPaise`, `variancePreview`, `lockBlock` |
 
 Only the Reports tile still calls `runStub`; every other tile (and F1/F2/F9, which open billing) opens its screen.
@@ -131,6 +136,7 @@ Only the Reports tile still calls `runStub`; every other tile (and F1/F2/F9, whi
 - **State:** `load` (`loading` / `ready` / `offline` / `none` = no day ever opened), `summary` (the open day, or the last closed one), `counted` (typed rupees), `dialog` (`confirm` / `repay` + waiter id / `endPeak`), `flash`.
 - **Selectors:** `dayEndView` → `LOADING | OFFLINE | NO_DAY | OPEN | CLOSED`. `blockerCount` counts each open bill, the running peak (its `PEAK_UNSETTLED` bills count once, with it) and each owing waiter. `variancePreview` = counted − expected, display only; the server freezes its own figure. `lockBlock` gives the reason Confirm & Lock is disabled.
 - The typed count survives polls of the same open day and is cleared when another day loads. Every checklist action re-reads the summary afterwards. A failed poll keeps the last summary and flashes the error.
+- **Sales breakdown (Phase 11):** Cash / UPI / Credit / Total for Normal bills, Peak sales (UPI from the readings, cash = sales − UPI; credit "—") and Total sales, plus Waiter repayments kept apart as credit collected. Amber notes for a still-running peak and for a negative derived peak cash; each ended peak in the checklist also shows its sales, with the same warning.
 - **Keys:** type the count (the field is focused) · Enter or F9 asks to lock · Enter confirms in the modal · Esc dashboard. The repayment dialog takes C/U for the tender; Enter records it.
 
 **Expense screen** (`expenseReducer`, pure and unit-tested):
@@ -162,7 +168,7 @@ Only the Reports tile still calls `runStub`; every other tile (and F1/F2/F9, whi
 
 **Billing scan stock note:** each scan's flash now ends with the bottles left (`stockLeft`: "57 left", or "last in stock"), computed from the `lookupSku` taken just before the sale. Stock received in Purchase shows on the very next scan.
 
-**Peak controls:** F8 toggles on the Dashboard and the Billing screen: it starts a session when none is running and ends the running one otherwise. Both screens disable their other shortcuts while a peak dialog is open, and re-read `/api/context` once a session starts or ends. `parseReadings` needs both readings (₹0 allowed); `describeVariance` words the result as short, over or exact.
+**Peak controls:** F8 toggles on the Dashboard and the Billing screen: it starts a session when none is running and ends the running one otherwise. Both screens disable their other shortcuts while a peak dialog is open, and re-read `/api/context` once a session starts or ends. `parseReadings` needs both readings (₹0 allowed); `describeVariance` words the result as short, over or exact. The start dialog fetches `api.peakBaseline()` on open: "Expected cash in drawer" and "Expected UPI so far" with `describeBaseline` terms (₹0 terms dropped), and `compareReading` under each field (display only). A failed fetch shows "Expected figures unavailable" and the peak can still start.
 
 ---
 
@@ -233,7 +239,7 @@ No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDow
 
 | File | Contents |
 |---|---|
-| `api/client.ts` | `api.*` (`context`, `lookupSku`, `searchMembers`, `listWaiters`, `getBill`, `captainOrders`, `createBill`, `addItem`, `cancelItem` (optional `restock`), `setMember`, `tagWaiter`, `settle`, `settleWaiter`, `closeEmpty`, `reverse`, `peakSale`, `searchSkus`, `listPurchases`, `postPurchase`, `listCatalog`, `createProduct`, `updateProduct`, `addSku`, `updateSku`), `ApiError` (`status`, `code`, `constraint` on a 409; `NETWORK` when unreachable or the proxy answers non-JSON 5xx), `reviveJson`, `encodeJson` |
+| `api/client.ts` | `api.*` (`context`, `lookupSku`, `searchMembers`, `listWaiters`, `getBill`, `captainOrders`, `createBill`, `addItem`, `cancelItem` (optional `restock`), `setMember`, `tagWaiter`, `settle`, `settleWaiter`, `closeEmpty`, `reverse`, `peakSale`, `searchSkus`, `listPurchases`, `postPurchase`, `listCatalog`, `createProduct`, `updateProduct`, `addSku`, `updateSku`, `peakBaseline`), `ApiError` (`status`, `code`, `constraint` on a 409; `NETWORK` when unreachable or the proxy answers non-JSON 5xx), `reviveJson`, `encodeJson` |
 | `api/types.ts` | Frontend mirrors of the API DTOs (`Bill`, `BillDetail`, `CounterContext`, `SkuLookup`, …) with `Paise = bigint`; dates stay ISO strings |
 | `billing/payment.ts` | `payOptions(detail)`, `planPayment(detail, input)` → counter tenders or waiter settle steps plus change, credit-limit pre-check, `describePlan` |
 | `billing/errors.ts` | `CounterError` (screen-raised), `counterErrorMessage(err)` (PS code → cashier wording) |

@@ -19,6 +19,7 @@ import {
 import { useGlobalShortcuts } from '../hooks/useGlobalShortcuts'
 import { beep } from '../lib/beep'
 import { formatPaise, parseRupeesToPaise } from '../lib/money'
+import { SalesBreakdownCard } from './dayend/SalesBreakdownCard'
 import { PeakEndDialog } from './peak/PeakControls'
 import { RupeeField } from './RupeeField'
 import { FOCUS_RING, keepFocus } from '../lib/ui'
@@ -202,26 +203,34 @@ export default function DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrder
                 onOpenCaptainOrders={onOpenCaptainOrders}
               />
             ) : (
-              <ClosedDayCard summary={summary} />
+              <>
+                <ClosedDayCard summary={summary} />
+                <SalesBreakdownCard sales={summary.sales} />
+              </>
             )}
           </aside>
           <main className="flex min-w-0 flex-1 flex-col">
             <div className="flex min-h-16 items-center border-b-2 border-zinc-800 bg-zinc-900 px-4 py-2">
-              <h2 className="text-xs font-bold tracking-widest text-zinc-400 uppercase">{view === 'OPEN' ? 'Cash count' : 'Next day'}</h2>
+              <h2 className="text-xs font-bold tracking-widest text-zinc-400 uppercase">{view === 'OPEN' ? 'Sales & cash count' : 'Next day'}</h2>
               <span className="ml-auto" />
               <FlashLine flash={state.flash} />
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-4">
               {view === 'OPEN' ? (
-                <CashCount
-                  summary={summary}
-                  counted={state.counted}
-                  variance={variancePreview(state)}
-                  block={lockBlock(state)}
-                  busy={busy}
-                  onCounted={(text) => dispatch({ type: 'counted', text })}
-                  onLock={askLock}
-                />
+                <>
+                  <div className="mx-auto mb-4 max-w-2xl">
+                    <SalesBreakdownCard sales={summary.sales} />
+                  </div>
+                  <CashCount
+                    summary={summary}
+                    counted={state.counted}
+                    variance={variancePreview(state)}
+                    block={lockBlock(state)}
+                    busy={busy}
+                    onCounted={(text) => dispatch({ type: 'counted', text })}
+                    onLock={askLock}
+                  />
+                </>
               ) : (
                 <OpenDayPanel busy={busy} onOpen={openDay} note={`Day ${summary.day.businessDate} is locked. Count the float into the drawer to start the next day.`} />
               )}
@@ -321,13 +330,15 @@ function Checklist({ summary, busy, onRepay, onEndPeak, onOpenBilling, onOpenCap
         {summary.peakSessions.length > 0 && (
           <ul className="mt-2 flex flex-col gap-0.5 text-sm text-zinc-400">
             {summary.peakSessions.map((s) => (
-              <li key={s.id} className="flex justify-between font-mono">
+              <li key={s.id} className="flex flex-wrap font-mono">
                 <span>
                   Peak #{s.sessionNo} {formatClock(s.startedAt)}–{formatClock(s.endedAt)}
                 </span>
-                <span className={s.variancePaise < 0n ? 'text-rose-300' : s.variancePaise > 0n ? 'text-amber-300' : ''}>
+                <span className="ml-auto pl-3">sales {formatPaise(s.salesPaise)}</span>
+                <span className={`pl-3 ${s.variancePaise < 0n ? 'text-rose-300' : s.variancePaise > 0n ? 'text-amber-300' : ''}`}>
                   variance {formatPaise(s.variancePaise)}
                 </span>
+                {s.peakCashPaise < 0n && <span className="basis-full text-right font-sans text-amber-300">UPI readings exceed sales — check the UPI readings</span>}
               </li>
             ))}
           </ul>

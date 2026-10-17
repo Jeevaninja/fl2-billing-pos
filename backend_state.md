@@ -1,6 +1,6 @@
 # FL2 POS — Backend State Reference
 
-Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`), and Phase 10 master catalog and case-based inwarding (`0009_catalog_case_size`, `CatalogService`; plan `docs/ui/phase10-catalog-case-grn-plan.md`). Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
+Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`), Phase 10 master catalog and case-based inwarding (`0009_catalog_case_size`, `CatalogService`; plan `docs/ui/phase10-catalog-case-grn-plan.md`), and Phase 11 peak start baseline and Day End sales breakdown (no migration; plan `docs/ui/phase11-peak-day-end-visibility-plan.md`). Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
 
 - **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`, `0006_expense_category`, `0007_peak_drawer_cash`, `0008_stock_receipts`, `0009_catalog_case_size`.
 - **Money:** `BIGINT` whole paise in SQL, `bigint` in TypeScript (`type Paise = bigint`). No floats anywhere.
@@ -203,11 +203,22 @@ interface ReversalResult { reversal: Bill; refunds: BillPayment[]; }
 class PeakSessionService {
   constructor(db: SqlDatabase);
 
+  getStartBaseline(businessDayId: string): Promise<PeakStartBaseline>;   // Phase 11, read-only
   startPeakSession(businessDayId: string, declaredCash: Paise, declaredUpi: Paise, staffId: string): Promise<PeakSession>;
   endPeakSession(sessionId: string, countedCash: Paise, countedUpi: Paise, staffId: string): Promise<PeakReconciliation>;
 }
 
 interface PeakReconciliation { session: PeakSession; breakdown: PeakBreakdown; }
+interface PeakStartBaseline {
+  businessDayId: string;
+  openingFloatPaise; normalCashPaise; waiterCashPaise;   // cash outside peak windows
+  peakCashPaise;                                         // Σ earlier ended peaks' counted cash delta
+  cashExpensesPaise;
+  expectedCashPaise: Paise;                              // = pos_day_expected_cash (same as Day End)
+  billUpiPaise; waiterUpiPaise;                          // UPI tenders / repayments (outside a running window)
+  peakUpiPaise;                                          // Σ earlier peaks' UPI attributed to peak sales
+  expectedUpiPaise: Paise;                               // = Day End breakdown.upiTotalPaise
+}
 interface PeakBreakdown {
   peakBillsPaise: Paise;      // Σ peak bills in the session (incl. in-session reversals)
   billCashPaise: Paise;       // CASH tenders on normal bills during the session
@@ -254,11 +265,19 @@ interface DayEndSummary {
   };
   canClose: boolean;
   breakdown: CashBreakdown;                   // openingFloat, normalCash, peakCash, waiterCash, cashExpenses, expectedCash, upiTotal (info)
-  peakSessions: PeakSessionCash[];            // ended sessions: cash / UPI deltas and frozen variance
+  sales: SalesBreakdown;                      // Phase 11
+  peakSessions: PeakSessionCash[];            // ended sessions: cash / UPI deltas, frozen variance, salesPaise, inWindowUpiPaise, peakUpiPaise, peakCashPaise
+}
+interface SalesBreakdown {                    // ended peak sessions only; a running window's tenders appear once it ends
+  normal: { cashPaise; upiPaise; creditPaise; totalPaise };       // every tender on normal bills, refunds included
+  peak: { salesPaise; cashPaise; upiPaise; sessionCount; runningSessionNo: number | null };
+  waiterRepayments: { cashPaise; upiPaise };                     // credit collected, not sales
+  total: { cashPaise; upiPaise; creditPaise; salesPaise };
 }
 interface CashExpense { id; businessDayId; peakSessionId: string | null; amountPaise; reversesExpenseId: string | null; category: ExpenseCategory; description: string | null; createdByStaffId; createdAt; }
 ```
 
+- **Sales breakdown (Phase 11), per ended peak session:** `peakUpi = upiDelta − in-window UPI` (UPI bill tenders and UPI waiter repayments taken during the peak, which moved the reading too); `peakCash = sales − peakUpi`. The variance therefore lands in peak cash. `getDayFigures` (shared with the peak baseline) asserts `peakCash = cashDelta − in-window cash tenders − in-window waiter cash + in-window expenses − variance` and `total.upi + waiterRepayments.upi = breakdown.upiTotalPaise`, throwing on drift. Normal-bill tenders taken inside a peak count under `normal` here but stay inside the peak's cash delta in `CashBreakdown`. A negative derived peak cash (UPI readings above sales) is reported, not clamped.
 - **`closeBusinessDay`:** locks the day row first, so a sale racing the close either commits before it (and is counted) or fails `PS007`. The database re-checks every blocker. The returned breakdown is checked against the frozen expected figure.
 - **`openBusinessDay`:** refuses a second open day and a date that has already traded (`PS007`). A business date trades once, so closing and reopening on the same calendar day is refused.
 - **`recordCashExpense`:** amount > 0; the note is trimmed (blank → null), at most 200 characters, and required for OTHER (`RangeError`, also a CHECK). Unknown categories are a `RangeError`.
@@ -519,10 +538,11 @@ Migrations run on every boot (already-applied ones are skipped).
 | `POST /api/bills/:billId/close-empty` | | `closeEmptyBill` | 200 |
 | `POST /api/bills/:billId/reverse` | `{ reason, restock?, creditRefundTender?, peakRefundTender? }` | `reverseBill(…, cashier, …)` | 201 |
 | `POST /api/peak/sales` | `{ sessionId, skuId, quantity }` | `recordPeakSale(…, cashier)` | 201 |
+| `GET /api/peak/baseline` | | `getStartBaseline(open day)`; 404 when no day is open | 200 |
 | `POST /api/peak/sessions` | `{ businessDayId, declaredCash, declaredUpi }` | `startPeakSession(…, cashier)` | 201 |
 | `POST /api/peak/sessions/:sessionId/end` | `{ countedCash, countedUpi }` | `endPeakSession(…, cashier)` | 200 |
 | `POST /api/waiters/:waiterId/repayments` | `{ amount, tender: 'CASH'\|'UPI' }` | `recordWaiterRepayment(…, cashier)` | 201 |
-| `GET /api/day-end` | | `getDayEndSummary(getCurrentDayId())`: the open day, else the last closed one; 404 before any day | 200 |
+| `GET /api/day-end` | | `getDayEndSummary(getCurrentDayId())`: the open day, else the last closed one; 404 before any day. Carries `sales` (Phase 11) | 200 |
 | `POST /api/days` | `{ openingFloat }` | `openBusinessDay(…, cashier)` | 201 |
 | `POST /api/days/:dayId/close` | `{ countedCash }` | `closeBusinessDay(…, cashier)` | 200 |
 | `GET /api/expenses` | | `listCashExpenses(open day)`; 404 when no day is open | 200 |

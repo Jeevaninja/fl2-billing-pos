@@ -173,6 +173,22 @@ export interface PeakSessionCash {
   cashDeltaPaise: Paise
   upiDeltaPaise: Paise
   variancePaise: Paise
+  /** Σ the session's peak bill totals. */
+  salesPaise: Paise
+  /** UPI recorded inside the window on normal bills and repayments. */
+  inWindowUpiPaise: Paise
+  /** upiDelta − inWindowUpi. */
+  peakUpiPaise: Paise
+  /** sales − peakUpi (the session variance lands here). */
+  peakCashPaise: Paise
+}
+
+/** How the day's revenue was collected; ended peak sessions only. */
+export interface SalesBreakdown {
+  normal: { cashPaise: Paise; upiPaise: Paise; creditPaise: Paise; totalPaise: Paise }
+  peak: { salesPaise: Paise; cashPaise: Paise; upiPaise: Paise; sessionCount: number; runningSessionNo: number | null }
+  waiterRepayments: { cashPaise: Paise; upiPaise: Paise }
+  total: { cashPaise: Paise; upiPaise: Paise; creditPaise: Paise; salesPaise: Paise }
 }
 
 export interface DayEndSummary {
@@ -180,7 +196,24 @@ export interface DayEndSummary {
   blockers: { openBills: OpenBillBlocker[]; runningPeakSession: PeakSessionView | null; waitersOwing: OwingWaiter[] }
   canClose: boolean
   breakdown: CashBreakdown
+  sales: SalesBreakdown
   peakSessions: PeakSessionCash[]
+}
+
+/** What the till should hold right now, shown when a peak session is started. */
+export interface PeakStartBaseline {
+  businessDayId: string
+  openingFloatPaise: Paise
+  normalCashPaise: Paise
+  waiterCashPaise: Paise
+  /** Earlier ended peaks' counted cash delta. */
+  peakCashPaise: Paise
+  cashExpensesPaise: Paise
+  expectedCashPaise: Paise
+  billUpiPaise: Paise
+  waiterUpiPaise: Paise
+  peakUpiPaise: Paise
+  expectedUpiPaise: Paise
 }
 
 export interface PeakReconciliation {

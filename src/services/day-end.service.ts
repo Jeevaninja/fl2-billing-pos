@@ -78,6 +78,28 @@ export interface PeakSessionCash {
   cashDeltaPaise: Paise;
   upiDeltaPaise: Paise;
   variancePaise: Paise;
+  /** Σ the session's peak bill totals (in-session reversals included). */
+  salesPaise: Paise;
+  /** UPI recorded inside the window on normal bills and waiter repayments (it moved the UPI reading too). */
+  inWindowUpiPaise: Paise;
+  /** UPI attributed to peak sales: UPI delta − in-window recorded UPI. */
+  peakUpiPaise: Paise;
+  /** salesPaise − peakUpiPaise. Any session variance lands here, not in the cash count. */
+  peakCashPaise: Paise;
+}
+
+/**
+ * How the day's revenue was collected. Only ended peak sessions are included; tenders taken inside a
+ * still-running session appear once it ends.
+ */
+export interface SalesBreakdown {
+  /** Every tender on normal bills (inside or outside peak windows), refunds included. */
+  normal: { cashPaise: Paise; upiPaise: Paise; creditPaise: Paise; totalPaise: Paise };
+  /** Peak bills carry no tender: UPI comes from the readings, cash = sales − UPI. */
+  peak: { salesPaise: Paise; cashPaise: Paise; upiPaise: Paise; sessionCount: number; runningSessionNo: number | null };
+  /** Waiter credit collected today: money in, not sales. */
+  waiterRepayments: { cashPaise: Paise; upiPaise: Paise };
+  total: { cashPaise: Paise; upiPaise: Paise; creditPaise: Paise; salesPaise: Paise };
 }
 
 export interface DayEndSummary {
@@ -86,6 +108,14 @@ export interface DayEndSummary {
   /** The day is open and nothing blocks the close. */
   canClose: boolean;
   breakdown: CashBreakdown;
+  sales: SalesBreakdown;
+  peakSessions: PeakSessionCash[];
+}
+
+/** The cash, sales and per-peak figures of a day, shared by Day End and the peak start baseline. */
+export interface DayFigures {
+  breakdown: CashBreakdown;
+  sales: SalesBreakdown;
   peakSessions: PeakSessionCash[];
 }
 
@@ -169,7 +199,7 @@ function mapExpense(r: ExpenseRow): CashExpense {
   };
 }
 
-async function getDay(db: SqlClient, dayId: string, lock = false): Promise<DaySummary> {
+export async function getDay(db: SqlClient, dayId: string, lock = false): Promise<DaySummary> {
   const row = await maybeOne<DayRow>(db, `SELECT ${DAY_COLUMNS} FROM business_days WHERE id = $1${lock ? ' FOR UPDATE' : ''}`, [dayId]);
   if (!row) throw new NotFoundError('business day', dayId);
   return mapDay(row);
@@ -335,58 +365,6 @@ async function summarise(db: SqlClient, day: DaySummary): Promise<DayEndSummary>
     `SELECT * FROM v_peak_sessions WHERE business_day_id = $1 AND ended_at IS NULL`,
     [day.id],
   );
-  const { rows: ended } = await db.query<PeakSessionRow>(
-    `SELECT * FROM peak_sessions WHERE business_day_id = $1 AND ended_at IS NOT NULL ORDER BY session_no`,
-    [day.id],
-  );
-
-  const sums = await one<Record<'normal_cash' | 'waiter_cash' | 'expenses' | 'normal_upi' | 'waiter_upi' | 'expected', DbInt>>(
-    db,
-    `SELECT
-       coalesce((SELECT sum(amount_paise) FROM bill_payments
-                  WHERE business_day_id = $1 AND tender_type = 'CASH' AND peak_session_id IS NULL), 0)::text AS normal_cash,
-       coalesce((SELECT sum(amount_paise) FROM waiter_payments
-                  WHERE business_day_id = $1 AND tender_type = 'CASH' AND peak_session_id IS NULL), 0)::text AS waiter_cash,
-       coalesce((SELECT sum(amount_paise) FROM cash_expenses
-                  WHERE business_day_id = $1 AND peak_session_id IS NULL), 0)::text AS expenses,
-       coalesce((SELECT sum(amount_paise) FROM bill_payments
-                  WHERE business_day_id = $1 AND tender_type = 'UPI' AND peak_session_id IS NULL), 0)::text AS normal_upi,
-       coalesce((SELECT sum(amount_paise) FROM waiter_payments
-                  WHERE business_day_id = $1 AND tender_type = 'UPI' AND peak_session_id IS NULL), 0)::text AS waiter_upi,
-       pos_day_expected_cash($1)::text AS expected`,
-    [day.id],
-  );
-
-  const peakSessions: PeakSessionCash[] = ended.map((row) => {
-    const s = mapPeakSession(row);
-    return {
-      id: s.id,
-      sessionNo: s.sessionNo,
-      startedAt: s.startedAt,
-      endedAt: s.endedAt as Date,
-      cashDeltaPaise: (s.endCashPaise ?? 0n) - s.startCashPaise,
-      upiDeltaPaise: (s.endUpiPaise ?? 0n) - s.startUpiPaise,
-      variancePaise: s.variancePaise ?? 0n,
-    };
-  });
-  const peakCashPaise = peakSessions.reduce((sum, s) => sum + s.cashDeltaPaise, 0n);
-  const peakUpiPaise = peakSessions.reduce((sum, s) => sum + s.upiDeltaPaise, 0n);
-
-  const breakdown: CashBreakdown = {
-    openingFloatPaise: day.openingFloatPaise,
-    normalCashPaise: toPaise(sums.normal_cash),
-    peakCashPaise,
-    waiterCashPaise: toPaise(sums.waiter_cash),
-    cashExpensesPaise: toPaise(sums.expenses),
-    expectedCashPaise: 0n,
-    upiTotalPaise: toPaise(sums.normal_upi) + toPaise(sums.waiter_upi) + peakUpiPaise,
-  };
-  breakdown.expectedCashPaise =
-    breakdown.openingFloatPaise + breakdown.normalCashPaise + breakdown.peakCashPaise + breakdown.waiterCashPaise - breakdown.cashExpensesPaise;
-  if (breakdown.expectedCashPaise !== toPaise(sums.expected)) {
-    throw new Error(`day ${day.businessDate}: breakdown ${breakdown.expectedCashPaise} disagrees with pos_day_expected_cash ${sums.expected}`);
-  }
-
   const blockers: DayEndBlockers = {
     openBills: billRows.map((b) => {
       const waiter = b.waiter_id ? waiters.get(b.waiter_id) : undefined;
@@ -409,5 +387,140 @@ async function summarise(db: SqlClient, day: DaySummary): Promise<DayEndSummary>
   const canClose =
     day.status === 'OPEN' && blockers.openBills.length === 0 && blockers.runningPeakSession === null && blockers.waitersOwing.length === 0;
 
-  return { day, blockers, canClose, breakdown, peakSessions };
+  return { day, blockers, canClose, ...(await getDayFigures(db, day)) };
+}
+
+type SessionSumRow = PeakSessionRow & Record<'sales' | 'bill_cash' | 'bill_upi' | 'waiter_cash' | 'waiter_upi' | 'expenses', DbInt>;
+type TenderSumRow = { kind: 'BILL' | 'WAITER'; tender_type: 'CASH' | 'UPI' | 'WAITER_CREDIT'; total: DbInt };
+
+/**
+ * Builds the day's cash breakdown (checked against pos_day_expected_cash), the sales breakdown and
+ * the per-session peak split. Each balance identity is asserted, so a drift between the screens
+ * throws instead of showing two different answers.
+ */
+export async function getDayFigures(db: SqlClient, day: DaySummary): Promise<DayFigures> {
+  const { rows: ended } = await db.query<SessionSumRow>(
+    `SELECT s.*,
+       coalesce((SELECT sum(b.total_paise) FROM bills b WHERE b.peak_session_id = s.id), 0)::text AS sales,
+       coalesce((SELECT sum(p.amount_paise) FROM bill_payments p WHERE p.peak_session_id = s.id AND p.tender_type = 'CASH'), 0)::text AS bill_cash,
+       coalesce((SELECT sum(p.amount_paise) FROM bill_payments p WHERE p.peak_session_id = s.id AND p.tender_type = 'UPI'), 0)::text AS bill_upi,
+       coalesce((SELECT sum(w.amount_paise) FROM waiter_payments w WHERE w.peak_session_id = s.id AND w.tender_type = 'CASH'), 0)::text AS waiter_cash,
+       coalesce((SELECT sum(w.amount_paise) FROM waiter_payments w WHERE w.peak_session_id = s.id AND w.tender_type = 'UPI'), 0)::text AS waiter_upi,
+       coalesce((SELECT sum(e.amount_paise) FROM cash_expenses e WHERE e.peak_session_id = s.id), 0)::text AS expenses
+       FROM peak_sessions s
+      WHERE s.business_day_id = $1 AND s.ended_at IS NOT NULL
+      ORDER BY s.session_no`,
+    [day.id],
+  );
+  const running = await maybeOne<{ session_no: number }>(
+    db,
+    `SELECT session_no FROM peak_sessions WHERE business_day_id = $1 AND ended_at IS NULL`,
+    [day.id],
+  );
+
+  const sums = await one<Record<'normal_cash' | 'waiter_cash' | 'expenses' | 'normal_upi' | 'waiter_upi' | 'expected', DbInt>>(
+    db,
+    `SELECT
+       coalesce((SELECT sum(amount_paise) FROM bill_payments
+                  WHERE business_day_id = $1 AND tender_type = 'CASH' AND peak_session_id IS NULL), 0)::text AS normal_cash,
+       coalesce((SELECT sum(amount_paise) FROM waiter_payments
+                  WHERE business_day_id = $1 AND tender_type = 'CASH' AND peak_session_id IS NULL), 0)::text AS waiter_cash,
+       coalesce((SELECT sum(amount_paise) FROM cash_expenses
+                  WHERE business_day_id = $1 AND peak_session_id IS NULL), 0)::text AS expenses,
+       coalesce((SELECT sum(amount_paise) FROM bill_payments
+                  WHERE business_day_id = $1 AND tender_type = 'UPI' AND peak_session_id IS NULL), 0)::text AS normal_upi,
+       coalesce((SELECT sum(amount_paise) FROM waiter_payments
+                  WHERE business_day_id = $1 AND tender_type = 'UPI' AND peak_session_id IS NULL), 0)::text AS waiter_upi,
+       pos_day_expected_cash($1)::text AS expected`,
+    [day.id],
+  );
+
+  // Every tender of the day outside a still-running window, by tender type.
+  const { rows: tenderRows } = await db.query<TenderSumRow>(
+    `SELECT 'BILL' AS kind, p.tender_type, sum(p.amount_paise)::text AS total
+       FROM bill_payments p LEFT JOIN peak_sessions s ON s.id = p.peak_session_id
+      WHERE p.business_day_id = $1 AND (p.peak_session_id IS NULL OR s.ended_at IS NOT NULL)
+      GROUP BY p.tender_type
+     UNION ALL
+     SELECT 'WAITER' AS kind, w.tender_type, sum(w.amount_paise)::text AS total
+       FROM waiter_payments w LEFT JOIN peak_sessions s ON s.id = w.peak_session_id
+      WHERE w.business_day_id = $1 AND (w.peak_session_id IS NULL OR s.ended_at IS NOT NULL)
+      GROUP BY w.tender_type`,
+    [day.id],
+  );
+  const tender = (kind: TenderSumRow['kind'], type: TenderSumRow['tender_type']): Paise => {
+    const row = tenderRows.find((r) => r.kind === kind && r.tender_type === type);
+    return row ? toPaise(row.total) : 0n;
+  };
+
+  const peakSessions: PeakSessionCash[] = ended.map((row) => {
+    const s = mapPeakSession(row);
+    const cashDeltaPaise = (s.endCashPaise ?? 0n) - s.startCashPaise;
+    const upiDeltaPaise = (s.endUpiPaise ?? 0n) - s.startUpiPaise;
+    const variancePaise = s.variancePaise ?? 0n;
+    const salesPaise = toPaise(row.sales);
+    const inWindowUpiPaise = toPaise(row.bill_upi) + toPaise(row.waiter_upi);
+    const peakUpiPaise = upiDeltaPaise - inWindowUpiPaise;
+    const peakCashPaise = salesPaise - peakUpiPaise;
+    // The derived cash must equal the counted cash delta less the other in-window cash, with the variance taken out.
+    const fromDrawer = cashDeltaPaise - toPaise(row.bill_cash) - toPaise(row.waiter_cash) + toPaise(row.expenses) - variancePaise;
+    if (peakCashPaise !== fromDrawer) {
+      throw new Error(`peak session ${s.sessionNo}: derived peak cash ${peakCashPaise} disagrees with the drawer ${fromDrawer}`);
+    }
+    return {
+      id: s.id,
+      sessionNo: s.sessionNo,
+      startedAt: s.startedAt,
+      endedAt: s.endedAt as Date,
+      cashDeltaPaise,
+      upiDeltaPaise,
+      variancePaise,
+      salesPaise,
+      inWindowUpiPaise,
+      peakUpiPaise,
+      peakCashPaise,
+    };
+  });
+  const sumOf = (pick: (s: PeakSessionCash) => Paise): Paise => peakSessions.reduce((sum, s) => sum + pick(s), 0n);
+
+  const breakdown: CashBreakdown = {
+    openingFloatPaise: day.openingFloatPaise,
+    normalCashPaise: toPaise(sums.normal_cash),
+    peakCashPaise: sumOf((s) => s.cashDeltaPaise),
+    waiterCashPaise: toPaise(sums.waiter_cash),
+    cashExpensesPaise: toPaise(sums.expenses),
+    expectedCashPaise: 0n,
+    upiTotalPaise: toPaise(sums.normal_upi) + toPaise(sums.waiter_upi) + sumOf((s) => s.upiDeltaPaise),
+  };
+  breakdown.expectedCashPaise =
+    breakdown.openingFloatPaise + breakdown.normalCashPaise + breakdown.peakCashPaise + breakdown.waiterCashPaise - breakdown.cashExpensesPaise;
+  if (breakdown.expectedCashPaise !== toPaise(sums.expected)) {
+    throw new Error(`day ${day.businessDate}: breakdown ${breakdown.expectedCashPaise} disagrees with pos_day_expected_cash ${sums.expected}`);
+  }
+
+  const normal = { cashPaise: tender('BILL', 'CASH'), upiPaise: tender('BILL', 'UPI'), creditPaise: tender('BILL', 'WAITER_CREDIT'), totalPaise: 0n };
+  normal.totalPaise = normal.cashPaise + normal.upiPaise + normal.creditPaise;
+  const peak = {
+    salesPaise: sumOf((s) => s.salesPaise),
+    cashPaise: sumOf((s) => s.peakCashPaise),
+    upiPaise: sumOf((s) => s.peakUpiPaise),
+    sessionCount: peakSessions.length,
+    runningSessionNo: running?.session_no ?? null,
+  };
+  const sales: SalesBreakdown = {
+    normal,
+    peak,
+    waiterRepayments: { cashPaise: tender('WAITER', 'CASH'), upiPaise: tender('WAITER', 'UPI') },
+    total: {
+      cashPaise: normal.cashPaise + peak.cashPaise,
+      upiPaise: normal.upiPaise + peak.upiPaise,
+      creditPaise: normal.creditPaise,
+      salesPaise: normal.totalPaise + peak.salesPaise,
+    },
+  };
+  if (sales.total.upiPaise + sales.waiterRepayments.upiPaise !== breakdown.upiTotalPaise) {
+    throw new Error(`day ${day.businessDate}: sales UPI ${sales.total.upiPaise} + repayments disagrees with UPI today ${breakdown.upiTotalPaise}`);
+  }
+
+  return { breakdown, sales, peakSessions };
 }

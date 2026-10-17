@@ -2,6 +2,7 @@ import type { SqlDatabase } from '../db/client.js';
 import { NotFoundError, withPosErrors } from '../db/errors.js';
 import { assertPaise, type DbInt, type Paise, paiseParam, toPaise } from '../domain/money.js';
 import type { PeakSession } from '../domain/types.js';
+import { getDay, getDayFigures } from './day-end.service.js';
 import { mapPeakSession, maybeOne, one, type PeakSessionRow } from './rows.js';
 
 /** How a session's expected collection was built up: Σ collections − cash expenses = expectedPaise. */
@@ -25,6 +26,32 @@ export interface PeakBreakdown {
   variancePaise: Paise;
 }
 
+/**
+ * What the till should hold when a peak starts, shown before the cashier types the readings.
+ * Cash is pos_day_expected_cash (earlier peaks count with their counted cash); UPI is every UPI
+ * recorded today, which the GPay day total should match.
+ */
+export interface PeakStartBaseline {
+  businessDayId: string;
+  openingFloatPaise: Paise;
+  /** CASH bill tenders outside peak windows, refunds included. */
+  normalCashPaise: Paise;
+  /** CASH waiter repayments outside peak windows. */
+  waiterCashPaise: Paise;
+  /** Σ earlier ended peaks' counted cash delta. */
+  peakCashPaise: Paise;
+  /** Cash expenses outside peak windows (subtracted). */
+  cashExpensesPaise: Paise;
+  expectedCashPaise: Paise;
+  /** UPI tenders on normal bills, refunds included. */
+  billUpiPaise: Paise;
+  /** UPI waiter repayments. */
+  waiterUpiPaise: Paise;
+  /** Σ earlier peaks' UPI attributed to peak sales. */
+  peakUpiPaise: Paise;
+  expectedUpiPaise: Paise;
+}
+
 export interface PeakReconciliation {
   session: PeakSession;
   breakdown: PeakBreakdown;
@@ -32,6 +59,26 @@ export interface PeakReconciliation {
 
 export class PeakSessionService {
   constructor(private readonly db: SqlDatabase) {}
+
+  /** The expected drawer cash and UPI so far on the day, for the Start peak dialog. Read-only. */
+  async getStartBaseline(businessDayId: string): Promise<PeakStartBaseline> {
+    const day = await getDay(this.db, businessDayId);
+    const { breakdown, sales } = await getDayFigures(this.db, day);
+    return {
+      businessDayId: day.id,
+      openingFloatPaise: breakdown.openingFloatPaise,
+      normalCashPaise: breakdown.normalCashPaise,
+      waiterCashPaise: breakdown.waiterCashPaise,
+      peakCashPaise: breakdown.peakCashPaise,
+      cashExpensesPaise: breakdown.cashExpensesPaise,
+      expectedCashPaise: breakdown.expectedCashPaise,
+      billUpiPaise: sales.normal.upiPaise,
+      waiterUpiPaise: sales.waiterRepayments.upiPaise,
+      peakUpiPaise: sales.peak.upiPaise,
+      // = breakdown.upiTotalPaise (asserted in getDayFigures).
+      expectedUpiPaise: sales.total.upiPaise + sales.waiterRepayments.upiPaise,
+    };
+  }
 
   /**
    * Opens a peak window on the (open) business day with the declared drawer cash and UPI reading.
