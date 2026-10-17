@@ -5,12 +5,12 @@ import type { BillDetail, CounterContext, MemberSummary, PeakSessionView, Waiter
 import { Kbd, LiveClock } from '../components/ui'
 import { keepFocus } from '../lib/ui'
 import { useGlobalShortcuts } from '../hooks/useGlobalShortcuts'
-import { useScanBuffer } from '../hooks/useScanBuffer'
+import { useScanBuffer, type QtyTarget } from '../hooks/useScanBuffer'
 import type { ScanEffect } from '../hooks/scanBuffer'
 import { beep } from '../lib/beep'
 import { formatPaise } from '../lib/money'
 import { GridFooter, ItemsGrid, PeakSide, PeakTicker, ScanBar, SidePanel } from './BillingPanels'
-import { billingReducer, groupItems, initialBillingState, screenMode, stockLeft, totals, type Receipt } from './billingReducer'
+import { billingReducer, cancelPlan, groupItems, initialBillingState, screenMode, stockLeft, totals, type Receipt } from './billingReducer'
 import { CounterError, counterErrorMessage } from './errors'
 import { Modal } from './Modal'
 import { describePlan, type PayPlan } from './payment'
@@ -256,13 +256,14 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
     })
   }, [run, finishBill, flash])
 
+  /** Ctrl+Z in peak: the server finds this till's newest scan, so it works after a reload too. */
   const undoPeak = useCallback(() => {
-    const last = stateRef.current.ticker.find((e) => !e.undone)
-    if (!last) return
     void run(async () => {
-      await api.reverse(last.billId, 'Undo scan')
-      dispatch({ type: 'peakUndone', billId: last.billId })
-      flash('ok', `Peak #${last.billNo} undone`)
+      const { undone } = await api.undoLastPeak().catch((err: unknown) => {
+        throw err instanceof ApiError && err.code === 'NOT_FOUND' ? new CounterError('Nothing left to undo in this peak') : err
+      })
+      dispatch({ type: 'peakUndone', billId: undone.billId })
+      flash('ok', `Last scan voided: ${undone.displayName} ×${undone.quantity} (peak bill #${undone.billNo})`)
       void refreshContext()
     })
   }, [run, flash, refreshContext])
@@ -325,10 +326,40 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
     keysLive,
   )
 
+  /** Enter → qty → Enter: brings the selected row to `quantity` bottles, then opens Payment (as F9). */
+  const setQuantity = useCallback(
+    (quantity: number) => {
+      if (quantity < 1) {
+        flash('error', 'Quantity must be at least 1 — use − to remove the line')
+        return
+      }
+      const key = stateRef.current.selectedKey
+      void run(async () => {
+        const detail = billRef.current
+        const row = groupItems(detail?.items ?? []).find((r) => r.key === key)
+        if (!detail || !row) return
+        if (quantity !== row.quantity) {
+          if (quantity > row.quantity) await api.addItem(detail.bill.id, row.skuId, quantity - row.quantity)
+          else {
+            for (const c of cancelPlan(detail.items, row.key, row.quantity - quantity)) await api.cancelItem(detail.bill.id, c.itemId, c.quantity)
+          }
+          setBill(await api.getBill(detail.bill.id), row.skuId)
+          flash('ok', `${row.displayName} × ${quantity}`)
+        }
+        openPayment()
+      })
+    },
+    [run, setBill, flash, openPayment],
+  )
+
   const onScanEffect = useCallback(
     (effect: ScanEffect) => {
       if (effect.type === 'commit') {
         scan(effect.code, effect.quantity)
+        return
+      }
+      if (effect.type === 'setQty') {
+        setQuantity(effect.quantity)
         return
       }
       if (!canEditBill) return
@@ -336,9 +367,11 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
       else if (effect.command === 'down') dispatch({ type: 'move', delta: 1 })
       else adjustSelected(effect.command === 'increment' ? 1 : -1)
     },
-    [scan, adjustSelected, canEditBill],
+    [scan, adjustSelected, setQuantity, canEditBill],
   )
-  const scanState = useScanBuffer(keysLive, onScanEffect)
+  const selectedRow = canEditBill ? rows.find((r) => r.key === state.selectedKey) : undefined
+  const qtyTarget: QtyTarget | null = selectedRow ? { key: selectedRow.key, quantity: selectedRow.quantity } : null
+  const scanState = useScanBuffer(keysLive, onScanEffect, qtyTarget)
 
   // The scan buffer listens in the capture phase, so a non-empty buffer consumes Esc before this.
   useEffect(() => {
@@ -350,7 +383,7 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
         onExit()
       } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && mode === 'PEAK') {
         event.preventDefault()
-        undoPeak()
+        if (!event.repeat) undoPeak() // a held key voids one scan, not a run of them
       }
     }
     window.addEventListener('keydown', onKeyDown)
@@ -417,7 +450,7 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
       {(mode === 'NORMAL' || mode === 'PEAK') && (
         <div className="flex min-h-0 flex-1">
           <main className="flex min-w-0 flex-1 flex-col" aria-label={mode === 'PEAK' ? 'Peak scans' : 'Bill items'}>
-            <ScanBar scan={scanState} flash={state.flash} enabled={keysLive} />
+            <ScanBar scan={scanState} flash={state.flash} enabled={keysLive} qtyLabel={selectedRow?.displayName} />
             {mode === 'PEAK' ? (
               <PeakTicker ticker={state.ticker} pending={state.pending} />
             ) : (
@@ -427,6 +460,7 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
                 selectedKey={state.selectedKey}
                 onSelect={(key) => dispatch({ type: 'select', key })}
                 receipt={state.receipt}
+                qtyEdit={scanState.qtyEdit}
               />
             )}
             <GridFooter mode={mode} />
@@ -436,7 +470,7 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
               session={state.context.peakSession}
               scans={state.ticker.filter((e) => !e.undone).length}
               onUndo={undoPeak}
-              canUndo={state.ticker.some((e) => !e.undone)}
+              canUndo
             />
           ) : (
             <SidePanel

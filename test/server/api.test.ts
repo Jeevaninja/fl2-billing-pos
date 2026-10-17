@@ -160,6 +160,23 @@ describe('local HTTP API', () => {
     expect(await call('POST', '/api/days', { openingFloat: '0' })).toMatchObject({ status: 409, body: { error: { code: 'PS007' } } });
   });
 
+  it('undoes the till\'s last peak scan with POST /api/peak/undo-last', async () => {
+    const { fx, call } = await start();
+    expect(await call('POST', '/api/peak/undo-last', {})).toMatchObject({ status: 409, body: { error: { code: 'PS007' } } });
+    const session = (await call('POST', '/api/peak/sessions', { businessDayId: fx.dayId, declaredCash: '0', declaredUpi: '0' })).body;
+    const sale = (await call('POST', '/api/peak/sales', { sessionId: session.id, skuId: fx.sku.quarter, quantity: 1 })).body;
+
+    expect(await call('POST', '/api/peak/undo-last', {})).toMatchObject({
+      status: 201,
+      body: {
+        reversal: { kind: 'REVERSAL', reversesBillId: sale.bill.id, totalPaise: String(-PRICE.quarter) },
+        undone: { billId: sale.bill.id, billNo: sale.bill.billNo, sessionNo: 1, sizeCode: 'QUARTER', quantity: 1, totalPaise: String(PRICE.quarter) },
+      },
+    });
+    expect((await call('GET', '/api/context')).body.peakSession.runningExpectedPaise).toBe('0');
+    expect(await call('POST', '/api/peak/undo-last', {})).toMatchObject({ status: 404 });
+  });
+
   it('serves the peak start baseline for the open day and the sales breakdown on Day End', async () => {
     const { fx, call } = await start();
     const bill = (await call('POST', '/api/bills', { mode: 'NORMAL' })).body;

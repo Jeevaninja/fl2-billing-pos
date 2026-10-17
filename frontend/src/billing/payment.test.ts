@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { payOptions, planPayment } from './payment'
+import { amountKey, moveOption, payOptions, planPayment } from './payment'
 import { detail, line, waiter, withWaiter } from './testData'
 
 // One full bottle at ₹220.00.
@@ -104,5 +104,51 @@ describe('planPayment for a waiter bill', () => {
       error: 'Over credit limit: ₹100.00 headroom, ₹220.00 asked',
     })
     expect(planPayment(d, { option: 'partial', amount: 12000n, partialTender: 'CASH' })).toMatchObject({ ok: true })
+  })
+})
+
+describe('moveOption', () => {
+  const counter = ['cash', 'upi', 'split'] as const // Cash UPI / Split
+  const trusted = ['cash', 'upi', 'partial', 'credit'] as const // Cash UPI / Partial Collect-later
+
+  it('steps sideways within a row with ← / →, never wrapping to another row', () => {
+    expect(moveOption(counter, 'cash', 'ArrowRight')).toBe('upi')
+    expect(moveOption(counter, 'upi', 'ArrowLeft')).toBe('cash')
+    expect(moveOption(counter, 'upi', 'ArrowRight')).toBe('upi')
+    expect(moveOption(counter, 'cash', 'ArrowLeft')).toBe('cash')
+    expect(moveOption(trusted, 'upi', 'ArrowRight')).toBe('upi')
+    expect(moveOption(trusted, 'partial', 'ArrowLeft')).toBe('partial')
+  })
+
+  it('moves a row with ↑ / ↓, staying put off the grid or onto an empty cell', () => {
+    expect(moveOption(counter, 'cash', 'ArrowDown')).toBe('split')
+    expect(moveOption(counter, 'split', 'ArrowUp')).toBe('cash')
+    expect(moveOption(counter, 'upi', 'ArrowDown')).toBe('upi')
+    expect(moveOption(trusted, 'upi', 'ArrowDown')).toBe('credit')
+    expect(moveOption(trusted, 'cash', 'ArrowUp')).toBe('cash')
+    expect(moveOption(['cash', 'upi'], 'cash', 'ArrowDown')).toBe('cash')
+  })
+
+  it('ignores other keys and an option that is not offered', () => {
+    expect(moveOption(counter, 'cash', 'Tab')).toBe('cash')
+    expect(moveOption(counter, 'credit', 'ArrowRight')).toBe('credit')
+  })
+})
+
+describe('amountKey', () => {
+  it('builds a tendered amount from digits, "." and ",", with Backspace', () => {
+    expect(amountKey('', '5')).toBe('5')
+    expect(amountKey('5', '0')).toBe('50')
+    expect(amountKey('2,00', '0')).toBe('2,000')
+    expect(amountKey('499', '.')).toBe('499.')
+    expect(amountKey('500', 'Backspace')).toBe('50')
+    expect(amountKey('', 'Backspace')).toBe('')
+  })
+
+  it('ignores other keys and stops at 12 characters', () => {
+    expect(amountKey('5', 'u')).toBeNull()
+    expect(amountKey('5', 'Enter')).toBeNull()
+    expect(amountKey('5', 'ArrowLeft')).toBeNull()
+    expect(amountKey('123456789012', '3')).toBe('123456789012')
   })
 })

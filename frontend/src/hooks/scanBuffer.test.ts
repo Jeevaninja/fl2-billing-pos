@@ -95,3 +95,88 @@ describe('scanKey', () => {
     expect(state.text).toHaveLength(64)
   })
 })
+
+describe('scanKey quantity edit (Phase 12)', () => {
+  /** Like feed(), with a selected row of `target` bottles (null = nothing editable). */
+  function feedQty(keys: string[], target: number | null = 1, start: ScanState = EMPTY_SCAN) {
+    let state = start
+    let now = 1_000
+    const effects: unknown[] = []
+    const handled: boolean[] = []
+    for (const key of keys) {
+      const result = scanKey(state, { key, now: (now += 1) }, { qtyTarget: target })
+      state = result.state
+      handled.push(result.handled)
+      if (result.effect) effects.push(result.effect)
+    }
+    return { state, effects, handled }
+  }
+
+  it('opens the selected row on Enter with an empty buffer, showing its quantity as fresh', () => {
+    expect(feedQty(['Enter'], 1).state.qtyEdit).toEqual({ text: '1', fresh: true })
+    expect(feedQty(['Enter'], 4).state.qtyEdit).toEqual({ text: '4', fresh: true })
+  })
+
+  it('does nothing on an empty Enter when no row can be edited', () => {
+    const { state, handled } = feedQty(['Enter'], null)
+    expect(state.qtyEdit).toBeNull()
+    expect(handled).toEqual([false])
+  })
+
+  it('replaces the shown quantity with the first digit, appends the second, and Enter sets it', () => {
+    expect(feedQty(['Enter', '2', 'Enter']).effects).toEqual([{ type: 'setQty', quantity: 2 }])
+    expect(feedQty(['Enter', '1', '2', 'Enter']).effects).toEqual([{ type: 'setQty', quantity: 12 }])
+    const { state } = feedQty(['Enter', '2', 'Enter'])
+    expect(state.qtyEdit).toBeNull()
+  })
+
+  it('keeps the quantity on Enter, Enter (the fast path to Payment)', () => {
+    expect(feedQty(['Enter', 'Enter'], 3).effects).toEqual([{ type: 'setQty', quantity: 3 }])
+  })
+
+  it('adjusts with + and −, bounded to 1–99', () => {
+    expect(feedQty(['Enter', '+', '+', 'Enter'], 1).effects).toEqual([{ type: 'setQty', quantity: 3 }])
+    expect(feedQty(['Enter', '-', '-', 'Enter'], 1).effects).toEqual([{ type: 'setQty', quantity: 1 }])
+    expect(feedQty(['Enter', '9', '9', '+', 'Enter'], 1).effects).toEqual([{ type: 'setQty', quantity: 99 }])
+  })
+
+  it('edits with Backspace; an emptied field keeps the current quantity', () => {
+    expect(feedQty(['Enter', '1', '2', 'Backspace', 'Enter']).effects).toEqual([{ type: 'setQty', quantity: 1 }])
+    expect(feedQty(['Enter', 'Backspace', 'Enter'], 5).effects).toEqual([{ type: 'setQty', quantity: 5 }])
+  })
+
+  it('reports 0 but keeps the edit open', () => {
+    const { state, effects } = feedQty(['Enter', '0', 'Enter'])
+    expect(effects).toEqual([{ type: 'setQty', quantity: 0 }])
+    expect(state.qtyEdit).toEqual({ text: '0', fresh: false })
+  })
+
+  it('cancels on Esc, and ↑ / ↓ / Delete leave the edit and act on the rows', () => {
+    expect(feedQty(['Enter', '5', 'Escape']).state).toMatchObject({ qtyEdit: null, text: '' })
+    expect(feedQty(['Enter', 'ArrowUp']).effects).toEqual([{ type: 'command', command: 'up' }])
+    expect(feedQty(['Enter', 'Delete']).effects).toEqual([{ type: 'command', command: 'decrement' }])
+  })
+
+  it('turns a barcode fired mid-edit into a scan, never a quantity', () => {
+    const { effects, state } = feedQty(['Enter', ...'8901234567890', 'Enter'])
+    expect(effects).toEqual([{ type: 'commit', code: '8901234567890', quantity: 1 }])
+    expect(state.qtyEdit).toBeNull()
+  })
+
+  it('turns a typed SKU code mid-edit into a scan, keeping the "N*" prefix rule', () => {
+    expect(feedQty(['Enter', ...'HWHS-Q', 'Enter']).effects).toEqual([{ type: 'commit', code: 'HWHS-Q', quantity: 1 }])
+    expect(feedQty(['Enter', '3', '*', ...'HWHS-Q', 'Enter']).effects).toEqual([{ type: 'commit', code: 'HWHS-Q', quantity: 3 }])
+  })
+
+  it('drops the edit when the row goes away and handles the key normally', () => {
+    const open = feedQty(['Enter'], 2).state
+    const result = scanKey(open, { key: 'A', now: 5_000 }, { qtyTarget: null })
+    expect(result.state).toMatchObject({ qtyEdit: null, text: 'A' })
+  })
+
+  it('is not reset by the idle timeout while the cashier thinks', () => {
+    const open = feedQty(['Enter'], 2).state
+    const result = scanKey(open, { key: '3', now: open.lastAt + 10_000 }, { qtyTarget: 2 })
+    expect(result.state.qtyEdit).toEqual({ text: '3', fresh: false })
+  })
+})

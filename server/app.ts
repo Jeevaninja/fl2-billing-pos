@@ -173,6 +173,7 @@ function buildRoutes({ db, cashierId }: ApiConfig): Route[] {
     }),
 
     // ── Peak ──
+    route('POST', '/api/peak/undo-last', async () => created(await billing.undoLastPeakSale(cashierId))),
     route('GET', '/api/peak/baseline', async () => {
       const day = await queries.getCounterContext(cashierId);
       if (!day.businessDay) throw new NotFoundError('business day', 'open');

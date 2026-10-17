@@ -17,7 +17,7 @@ export function SizeChip({ size }: { size: SizeCode }) {
 
 // ── Scan bar ─────────────────────────────────────────────────────────────────
 
-export function ScanBar({ scan, flash, enabled }: { scan: ScanState; flash: Flash | null; enabled: boolean }) {
+export function ScanBar({ scan, flash, enabled, qtyLabel }: { scan: ScanState; flash: Flash | null; enabled: boolean; qtyLabel?: string | undefined }) {
   return (
     <div className="flex items-center gap-4 border-b-2 border-zinc-800 bg-zinc-900 px-4 py-3">
       <ScanBarcode className="size-7 shrink-0 text-amber-400" aria-hidden />
@@ -26,14 +26,20 @@ export function ScanBar({ scan, flash, enabled }: { scan: ScanState; flash: Flas
         aria-label="Scan buffer"
         aria-live="off"
       >
+        {scan.qtyEdit && (
+          <>
+            <span className="min-w-0 truncate text-base text-amber-300">Qty · {qtyLabel ?? 'this line'}</span>
+            <span className="ml-auto shrink-0 font-sans text-sm whitespace-nowrap text-zinc-400">Enter pay · +/− · Esc cancel</span>
+          </>
+        )}
         {scan.quantity !== null && <span className="rounded bg-amber-400 px-2 text-lg font-black text-zinc-950">{scan.quantity} ×</span>}
         <span className="truncate">{scan.text}</span>
-        {enabled ? (
+        {scan.qtyEdit ? null : enabled ? (
           <span className="h-7 w-0.5 animate-pulse bg-amber-400" aria-hidden />
         ) : (
           <span className="text-base text-zinc-500">paused</span>
         )}
-        {scan.text === '' && scan.quantity === null && enabled && (
+        {scan.text === '' && scan.quantity === null && scan.qtyEdit === null && enabled && (
           <span className="truncate text-base whitespace-nowrap text-zinc-500">Scan, or type a SKU code + Enter · 3* = qty 3</span>
         )}
       </div>
@@ -61,6 +67,16 @@ export function FlashLine({ flash }: { flash: Flash | null }) {
 
 // ── Items grid ───────────────────────────────────────────────────────────────
 
+/** The quantity being typed: a fresh value (the row's own) is highlighted, as the next digit replaces it. */
+function QtyBox({ edit }: { edit: NonNullable<ScanState['qtyEdit']> }) {
+  return (
+    <span aria-label={`Quantity ${edit.text || 'blank'}`} className="inline-flex min-w-14 items-center justify-end gap-0.5 rounded border-2 border-amber-400 bg-zinc-950 px-2 py-0.5">
+      <span className={edit.fresh ? 'rounded-sm bg-amber-400 px-0.5 text-zinc-950' : ''}>{edit.text}</span>
+      <span className="h-6 w-0.5 animate-pulse bg-amber-400" aria-hidden />
+    </span>
+  )
+}
+
 export function ItemsGrid({
   rows,
   pending,
@@ -68,12 +84,15 @@ export function ItemsGrid({
   onSelect,
   receipt,
   empty,
+  qtyEdit = null,
 }: {
   rows: ItemRow[]
   pending: PendingScan[]
   selectedKey: string | null
   onSelect: (key: string) => void
   receipt: Receipt | null
+  /** The selected row's quantity being typed (Enter → qty), shown in place of its Qty. */
+  qtyEdit?: ScanState['qtyEdit']
   /** Shown instead of the scan hint / receipt when there are no rows. */
   empty?: ReactNode
 }) {
@@ -107,7 +126,9 @@ export function ItemsGrid({
                 <td className="px-2 py-2.5">
                   <SizeChip size={row.sizeCode} />
                 </td>
-                <td className="px-2 py-2.5 text-right font-mono text-xl font-bold tabular-nums">{row.quantity}</td>
+                <td className="px-2 py-2.5 text-right font-mono text-xl font-bold tabular-nums">
+                  {selected && qtyEdit ? <QtyBox edit={qtyEdit} /> : row.quantity}
+                </td>
                 <td className="px-2 py-2.5 text-right font-mono text-zinc-300 tabular-nums">{formatPaise(row.unitPricePaise)}</td>
                 <td className="px-4 py-2.5 text-right font-mono font-bold tabular-nums">{formatPaise(row.amountPaise)}</td>
               </tr>
@@ -157,6 +178,7 @@ const FOOTER_KEYS: Record<'NORMAL' | 'PEAK', Array<[string[], string]>> = {
     [['↑', '↓'], 'select'],
     [['+'], 'add one'],
     [['−'], 'remove one'],
+    [['Enter'], 'qty → pay'],
     [['F1'], 'new'],
     [['F2'], 'member'],
     [['F4'], 'waiter'],

@@ -3,10 +3,10 @@ import type { BillDetail, CounterTender } from '../api/types'
 import { Kbd } from '../components/ui'
 import { formatPaise, parseRupeesToPaise } from '../lib/money'
 import { Modal } from './Modal'
-import { payOptions, planPayment, type PayOption, type PayPlan } from './payment'
+import { amountKey, moveOption, payOptions, planPayment, type PayOption, type PayPlan } from './payment'
 
 const OPTION_INFO: Record<PayOption, { key: string; label: string; amountLabel?: string }> = {
-  cash: { key: 'C', label: 'Cash', amountLabel: 'Cash tendered (blank = exact)' },
+  cash: { key: 'C', label: 'Cash', amountLabel: 'Cash tendered — optional, Enter settles exact' },
   upi: { key: 'U', label: 'UPI' },
   split: { key: 'S', label: 'Split Cash + UPI', amountLabel: 'Cash part' },
   partial: { key: 'P', label: 'Partial', amountLabel: 'Paid now' },
@@ -35,9 +35,13 @@ export function PaymentDialog({ detail, busy, onConfirm, onClose }: PaymentDialo
   const invalidAmount = amountText.trim() !== '' && amount === null
   const result = useMemo(() => planPayment(detail, { option, amount, partialTender }), [detail, option, amount, partialTender])
 
+  // Split and Partial need an amount, so their field takes focus. Cash doesn't: Enter settles the
+  // exact amount, and digits typed anyway go to the tendered field (see onKey) without focusing it.
+  const needsAmount = option === 'split' || option === 'partial'
   useEffect(() => {
-    if (info.amountLabel) inputRef.current?.focus()
-  }, [option, info.amountLabel])
+    if (needsAmount) inputRef.current?.focus()
+    else if (document.activeElement === inputRef.current) inputRef.current?.blur()
+  }, [option, needsAmount])
 
   function choose(next: PayOption) {
     if (!options.includes(next)) return
@@ -69,6 +73,24 @@ export function PaymentDialog({ detail, busy, onConfirm, onClose }: PaymentDialo
           choose(picked)
           return true
         }
+        const inField = document.activeElement === inputRef.current
+        if (option === 'cash' && !inField && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          const typed = amountKey(amountText, e.key)
+          if (typed !== null) {
+            setAmountText(typed)
+            setShowError(false)
+            return true
+          }
+        }
+        if (e.key.startsWith('Arrow')) {
+          // ←/→ move the caret instead while an amount is typed; ↑/↓ always switch.
+          const sideways = e.key === 'ArrowLeft' || e.key === 'ArrowRight'
+          if (sideways && amountText !== '' && inField) return false
+          if (sideways && amountText !== '') return true // keep a typed tender; ↑/↓ still switch
+          const next = moveOption(options, option, e.key)
+          if (next !== option) choose(next)
+          return true
+        }
         if (e.key === 'Enter' || e.key === 'F9') {
           confirm()
           return true
@@ -78,7 +100,10 @@ export function PaymentDialog({ detail, busy, onConfirm, onClose }: PaymentDialo
       footer={
         <div className="flex items-center justify-between gap-3">
           <span className="text-sm text-zinc-400">
-            <Kbd>Enter</Kbd> or <Kbd>F9</Kbd> confirm
+            <Kbd>←</Kbd>
+            <Kbd>→</Kbd>
+            <Kbd>↑</Kbd>
+            <Kbd>↓</Kbd> method · <Kbd>Enter</Kbd> or <Kbd>F9</Kbd> confirm
           </span>
           <button
             type="button"
@@ -126,15 +151,15 @@ export function PaymentDialog({ detail, busy, onConfirm, onClose }: PaymentDialo
             <span className="font-mono text-2xl text-zinc-500">₹</span>
             <input
               ref={inputRef}
-              data-autofocus
               inputMode="decimal"
+              placeholder={option === 'cash' ? `exact ${formatPaise(due)}` : undefined}
               autoComplete="off"
               value={amountText}
               onChange={(e) => {
                 setAmountText(e.target.value.replace(/[^\d.,]/g, ''))
                 setShowError(false)
               }}
-              className="w-full bg-transparent px-2 py-2 font-mono text-2xl tabular-nums outline-none"
+              className="w-full bg-transparent px-2 py-2 font-mono text-2xl tabular-nums outline-none placeholder:text-zinc-600"
             />
           </div>
         </label>

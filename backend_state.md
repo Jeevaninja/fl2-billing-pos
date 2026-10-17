@@ -1,6 +1,6 @@
 # FL2 POS — Backend State Reference
 
-Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`), Phase 10 master catalog and case-based inwarding (`0009_catalog_case_size`, `CatalogService`; plan `docs/ui/phase10-catalog-case-grn-plan.md`), and Phase 11 peak start baseline and Day End sales breakdown (no migration; plan `docs/ui/phase11-peak-day-end-visibility-plan.md`). Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
+Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`), Phase 10 master catalog and case-based inwarding (`0009_catalog_case_size`, `CatalogService`; plan `docs/ui/phase10-catalog-case-grn-plan.md`), Phase 11 peak start baseline and Day End sales breakdown (no migration; plan `docs/ui/phase11-peak-day-end-visibility-plan.md`), and Phase 12 server-side peak undo (no migration; plan `docs/ui/phase12-billing-speed-plan.md`). Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
 
 - **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`, `0006_expense_category`, `0007_peak_drawer_cash`, `0008_stock_receipts`, `0009_catalog_case_size`.
 - **Money:** `BIGINT` whole paise in SQL, `bigint` in TypeScript (`type Paise = bigint`). No floats anywhere.
@@ -180,6 +180,7 @@ class BillingService {
   cancelBillItem(billId: string, itemId: string, quantity: number, options?: { restock?: boolean }): Promise<BillLine>;
   recordPeakSale(sessionId: string, skuId: string, quantity: number, cashierId: string): Promise<BillLine>;
   reverseBill(billId: string, reason: string, staffId: string, options?: ReverseBillOptions): Promise<ReversalResult>;
+  undoLastPeakSale(cashierId: string): Promise<PeakUndoResult>;   // Phase 12: { reversal, undone: { billId, billNo, sessionNo, displayName, sizeCode, quantity, totalPaise } }
 }
 
 interface CounterPayment { mode: CounterTender; amount: Paise; }
@@ -192,6 +193,8 @@ interface ReverseBillOptions {
 }
 interface ReversalResult { reversal: Bill; refunds: BillPayment[]; }
 ```
+
+- **`undoLastPeakSale` (Phase 12):** locks the running peak session row, then reverses this cashier's newest peak SALE bill in it that has no reversal yet (`reverseInTx`, the body shared with `reverseBill`). Repeated calls walk back one scan at a time and never reach an ended session. The till's cashier id stands for the terminal: Captain handsets never create peak bills.
 
 **Open-bill edits** (OPEN NORMAL sale bills only; settled bills give `PS001`, peak bills `PS002`):
 - **`setBillMember`:** attaches, swaps or clears (`null`) the member. Missing member is `NotFoundError`, inactive member `PS002`.
@@ -538,6 +541,7 @@ Migrations run on every boot (already-applied ones are skipped).
 | `POST /api/bills/:billId/close-empty` | | `closeEmptyBill` | 200 |
 | `POST /api/bills/:billId/reverse` | `{ reason, restock?, creditRefundTender?, peakRefundTender? }` | `reverseBill(…, cashier, …)` | 201 |
 | `POST /api/peak/sales` | `{ sessionId, skuId, quantity }` | `recordPeakSale(…, cashier)` | 201 |
+| `POST /api/peak/undo-last` | `{}` | `undoLastPeakSale(cashier)`: PS007 with no running session, 404 when nothing is left | 201 |
 | `GET /api/peak/baseline` | | `getStartBaseline(open day)`; 404 when no day is open | 200 |
 | `POST /api/peak/sessions` | `{ businessDayId, declaredCash, declaredUpi }` | `startPeakSession(…, cashier)` | 201 |
 | `POST /api/peak/sessions/:sessionId/end` | `{ countedCash, countedUpi }` | `endPeakSession(…, cashier)` | 200 |

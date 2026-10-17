@@ -1,5 +1,5 @@
 export { BillingService } from './billing.service.js';
-export type { BillLine, CounterPayment, ReversalResult, ReverseBillOptions, SettledBill } from './billing.service.js';
+export type { BillLine, CounterPayment, PeakUndoResult, ReversalResult, ReverseBillOptions, SettledBill } from './billing.service.js';
 export {
   CatalogService,
   DEFAULT_CASE_SIZE,

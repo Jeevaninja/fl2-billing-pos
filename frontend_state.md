@@ -1,6 +1,6 @@
 # FL2 POS — Frontend State Reference
 
-As of Phase 11 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders, Phase 7 Day End, Phase 8 Expenses and peak controls, Phase 9 Purchase / GRN, Phase 10 Inventory Catalog and case-based GRN, Phase 11 peak start baseline and Day End sales breakdown; plan `docs/ui/phase11-peak-day-end-visibility-plan.md`). Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
+As of Phase 11 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders, Phase 7 Day End, Phase 8 Expenses and peak controls, Phase 9 Purchase / GRN, Phase 10 Inventory Catalog and case-based GRN, Phase 11 peak start baseline and Day End sales breakdown, Phase 12 Enter → qty → pay, payment arrow keys and server-side peak undo; plan `docs/ui/phase12-billing-speed-plan.md`). Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
 
 - **Stack:** Vite 8, React 19, TypeScript, Tailwind CSS 4 (`@tailwindcss/vite`), Lucide icons, Vitest. No router, no state library.
 - **Run:** `npm run api:dev` at the repo root (API on `127.0.0.1:4310`), then `npm run dev` in `frontend/` (http://localhost:5173). Vite proxies `/api` to the API.
@@ -120,6 +120,8 @@ Shared: components/peak/PeakControls.tsx: PeakBanner, StartPeakButton, PeakStart
 | `expense/expenseReducer.ts` | `expenseReducer`, `initialExpenseState`, `CATEGORIES`, `CATEGORY_LABEL`, `formError`, `formPayload`, `todayTotals` |
 | `purchase/purchaseReducer.ts` | `purchaseReducer`, `initialPurchaseState`, `MAX_LINE_QTY`, `lineError`, `submitError`, `submitPayload`, `lineTotal`, `stagedTotals`, `pickFromSearch`, `entryCount`, `bottlesFor`, `mergeCounts`, `countLabel` |
 | `catalog/catalogReducer.ts` | `catalogReducer`, `initialCatalogState`, `catalogRows`, `suggestPrefix`, `skuCodePreview`, `formError`, `newProductPayload`, `productPatch`, `addSkuPayload`, `skuPatch`, `deactivates`, `conflictField`, `DEFAULT_CASE_SIZE` |
+| `billing/billingReducer.ts` (Phase 12) | adds `cancelPlan` |
+| `billing/payment.ts` (Phase 12) | adds `moveOption` |
 | `peak/peakMath.ts` | `parseReadings`, `describeVariance`, `compareReading`, `describeBaseline` |
 | `dayend/salesRows.ts` | `salesCard` (rows, repayments, warnings) |
 | `dayend/dayEndReducer.ts` | `dayEndReducer`, `initialDayEndState`, `dayEndView`, `blockerCount`, `openCounterBills`, `countedPaise`, `variancePreview`, `lockBlock` |
@@ -221,17 +223,20 @@ interface BillingState {
 | Key | NORMAL | PEAK | In a dialog |
 |---|---|---|---|
 | Printable chars + Enter | Scan / typed SKU code → add | Scan → one peak bill | Typed into the field |
+| Enter (empty buffer) | Edit the selected row's quantity: digits (1–99, first replaces), `+`/`−`, Backspace, Esc; Enter sets it and opens Payment. A 3rd digit or any other character turns the edit into a scan | — | Confirm |
 | `N*` | Quantity prefix (1–99) | Same | — |
 | ↑ / ↓ | Select row (empty buffer) | — | Move picker highlight |
 | `+` / `−` / Delete | Add / cancel one bottle on the selected row (empty buffer) | — | — |
 | F1 | New bill (close an empty bill or confirm abandon) | — | Swallowed |
 | F2 / F4 | Member / waiter dialog (waiter locked after the first tender) | Refused with a message | Swallowed |
 | F9 | Pay (closes a ₹0 bill instead) | Refused: peak bills reconcile at session end | Confirm (payment) |
-| Ctrl+Z | — | Undo last scan (`reverseBill`) | — |
+| Ctrl+Z | — | `POST /api/peak/undo-last`: voids this till's newest un-voided scan (works after a reload; auto-repeat ignored) | — |
 | Esc | Clear buffer, else back to the dashboard | Same | Close dialog |
 | C / U / S / P / L | — | — | Payment option |
+| ← → ↑ ↓ | — | — | Payment: move in the 2-column option grid, no wrap (`moveOption`); ←/→ move the caret while an amount is typed |
+| Digits / Backspace | — | — | Payment, Cash highlighted: type the tendered amount without focusing the field (`amountKey`). The field is optional and never auto-focused, so Enter settles the exact amount; Split / Partial focus their required amount field |
 
-No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDown` preventDefault), so a click doesn't move focus. Enter with an empty buffer is left alone, so a focused button still works.
+No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDown` preventDefault), so a click doesn't move focus. Enter with an empty buffer is left alone (so a focused button still works) unless a row is selected in NORMAL mode, when it opens the quantity edit. The edit lives in the scan buffer (`ScanState.qtyEdit`), not an `<input>`, so a scanner can't type into a field; the grid shows it as an amber box in the row's Qty cell. `setQuantity` adds bottles, or cancels them newest line first (`cancelPlan`), then opens Payment.
 
 ---
 
@@ -239,7 +244,7 @@ No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDow
 
 | File | Contents |
 |---|---|
-| `api/client.ts` | `api.*` (`context`, `lookupSku`, `searchMembers`, `listWaiters`, `getBill`, `captainOrders`, `createBill`, `addItem`, `cancelItem` (optional `restock`), `setMember`, `tagWaiter`, `settle`, `settleWaiter`, `closeEmpty`, `reverse`, `peakSale`, `searchSkus`, `listPurchases`, `postPurchase`, `listCatalog`, `createProduct`, `updateProduct`, `addSku`, `updateSku`, `peakBaseline`), `ApiError` (`status`, `code`, `constraint` on a 409; `NETWORK` when unreachable or the proxy answers non-JSON 5xx), `reviveJson`, `encodeJson` |
+| `api/client.ts` | `api.*` (`context`, `lookupSku`, `searchMembers`, `listWaiters`, `getBill`, `captainOrders`, `createBill`, `addItem`, `cancelItem` (optional `restock`), `setMember`, `tagWaiter`, `settle`, `settleWaiter`, `closeEmpty`, `reverse`, `peakSale`, `searchSkus`, `listPurchases`, `postPurchase`, `listCatalog`, `createProduct`, `updateProduct`, `addSku`, `updateSku`, `peakBaseline`, `undoLastPeak`), `ApiError` (`status`, `code`, `constraint` on a 409; `NETWORK` when unreachable or the proxy answers non-JSON 5xx), `reviveJson`, `encodeJson` |
 | `api/types.ts` | Frontend mirrors of the API DTOs (`Bill`, `BillDetail`, `CounterContext`, `SkuLookup`, …) with `Paise = bigint`; dates stay ISO strings |
 | `billing/payment.ts` | `payOptions(detail)`, `planPayment(detail, input)` → counter tenders or waiter settle steps plus change, credit-limit pre-check, `describePlan` |
 | `billing/errors.ts` | `CounterError` (screen-raised), `counterErrorMessage(err)` (PS code → cashier wording) |

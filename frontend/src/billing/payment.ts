@@ -100,3 +100,32 @@ export function describePlan(plan: PayPlan, detail: BillDetail): string {
     )
     .join(' + ')
 }
+
+const GRID_COLUMNS = 2
+const ARROW_STEP: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -GRID_COLUMNS, ArrowDown: GRID_COLUMNS }
+
+/**
+ * Arrow-key movement across the dialog's 2-column option grid: ←/→ step sideways within a row,
+ * ↑/↓ move a row. No wrap: a move off the grid (or onto an empty cell) stays put.
+ */
+export function moveOption(options: readonly PayOption[], current: PayOption, key: string): PayOption {
+  const step = ARROW_STEP[key]
+  const at = options.indexOf(current)
+  if (step === undefined || at === -1) return current
+  const next = at + step
+  if (next < 0 || next >= options.length) return current
+  if (Math.abs(step) === 1 && Math.floor(next / GRID_COLUMNS) !== Math.floor(at / GRID_COLUMNS)) return current
+  return options[next] ?? current
+}
+
+const AMOUNT_MAX_LENGTH = 12
+
+/**
+ * Typing a tendered amount without focusing the field (Cash: the field is optional, blank = exact).
+ * Returns the new text, or null when the key is not amount input.
+ */
+export function amountKey(text: string, key: string): string | null {
+  if (key === 'Backspace') return text.slice(0, -1)
+  if (!/^[\d.,]$/.test(key)) return null
+  return text.length >= AMOUNT_MAX_LENGTH ? text : text + key
+}

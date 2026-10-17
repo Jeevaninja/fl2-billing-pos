@@ -19,6 +19,7 @@ import type {
   PeakReconciliation,
   PeakSession,
   PeakStartBaseline,
+  PeakUndoResult,
   ProductPatch,
   ReceiptLinePayload,
   SkuLookup,
@@ -111,6 +112,8 @@ export const api = {
   reverse: (billId: string, reason: string) => call<{ reversal: Bill }>('POST', `${bill(billId)}/reverse`, { reason }),
   peakSale: (sessionId: string, skuId: string, quantity: number) =>
     call<BillLine>('POST', '/api/peak/sales', { sessionId, skuId, quantity }),
+  /** Voids this till's newest peak scan in the running session (404 when none is left). */
+  undoLastPeak: () => call<PeakUndoResult>('POST', '/api/peak/undo-last'),
   /** Expected drawer cash and UPI so far on the open day (404 when no day is open). */
   peakBaseline: () => call<PeakStartBaseline>('GET', '/api/peak/baseline'),
   startPeak: (businessDayId: string, declaredCash: Paise, declaredUpi: Paise) =>

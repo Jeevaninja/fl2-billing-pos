@@ -1,7 +1,7 @@
 import type { SqlClient, SqlDatabase } from '../db/client.js';
 import { NotFoundError, PosError, PosErrorCode, withPosErrors } from '../db/errors.js';
 import { assertPaise, assertQuantity, type Paise, paiseParam } from '../domain/money.js';
-import type { Bill, BillingMode, BillItem, BillPayment, CounterTender, Tender } from '../domain/types.js';
+import type { Bill, BillingMode, BillItem, BillPayment, CounterTender, SizeCode, Tender } from '../domain/types.js';
 import {
   type BillItemRow,
   type BillPaymentRow,
@@ -41,6 +41,12 @@ export interface ReverseBillOptions {
   creditRefundTender?: CounterTender;
   /** Refund tender for a reconciled peak bill, which has no individual tenders to mirror. Default CASH. */
   peakRefundTender?: CounterTender;
+}
+
+export interface PeakUndoResult {
+  reversal: Bill;
+  /** The scan that was voided. */
+  undone: { billId: string; billNo: number; sessionNo: number; displayName: string; sizeCode: SizeCode; quantity: number; totalPaise: Paise };
 }
 
 export interface ReversalResult {
@@ -218,52 +224,106 @@ export class BillingService {
    */
   async reverseBill(billId: string, reason: string, staffId: string, options: ReverseBillOptions = {}): Promise<ReversalResult> {
     if (reason.trim() === '') throw new RangeError('a reversal reason is required');
-    const restock = options.restock ?? true;
+    return withPosErrors(() => this.db.transaction((tx) => reverseInTx(tx, billId, reason, staffId, options)));
+  }
 
+  /**
+   * Peak instant undo: reverses this cashier's newest peak scan in the running session that has not
+   * been reversed yet (repeated calls walk back). The session row is locked first, so two fast undos
+   * never pick the same bill and an undo racing the session's end is refused.
+   */
+  async undoLastPeakSale(cashierId: string): Promise<PeakUndoResult> {
     return withPosErrors(() =>
       this.db.transaction(async (tx) => {
-        const original = await getBill(tx, billId, { forUpdate: true });
-        const mode: BillingMode = original.status === 'PEAK_UNSETTLED' ? 'PEAK' : 'NORMAL';
-
-        const reversal = mapBill(
-          await one<BillRow>(
-            tx,
-            `INSERT INTO bills (bill_kind, billing_mode, status, source, reverses_bill_id, reversal_reason, created_by_staff_id)
-             VALUES ('REVERSAL', $1, $2, 'COUNTER', $3, $4, $5) RETURNING *`,
-            [mode, mode === 'PEAK' ? 'PEAK_UNSETTLED' : 'OPEN', billId, reason, staffId],
-          ),
+        const session = await maybeOne<{ id: string; session_no: number }>(
+          tx,
+          `SELECT s.id, s.session_no FROM peak_sessions s
+             JOIN business_days d ON d.id = s.business_day_id AND d.status = 'OPEN'
+            WHERE s.ended_at IS NULL
+            FOR UPDATE OF s`,
         );
+        if (!session) throw new PosError(PosErrorCode.DAY_OR_PEAK_RULE, 'no peak session is running');
 
-        const { rows: lines } = await tx.query<{ id: string; remaining: number }>(
-          `SELECT o.id,
-                  (o.qty + coalesce((SELECT sum(c.qty) FROM bill_items c WHERE c.reverses_item_id = o.id), 0))::int AS remaining
-             FROM bill_items o
-            WHERE o.bill_id = $1 AND o.qty > 0
-            ORDER BY o.line_no`,
-          [billId],
+        const last = await maybeOne<{ id: string }>(
+          tx,
+          `SELECT b.id FROM bills b
+            WHERE b.peak_session_id = $1 AND b.bill_kind = 'SALE' AND b.status = 'PEAK_UNSETTLED' AND b.created_by_staff_id = $2
+              AND NOT EXISTS (SELECT 1 FROM bills r WHERE r.reverses_bill_id = b.id)
+            ORDER BY b.bill_no DESC
+            LIMIT 1`,
+          [session.id, cashierId],
         );
-        for (const line of lines) {
-          if (line.remaining === 0) continue;
-          await tx.query(
-            `INSERT INTO bill_items (bill_id, reverses_item_id, qty, restock, created_by_staff_id) VALUES ($1, $2, $3, $4, $5)`,
-            [reversal.id, line.id, -line.remaining, restock, staffId],
-          );
-        }
+        if (!last) throw new NotFoundError('peak scan to undo', `peak #${session.session_no}`);
 
-        if (mode === 'PEAK') return { reversal: await getBill(tx, reversal.id), refunds: [] };
-
-        const refunds: BillPayment[] = [];
-        if (original.mode === 'PEAK') {
-          if (original.totalPaise > 0n) {
-            refunds.push(await insertPayment(tx, reversal.id, options.peakRefundTender ?? 'CASH', -original.totalPaise, null, staffId));
-          }
-        } else {
-          refunds.push(...(await refundTenders(tx, original, reversal.id, staffId, options.creditRefundTender ?? 'CASH')));
-        }
-        return { reversal: await settle(tx, reversal.id, staffId), refunds };
+        const original = await getBill(tx, last.id);
+        const line = await one<BillItemRow>(tx, `SELECT * FROM bill_items WHERE bill_id = $1 AND qty > 0 ORDER BY line_no LIMIT 1`, [last.id]);
+        const { reversal } = await reverseInTx(tx, last.id, 'Undo scan', cashierId, {});
+        const item = mapBillItem(line);
+        return {
+          reversal,
+          undone: {
+            billId: original.id,
+            billNo: original.billNo,
+            sessionNo: session.session_no,
+            displayName: item.displayName,
+            sizeCode: item.sizeCode,
+            quantity: item.quantity,
+            totalPaise: original.totalPaise,
+          },
+        };
       }),
     );
   }
+}
+
+/** The body of reverseBill, inside the caller's transaction. */
+async function reverseInTx(
+  tx: SqlClient,
+  billId: string,
+  reason: string,
+  staffId: string,
+  options: ReverseBillOptions,
+): Promise<ReversalResult> {
+  const restock = options.restock ?? true;
+  const original = await getBill(tx, billId, { forUpdate: true });
+  const mode: BillingMode = original.status === 'PEAK_UNSETTLED' ? 'PEAK' : 'NORMAL';
+
+  const reversal = mapBill(
+    await one<BillRow>(
+      tx,
+      `INSERT INTO bills (bill_kind, billing_mode, status, source, reverses_bill_id, reversal_reason, created_by_staff_id)
+       VALUES ('REVERSAL', $1, $2, 'COUNTER', $3, $4, $5) RETURNING *`,
+      [mode, mode === 'PEAK' ? 'PEAK_UNSETTLED' : 'OPEN', billId, reason, staffId],
+    ),
+  );
+
+  const { rows: lines } = await tx.query<{ id: string; remaining: number }>(
+    `SELECT o.id,
+            (o.qty + coalesce((SELECT sum(c.qty) FROM bill_items c WHERE c.reverses_item_id = o.id), 0))::int AS remaining
+       FROM bill_items o
+      WHERE o.bill_id = $1 AND o.qty > 0
+      ORDER BY o.line_no`,
+    [billId],
+  );
+  for (const line of lines) {
+    if (line.remaining === 0) continue;
+    await tx.query(
+      `INSERT INTO bill_items (bill_id, reverses_item_id, qty, restock, created_by_staff_id) VALUES ($1, $2, $3, $4, $5)`,
+      [reversal.id, line.id, -line.remaining, restock, staffId],
+    );
+  }
+
+  if (mode === 'PEAK') return { reversal: await getBill(tx, reversal.id), refunds: [] };
+
+  const refunds: BillPayment[] = [];
+  if (original.mode === 'PEAK') {
+    if (original.totalPaise > 0n) {
+      refunds.push(await insertPayment(tx, reversal.id, options.peakRefundTender ?? 'CASH', -original.totalPaise, null, staffId));
+    }
+  } else {
+    refunds.push(...(await refundTenders(tx, original, reversal.id, staffId, options.creditRefundTender ?? 'CASH')));
+  }
+  return { reversal: await settle(tx, reversal.id, staffId), refunds };
 }
 
 // ── Shared steps (run inside the caller's transaction) ───────────────────────

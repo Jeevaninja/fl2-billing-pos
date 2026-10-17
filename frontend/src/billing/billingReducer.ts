@@ -207,3 +207,20 @@ export function stockLeft(onHandBefore: number, sold: number): string {
   const left = Math.max(0, onHandBefore - sold)
   return left === 0 ? 'last in stock' : `${left} left`
 }
+
+/**
+ * Which lines to cancel to take `count` bottles off a grouped row: newest lines first, each by at
+ * most its bottles left. Cancellations are append-only lines that restock.
+ */
+export function cancelPlan(items: readonly BillDetailItem[], rowKey: string, count: number): Array<{ itemId: string; quantity: number }> {
+  const plan: Array<{ itemId: string; quantity: number }> = []
+  let left = count
+  for (const item of [...items].reverse()) {
+    if (left === 0) break
+    if (`${item.skuId}:${item.unitPricePaise}` !== rowKey || item.quantity <= 0 || item.remainingQuantity <= 0) continue
+    const take = Math.min(left, item.remainingQuantity)
+    plan.push({ itemId: item.id, quantity: take })
+    left -= take
+  }
+  return plan
+}

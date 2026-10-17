@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { billingReducer, groupItems, initialBillingState, screenMode, stockLeft, totals, type BillingState, type PeakEntry } from './billingReducer'
+import { billingReducer, cancelPlan, groupItems, initialBillingState, screenMode, stockLeft, totals, type BillingState, type PeakEntry } from './billingReducer'
 import { context, detail, line, PEAK } from './testData'
 
 const ready = (over: Partial<BillingState> = {}): BillingState => ({
@@ -148,5 +148,29 @@ describe('stockLeft', () => {
     expect(stockLeft(58, 1)).toBe('57 left')
     expect(stockLeft(3, 3)).toBe('last in stock')
     expect(stockLeft(1, 2)).toBe('last in stock')
+  })
+})
+
+describe('cancelPlan', () => {
+  it('takes bottles off a row from its newest lines first, never past what is left', () => {
+    const a1 = line({ skuId: 'a', quantity: 2, lineNo: 1 })
+    const b1 = line({ skuId: 'b', quantity: 1, lineNo: 2 })
+    const a2 = line({ skuId: 'a', quantity: 1, lineNo: 3 })
+    const a3 = line({ skuId: 'a', quantity: 3, lineNo: 4, remainingQuantity: 1 }) // 2 already cancelled
+    const key = `a:${a1.unitPricePaise}`
+    expect(cancelPlan([a1, b1, a2, a3], key, 1)).toEqual([{ itemId: a3.id, quantity: 1 }])
+    expect(cancelPlan([a1, b1, a2, a3], key, 3)).toEqual([
+      { itemId: a3.id, quantity: 1 },
+      { itemId: a2.id, quantity: 1 },
+      { itemId: a1.id, quantity: 1 },
+    ])
+    expect(cancelPlan([a1, b1, a2, a3], key, 9)).toHaveLength(3)
+    expect(cancelPlan([a1, b1, a2, a3], key, 0)).toEqual([])
+  })
+
+  it('keeps rows at different prices apart', () => {
+    const old = line({ skuId: 'a', quantity: 1, unitPricePaise: 20000n })
+    const now = line({ skuId: 'a', quantity: 1, unitPricePaise: 22000n })
+    expect(cancelPlan([old, now], 'a:20000', 1)).toEqual([{ itemId: old.id, quantity: 1 }])
   })
 })

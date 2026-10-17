@@ -200,6 +200,12 @@ export interface DayEndSummary {
   peakSessions: PeakSessionCash[]
 }
 
+/** POST /api/peak/undo-last: the reversal and the scan it voided. */
+export interface PeakUndoResult {
+  reversal: Bill
+  undone: { billId: string; billNo: number; sessionNo: number; displayName: string; sizeCode: SizeCode; quantity: number; totalPaise: Paise }
+}
+
 /** What the till should hold right now, shown when a peak session is started. */
 export interface PeakStartBaseline {
   businessDayId: string
