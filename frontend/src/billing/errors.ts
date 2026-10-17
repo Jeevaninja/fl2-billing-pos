@@ -16,6 +16,8 @@ const LABELS: Record<string, string> = {
   PS008: 'Waiter balance',
   PS010: 'Bill-on-bill',
   PS011: 'Duplicate invoice',
+  PS012: 'Already in the catalog',
+  INACTIVE: 'Inactive',
   BAD_REQUEST: 'Invalid input',
   NOT_FOUND: 'Not found',
 }

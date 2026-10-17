@@ -57,7 +57,7 @@ describe('Inventory (whole sealed bottles)', () => {
     for (const size of ['PEG_30', '750ML', 'OPEN_BOTTLE']) {
       await expectSqlError(
         db.query(
-          `INSERT INTO skus (product_id, sku_code, size_code, display_name, price_paise) VALUES ($1, $2, $3, 'x', 100)`,
+          `INSERT INTO skus (product_id, sku_code, size_code, display_name, price_paise, case_size) VALUES ($1, $2, $3, 'x', 100, 12)`,
           [product.product_id, `X-${size}`, size],
         ),
         PgErrorCode.CHECK_VIOLATION,
@@ -66,7 +66,7 @@ describe('Inventory (whole sealed bottles)', () => {
     // One SKU per size per product.
     await expectSqlError(
       db.query(
-        `INSERT INTO skus (product_id, sku_code, size_code, display_name, price_paise) VALUES ($1, 'DUP', 'FULL', 'x', 100)`,
+        `INSERT INTO skus (product_id, sku_code, size_code, display_name, price_paise, case_size) VALUES ($1, 'DUP', 'FULL', 'x', 100, 12)`,
         [product.product_id],
       ),
       PgErrorCode.UNIQUE_VIOLATION,

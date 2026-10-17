@@ -1,17 +1,23 @@
 /**
  * PurchaseScreen (GRN) state machine. Pure and unit-tested: the invoice header, the SKU picker,
- * line entry, the staging list (add / merge / refuse / remove), totals and the submit states.
- * Quantities are whole bottles and costs whole paise; no floats.
+ * line entry in cases + loose bottles, the staging list (add / merge / refuse / remove), totals and
+ * the submit states. Quantities are whole bottles (cases × case size + loose) and costs whole
+ * paise; no floats.
  */
 import type { Paise, ReceiptLinePayload, SkuLookup, StockReceipt } from '../api/types'
 import type { Flash } from '../billing/billingReducer'
-import { formatPaise, parseRupeesToPaise } from '../lib/money'
+import { formatPaise, paiseToRupeeInput, parseRupeesToPaise } from '../lib/money'
 
 /** Per-line cap, mirrored from the server (MAX_RECEIPT_QTY): catches a mistyped quantity. */
 export const MAX_LINE_QTY = 100_000
 
 export interface StagedLine {
   sku: SkuLookup
+  cases: number
+  looseBottles: number
+  /** The SKU's case size when the line was counted (the server re-checks it). */
+  caseSize: number
+  /** Whole bottles: cases × caseSize + looseBottles. */
   quantity: number
   unitCostPaise: Paise
 }
@@ -31,7 +37,10 @@ export interface PurchaseState {
   results: SkuLookup[]
   highlighted: number
   picked: SkuLookup | null
-  qty: string
+  /** Digits only; empty counts as 0. */
+  cases: string
+  loose: string
+  /** Pre-filled from the catalog's default purchase price on pick; editable. */
   cost: string
   lines: StagedLine[]
   selectedLine: number | null
@@ -51,7 +60,8 @@ export const initialPurchaseState: PurchaseState = {
   results: [],
   highlighted: 0,
   picked: null,
-  qty: '',
+  cases: '',
+  loose: '',
   cost: '',
   lines: [],
   selectedLine: null,
@@ -72,10 +82,11 @@ export type PurchaseAction =
   | { type: 'results'; query: string; results: SkuLookup[] }
   | { type: 'highlight'; delta: number }
   | { type: 'pick'; sku: SkuLookup }
-  | { type: 'qty'; text: string }
+  | { type: 'cases'; text: string }
+  | { type: 'loose'; text: string }
   | { type: 'cost'; text: string }
   | { type: 'addLine' }
-  /** Esc in the entry fields: clear the SKU, quantity and cost. */
+  /** Esc in the entry fields: clear the SKU, cases, loose bottles and cost. */
   | { type: 'clearEntry' }
   | { type: 'selectLine'; index: number | null }
   | { type: 'removeLine'; index: number }
@@ -85,12 +96,31 @@ export type PurchaseAction =
   | { type: 'duplicate' }
   | { type: 'flash'; kind: Flash['kind']; text: string }
 
+/** Whole bottles for `cases` full cases plus `loose` bottles. */
+export function bottlesFor(cases: number, loose: number, caseSize: number): number {
+  return cases * caseSize + loose
+}
+
+/**
+ * The entry fields' count: cases, loose bottles and their whole-bottle total (empty fields are 0),
+ * or null before a SKU is picked.
+ */
+export function entryCount(state: Pick<PurchaseState, 'picked' | 'cases' | 'loose'>): { cases: number; loose: number; total: number } | null {
+  if (!state.picked) return null
+  const cases = state.cases === '' ? 0 : Number(state.cases)
+  const loose = state.loose === '' ? 0 : Number(state.loose)
+  return { cases, loose, total: bottlesFor(cases, loose, state.picked.caseSize) }
+}
+
 /** What still stops the entry fields from becoming a staged line, or null when they're ready. */
 export function lineError(state: PurchaseState): string | null {
-  if (!state.picked) return 'Pick a SKU'
-  if (state.qty === '') return 'Enter the quantity received'
-  const qty = Number(state.qty)
-  if (!Number.isSafeInteger(qty) || qty < 1 || qty > MAX_LINE_QTY) return 'Quantity must be 1 to 100,000 bottles'
+  const count = entryCount(state)
+  if (!state.picked || !count) return 'Pick a SKU'
+  if (state.cases === '' && state.loose === '') return 'Enter cases and / or loose bottles'
+  const { caseSize } = state.picked
+  if (count.loose >= caseSize) return `${count.loose} loose is a full case of ${caseSize} — add it to Cases`
+  if (!Number.isSafeInteger(count.total) || count.total < 1) return 'Enter at least one case or bottle'
+  if (count.total > MAX_LINE_QTY) return 'A line can have at most 100,000 bottles'
   if (state.cost.trim() === '') return 'Enter the unit cost (0 for free bottles)'
   if (parseRupeesToPaise(state.cost) === null) return 'Enter rupees, e.g. 1100 or 1,100.50'
   return null
@@ -108,7 +138,7 @@ export function submitPayload(state: PurchaseState): { invoiceNo: string; vendor
   return {
     invoiceNo: state.invoiceNo.trim(),
     vendorName: state.vendorName.trim() || null,
-    lines: state.lines.map((l) => ({ skuId: l.sku.id, quantity: l.quantity, unitCost: l.unitCostPaise })),
+    lines: state.lines.map((l) => ({ skuId: l.sku.id, cases: l.cases, looseBottles: l.looseBottles, caseSize: l.caseSize, unitCost: l.unitCostPaise })),
   }
 }
 
@@ -140,25 +170,34 @@ function flash(state: PurchaseState, kind: Flash['kind'], text: string): Flash {
   return { kind, text, seq: (state.flash?.seq ?? 0) + 1 }
 }
 
-const CLEAR_ENTRY: Pick<PurchaseState, 'query' | 'results' | 'highlighted' | 'picked' | 'qty' | 'cost'> = {
+const CLEAR_ENTRY: Pick<PurchaseState, 'query' | 'results' | 'highlighted' | 'picked' | 'cases' | 'loose' | 'cost'> = {
   query: '',
   results: [],
   highlighted: 0,
   picked: null,
-  qty: '',
+  cases: '',
+  loose: '',
   cost: '',
+}
+
+/** Adds two counts of the same SKU, carrying loose bottles that make up a full case into cases. */
+export function mergeCounts(a: Pick<StagedLine, 'cases' | 'looseBottles'>, b: Pick<StagedLine, 'cases' | 'looseBottles'>, caseSize: number) {
+  const loose = a.looseBottles + b.looseBottles
+  return { cases: a.cases + b.cases + Math.floor(loose / caseSize), looseBottles: loose % caseSize }
 }
 
 function addLine(state: PurchaseState): PurchaseState {
   const error = lineError(state)
   const cost = parseRupeesToPaise(state.cost)
-  if (error !== null || !state.picked || cost === null) return { ...state, flash: flash(state, 'error', error ?? 'Check the line') }
+  const count = entryCount(state)
+  if (error !== null || !state.picked || cost === null || !count) return { ...state, flash: flash(state, 'error', error ?? 'Check the line') }
   const sku = state.picked
-  const quantity = Number(state.qty)
+  const { caseSize } = sku
 
   const at = state.lines.findIndex((l) => l.sku.id === sku.id)
   if (at === -1) {
-    const lines = [...state.lines, { sku, quantity, unitCostPaise: cost }]
+    const line: StagedLine = { sku, cases: count.cases, looseBottles: count.loose, caseSize, quantity: count.total, unitCostPaise: cost }
+    const lines = [...state.lines, line]
     return { ...state, ...CLEAR_ENTRY, lines, selectedLine: lines.length - 1 }
   }
   const existing = state.lines[at]!
@@ -166,11 +205,22 @@ function addLine(state: PurchaseState): PurchaseState {
     const text = `${sku.displayName} is already on this invoice at ${formatPaise(existing.unitCostPaise)} — remove it first`
     return { ...state, flash: flash(state, 'error', text) }
   }
-  if (existing.quantity + quantity > MAX_LINE_QTY) {
+  if (existing.caseSize !== caseSize) {
+    const text = `${sku.displayName}'s case size changed to ${caseSize} — remove the staged line and add it again`
+    return { ...state, flash: flash(state, 'error', text) }
+  }
+  if (existing.quantity + count.total > MAX_LINE_QTY) {
     return { ...state, flash: flash(state, 'error', `${sku.displayName} would exceed 100,000 bottles on one line`) }
   }
-  const lines = state.lines.map((l, i) => (i === at ? { ...l, quantity: l.quantity + quantity } : l))
+  const merged = mergeCounts(existing, { cases: count.cases, looseBottles: count.loose }, caseSize)
+  const lines = state.lines.map((l, i) => (i === at ? { ...l, ...merged, quantity: l.quantity + count.total } : l))
   return { ...state, ...CLEAR_ENTRY, lines, selectedLine: at }
+}
+
+/** Totals by line: `2 cs + 3` (or just `5` / `2 cs` when one part is zero). */
+export function countLabel(line: Pick<StagedLine, 'cases' | 'looseBottles'>): string {
+  if (line.cases === 0) return String(line.looseBottles)
+  return line.looseBottles === 0 ? `${line.cases} cs` : `${line.cases} cs + ${line.looseBottles}`
 }
 
 export function purchaseReducer(state: PurchaseState, action: PurchaseAction): PurchaseState {
@@ -201,9 +251,19 @@ export function purchaseReducer(state: PurchaseState, action: PurchaseAction): P
       if (!action.sku.isActive) {
         return { ...state, flash: flash(state, 'error', `${action.sku.displayName} is inactive and cannot be received`) }
       }
-      return { ...state, picked: action.sku, query: action.sku.displayName, results: [], highlighted: 0 }
-    case 'qty':
-      return { ...state, qty: action.text.replace(/\D/g, '') }
+      return {
+        ...state,
+        picked: action.sku,
+        query: action.sku.displayName,
+        results: [],
+        highlighted: 0,
+        // The catalog's default cost, still editable; with no default the operator must type one.
+        cost: action.sku.purchasePricePaise === null ? '' : paiseToRupeeInput(action.sku.purchasePricePaise),
+      }
+    case 'cases':
+      return { ...state, cases: action.text.replace(/\D/g, '').slice(0, 6) }
+    case 'loose':
+      return { ...state, loose: action.text.replace(/\D/g, '').slice(0, 6) }
     case 'cost':
       return { ...state, cost: action.text }
     case 'addLine':

@@ -5,10 +5,11 @@
  */
 import type { SqlClient } from '../src/db/client.js';
 
+// [code, size, display name, sale price, purchase price, case size]
 const PRODUCTS = [
-  { name: 'House Whisky', category: 'WHISKY', skus: [['HWHS-F', 'FULL', 'House Whisky — Full', 180_000], ['HWHS-H', 'HALF', 'House Whisky — Half', 95_000], ['HWHS-Q', 'QUARTER', 'House Whisky — Quarter', 50_000]] },
-  { name: 'House Rum', category: 'RUM', skus: [['HRUM-F', 'FULL', 'House Rum — Full', 120_000], ['HRUM-H', 'HALF', 'House Rum — Half', 65_000], ['HRUM-Q', 'QUARTER', 'House Rum — Quarter', 35_000]] },
-  { name: 'House Lager', category: 'BEER', skus: [['HLAG-650', 'BEER_650', 'House Lager — 650', 22_000], ['HLAG-330', 'BEER_330', 'House Lager — 330', 14_000]] },
+  { name: 'House Whisky', category: 'WHISKY', skus: [['HWHS-F', 'FULL', 'House Whisky — Full', 180_000, 110_000, 12], ['HWHS-H', 'HALF', 'House Whisky — Half', 95_000, 56_000, 32], ['HWHS-Q', 'QUARTER', 'House Whisky — Quarter', 50_000, 29_000, 64]] },
+  { name: 'House Rum', category: 'RUM', skus: [['HRUM-F', 'FULL', 'House Rum — Full', 120_000, 72_000, 12], ['HRUM-H', 'HALF', 'House Rum — Half', 65_000, 38_000, 32], ['HRUM-Q', 'QUARTER', 'House Rum — Quarter', 35_000, 21_000, 64]] },
+  { name: 'House Lager', category: 'BEER', skus: [['HLAG-650', 'BEER_650', 'House Lager — 650', 22_000, 13_000, 12], ['HLAG-330', 'BEER_330', 'House Lager — 330', 14_000, 8_500, 24]] },
 ] as const;
 
 const OPENING_QTY = 48;
@@ -34,12 +35,12 @@ export async function seedDevData(db: SqlClient): Promise<{ cashierId: string } 
       product.name,
       product.category,
     ]);
-    for (const [code, size, name, price] of product.skus) {
+    for (const [code, size, name, price, cost, caseSize] of product.skus) {
       const skuId = await insertId(
         db,
-        `INSERT INTO skus (product_id, sku_code, barcode, size_code, display_name, price_paise)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-        [productId, code, String(barcode++), size, name, price],
+        `INSERT INTO skus (product_id, sku_code, barcode, size_code, display_name, price_paise, purchase_price_paise, case_size)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+        [productId, code, String(barcode++), size, name, price, cost, caseSize],
       );
       await db.query(`INSERT INTO stock_movements (sku_id, movement_type, qty_delta) VALUES ($1, 'OPENING', $2)`, [skuId, OPENING_QTY]);
     }

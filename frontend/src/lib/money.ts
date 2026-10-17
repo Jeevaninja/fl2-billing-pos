@@ -11,6 +11,13 @@ export function formatPaise(paise: Paise): string {
   return `${negative ? '−' : ''}₹${rupees}.${fraction}`
 }
 
+/** Paise as editable rupee text for an input: 110000n → "1100", 110050n → "1100.50" (no ₹, no grouping). */
+export function paiseToRupeeInput(paise: Paise): string {
+  const rupees = (paise / 100n).toString()
+  const fraction = paise % 100n
+  return fraction === 0n ? rupees : `${rupees}.${fraction.toString().padStart(2, '0')}`
+}
+
 const RUPEE_INPUT = /^(\d{1,13})(?:\.(\d{1,2}))?$/
 
 /**

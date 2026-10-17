@@ -160,6 +160,88 @@ describe('PurchaseService: stock receipts (GRN)', () => {
     });
   });
 
+  describe('case-based lines (Phase 10)', () => {
+    it('posts cases × case size + loose bottles: 2 cases + 3 of a 64-quarter is 131 bottles', async () => {
+      const { db, fx, purchases } = setup();
+      const { receipt, lines } = await purchases.recordReceipt(
+        {
+          invoiceNo: 'INV-131',
+          lines: [
+            { skuId: fx.sku.quarter, cases: 2, looseBottles: 3, caseSize: 64, unitCostPaise: 210_00n },
+            { skuId: fx.sku.full, cases: 1, looseBottles: 0, caseSize: 12, unitCostPaise: 1_100_00n },
+            { skuId: fx.sku.half, quantity: 5, unitCostPaise: 560_00n },
+          ],
+        },
+        fx.cashier,
+      );
+
+      expect(lines).toEqual([
+        expect.objectContaining({ skuId: fx.sku.quarter, quantity: 131, cases: 2, caseSize: 64, looseBottles: 3, lineTotalPaise: 131n * 210_00n }),
+        expect.objectContaining({ skuId: fx.sku.full, quantity: 12, cases: 1, caseSize: 12, looseBottles: 0 }),
+        expect.objectContaining({ skuId: fx.sku.half, quantity: 5, cases: 0, caseSize: null, looseBottles: 5 }),
+      ]);
+      expect(receipt).toMatchObject({ bottles: 148, lineCount: 3 });
+      expect(await onHand(db, fx.sku.quarter)).toBe(OPENING_QTY + 131);
+      expect(await onHand(db, fx.sku.full)).toBe(OPENING_QTY + 12);
+
+      const { rows } = await db.query<{ qty_delta: number }>(
+        `SELECT m.qty_delta FROM stock_movements m JOIN stock_receipt_lines l ON l.id = m.receipt_line_id WHERE l.sku_id = $1`,
+        [fx.sku.quarter],
+      );
+      expect(rows).toEqual([{ qty_delta: 131 }]);
+    });
+
+    it('refuses a line counted at a case size the catalog no longer has (PS002) and writes nothing', async () => {
+      const { db, fx, purchases } = setup();
+      await db.query(`UPDATE skus SET case_size = 48 WHERE id = $1`, [fx.sku.quarter]);
+      await expectPosError(
+        purchases.recordReceipt(
+          {
+            invoiceNo: 'INV-STALE',
+            lines: [
+              { skuId: fx.sku.full, quantity: 1, unitCostPaise: 100n },
+              { skuId: fx.sku.quarter, cases: 2, looseBottles: 3, caseSize: 64, unitCostPaise: 100n },
+            ],
+          },
+          fx.cashier,
+        ),
+        PosErrorCode.ILLEGAL_TRANSITION,
+        /case size for HRUM-Q is now 48/,
+      );
+      expect((await db.query(`SELECT 1 FROM stock_receipts`)).rows).toHaveLength(0);
+      expect(await onHand(db, fx.sku.full)).toBe(OPENING_QTY);
+      expect(await onHand(db, fx.sku.quarter)).toBe(OPENING_QTY);
+    });
+
+    it('validates cases, loose bottles and case size before touching the database', async () => {
+      const { fx, purchases } = setup();
+      const post = (line: { cases: number; looseBottles: number; caseSize: number }) =>
+        purchases.recordReceipt({ invoiceNo: 'V', lines: [{ skuId: fx.sku.quarter, unitCostPaise: 100n, ...line }] }, fx.cashier);
+
+      await expect(post({ cases: 0, looseBottles: 0, caseSize: 64 })).rejects.toThrow(/at least one case or bottle/);
+      await expect(post({ cases: 1, looseBottles: 64, caseSize: 64 })).rejects.toThrow(/full case of 64/);
+      await expect(post({ cases: -1, looseBottles: 3, caseSize: 64 })).rejects.toThrow(RangeError);
+      await expect(post({ cases: 1.5, looseBottles: 3, caseSize: 64 })).rejects.toThrow(RangeError);
+      await expect(post({ cases: 1, looseBottles: 0, caseSize: 0 })).rejects.toThrow(/caseSize/);
+      await expect(post({ cases: 2000, looseBottles: 0, caseSize: 64 })).rejects.toThrow(/at most 100000/);
+    });
+
+    it('enforces the case shape in the database', async () => {
+      const { db, fx, purchases } = setup();
+      const { receipt } = await purchases.recordReceipt(invoice(fx), fx.cashier);
+      const addLine = (qty: number, cases: number, caseSize: number | null) =>
+        db.query(
+          `INSERT INTO stock_receipt_lines (receipt_id, line_no, sku_id, qty, cases, case_size, unit_cost_paise) VALUES ($1, 3, $2, $3, $4, $5, 0)`,
+          [receipt.id, fx.sku.half, qty, cases, caseSize],
+        );
+      await expectSqlError(addLine(60, 2, 32), PgErrorCode.CHECK_VIOLATION); // 2 × 32 > 60
+      await expectSqlError(addLine(32, 1, null), PgErrorCode.CHECK_VIOLATION); // cases without a case size
+      await expectSqlError(addLine(32, 1, 24), PosErrorCode.ILLEGAL_TRANSITION, /case size/);
+      await addLine(70, 2, 32);
+      expect(await onHand(db, fx.sku.half)).toBe(OPENING_QTY + 70);
+    });
+  });
+
   describe('database rules', () => {
     it('posts PURCHASE_RECEIPT movements only from receipt lines (PS009)', async () => {
       const { db, fx } = setup();

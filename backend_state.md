@@ -1,8 +1,8 @@
 # FL2 POS — Backend State Reference
 
-Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), and Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`). Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
+Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`), and Phase 10 master catalog and case-based inwarding (`0009_catalog_case_size`, `CatalogService`; plan `docs/ui/phase10-catalog-case-grn-plan.md`). Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
 
-- **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`, `0006_expense_category`, `0007_peak_drawer_cash`, `0008_stock_receipts`.
+- **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`, `0006_expense_category`, `0007_peak_drawer_cash`, `0008_stock_receipts`, `0009_catalog_case_size`.
 - **Money:** `BIGINT` whole paise in SQL, `bigint` in TypeScript (`type Paise = bigint`). No floats anywhere.
 - **Quantities:** `INTEGER` whole sealed bottles. No ml / peg columns.
 - **Append-only:** DELETE and TRUNCATE are blocked on every domain table. Ledger tables also block UPDATE. Corrections are made with reversing records.
@@ -16,11 +16,11 @@ Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local 
 | `staff` | Cashiers, managers, admins | — |
 | `members` | Member register (optional on bills, no KYC gate) | — |
 | `products` | Brand family (category: WHISKY, RUM, BEER…) | — |
-| `skus` | One row per sealed size: `FULL`, `HALF`, `QUARTER`, `BEER_650`, `BEER_330` | `product_id → products` |
+| `skus` | One row per sealed size: `FULL`, `HALF`, `QUARTER`, `BEER_650`, `BEER_330`. `price_paise` = default sale price; `case_size` (1–1000, required) and optional `purchase_price_paise` ≥ 0 (0009) | `product_id → products` |
 | `sku_stock` | Cached on-hand bottles, `≥ 0` (trigger-maintained) | `sku_id → skus` (PK) |
 | `stock_movements` | Stock ledger: OPENING, PURCHASE_RECEIPT, SALE, SALE_REVERSAL, ADJUSTMENT. SALE / SALE_REVERSAL are posted only by `bill_items`, PURCHASE_RECEIPT only by `stock_receipt_lines` (0008) | `sku_id → skus`, `business_day_id → business_days`, `bill_item_id → bill_items` (unique), `receipt_line_id → stock_receipt_lines` (unique, set exactly on PURCHASE_RECEIPT rows; 0008) |
 | `stock_receipts` | GRN header: one supplier invoice received on the open day (append-only). `invoice_no` required, `vendor_name` optional; unique per (invoice no, vendor), case- and space-insensitive (0008) | `business_day_id → business_days` (stamped), `received_by_staff_id → staff` |
-| `stock_receipt_lines` | GRN lines: `qty` whole bottles > 0 of one SKU at `unit_cost_paise` ≥ 0 (₹0 = scheme / free); one line per SKU per receipt; append-only (0008) | `receipt_id → stock_receipts`, `sku_id → skus` |
+| `stock_receipt_lines` | GRN lines: `qty` whole bottles > 0 of one SKU at `unit_cost_paise` ≥ 0 (₹0 = scheme / free); one line per SKU per receipt; append-only (0008). `cases` ≥ 0 and the `case_size` snapshot record how the line was counted (NULL / 0 = loose only); `cases × case_size ≤ qty` (0009) | `receipt_id → stock_receipts`, `sku_id → skus` |
 | `business_days` | Trading day; one OPEN at a time; bill-number counter; `opening_float_paise` (immutable); on close: `counted_cash_paise`, and trigger-computed `expected_cash_paise` / `cash_variance_paise` (0005) | `opened_by_staff_id`, `closed_by_staff_id → staff` |
 | `peak_sessions` | Peak windows (several per day, one running); start/end cash and UPI; frozen expected and variance | `business_day_id → business_days`, `started_by_staff_id`, `ended_by_staff_id → staff` |
 | `waiters` | `is_trusted`, `outstanding_balance` (paise, `≥ 0`, trigger-maintained), optional `credit_limit_paise` | — |
@@ -61,6 +61,13 @@ UPI is excluded. A peak sale actually paid by UPI makes the drawer lower by that
 - `stock_movements_receipt_line_link` is `NOT VALID` (no PURCHASE_RECEIPT rows existed before 0008).
 - A posted receipt is final. Corrections (return / void receipt) are a later phase.
 
+**Catalog & case-based inwarding (0009):**
+- `skus.case_size` was backfilled by size (FULL 12, HALF 32, QUARTER 64, BEER_650 12, BEER_330 24) and is then `NOT NULL`. `purchase_price_paise` starts NULL (no default cost).
+- `products` and `skus` stay mutable master rows (UPDATE goes to the outbox; DELETE is still `PS001`). Bill lines snapshot price, code, name and size, so a catalog edit never changes a line already billed.
+- GRN line trigger (extended): a supplied `case_size` must equal the SKU's current one, else `PS002` ("case size for X is now N — re-check the line"). `PurchaseService` also share-locks the SKUs, so a catalog edit can't land mid-receipt.
+- Loose bottles are not stored: `qty − cases × case_size`. `qty` stays the only number the ledger sees.
+- Duplicate product name (case-insensitive), SKU code, barcode or size per product → `PS012`.
+
 **Captain orders (0004):**
 - `bills_request_id_unique` (partial unique index) is the idempotency guarantee.
 - CHECKs:
@@ -95,10 +102,11 @@ Business-rule violations raise these SQLSTATEs. The services surface them as `Po
 | `PS009` | `DERIVED_COLUMN` | Direct write to a trigger-maintained column (totals, balances, stock, bill numbers) |
 | `PS010` | `BILL_ON_BILL` | Captain order for an untrusted waiter who still has an `OPEN` bill |
 | `PS011` | `DUPLICATE_RECEIPT` | Stock receipt with an invoice number already received from the same vendor (`stock_receipts_invoice_unique`) |
+| `PS012` | `DUPLICATE_CATALOG_ENTRY` | Catalog duplicate: product name (`products_name_unique`), SKU code (`skus_sku_code_unique`), barcode (`skus_barcode_unique`) or a size the product already has (`skus_product_size_unique`) |
 
 Other error classes:
 - `NotFoundError` (`.entity`, `.id`): a referenced bill, SKU, waiter or session doesn't exist.
-- `InactiveError` (`.entity`, `.id`): a referenced waiter, member or SKU exists but is deactivated. Raised by `CaptainService.placeOrder` and `PurchaseService.recordReceipt`; the counter methods still report inactive rows as `PS002`.
+- `InactiveError` (`.entity`, `.id`): a referenced waiter, member or SKU exists but is deactivated. Raised by `CaptainService.placeOrder`, `PurchaseService.recordReceipt` and `CatalogService` (adding or reactivating a size under an inactive product); the counter methods still report inactive rows as `PS002`.
 - `IdempotencyConflictError` (`.requestId`): a Captain `requestId` was reused for a different order, or from a different handset.
 - `TypeError` / `RangeError`: invalid arguments (non-bigint money, non-positive amounts or quantities, unknown tender).
 - All service methods are `async`, so every error arrives as a rejected promise.
@@ -304,7 +312,7 @@ interface BusinessDaySummary { id: string; businessDate: string /* 'YYYY-MM-DD' 
 interface PeakSessionView extends PeakSession { runningExpectedPaise: Paise; expectedDrawerCashPaise: Paise; }  // drawer total: see 0007
 interface SkuLookup {
   id: string; skuCode: string; barcode: string | null; displayName: string; sizeCode: SizeCode;
-  pricePaise: Paise; onHandQty: number; isActive: boolean;
+  pricePaise: Paise; purchasePricePaise: Paise | null; caseSize: number; onHandQty: number; isActive: boolean;
 }
 interface MemberSummary { id: string; membershipNo: string; displayName: string; }
 interface WaiterSummary {
@@ -331,19 +339,52 @@ class PurchaseService {
 }
 
 interface ReceiptInput { invoiceNo: string; vendorName?: string | null; lines: ReceiptLineInput[]; }
-interface ReceiptLineInput { skuId: string; quantity: number; unitCostPaise: Paise; }
+type ReceiptLineInput = { skuId: string; unitCostPaise: Paise } &
+  ({ cases: number; looseBottles: number; caseSize: number }   // Phase 10: qty = cases × caseSize + looseBottles
+   | { quantity: number });                                    // loose only (cases 0, case_size NULL)
 interface StockReceipt {
   id; businessDayId; invoiceNo; vendorName: string | null; receivedByStaffId; receivedBy: string /* staff name */; createdAt: Date;
   lineCount: number; bottles: number; totalCostPaise: Paise;
 }
-interface StockReceiptLine { id; lineNo; skuId; skuCode; displayName; sizeCode: SizeCode; quantity: number; unitCostPaise: Paise; lineTotalPaise: Paise; }
+interface StockReceiptLine {
+  id; lineNo; skuId; skuCode; displayName; sizeCode: SizeCode; quantity: number;
+  cases: number; caseSize: number | null; looseBottles: number; unitCostPaise: Paise; lineTotalPaise: Paise;
+}
 interface StockReceiptDetail { receipt: StockReceipt; lines: StockReceiptLine[]; }
 ```
 
 - **`recordReceipt`:** trims the invoice (required, ≤ 60 chars) and vendor (blank → null, ≤ 100 chars).
-  - Lines: 1–200 (`MAX_RECEIPT_LINES`); each a whole quantity of 1–100,000 bottles (`MAX_RECEIPT_QTY`) and a cost ≥ 0 paise; no SKU twice. Breaking any of these is a `RangeError`.
-  - Unknown SKU → `NotFoundError`, inactive SKU → `InactiveError`, no open day → `PS007`, same invoice and vendor already received → `PS011`. Any failure writes nothing.
+  - Lines: 1–200 (`MAX_RECEIPT_LINES`); each a whole quantity of 1–100,000 bottles (`MAX_RECEIPT_QTY`) and a cost ≥ 0 paise; no SKU twice. Case lines: whole `cases` and `looseBottles` ≥ 0, `caseSize` 1–1000, loose below one case, total ≥ 1. Breaking any of these is a `RangeError`.
+  - Unknown SKU → `NotFoundError`, inactive SKU → `InactiveError`, no open day → `PS007`, same invoice and vendor already received → `PS011`, `caseSize` no longer the catalog's → `PS002`. Any failure writes nothing.
   - Lines are numbered in input order. Stock rises by trigger in the same transaction.
+
+### `CatalogService` (`src/services/catalog.service.ts`)
+
+```ts
+class CatalogService {
+  constructor(db: SqlDatabase);
+
+  listCatalog(filter?: { q?: string; includeInactive?: boolean }): Promise<CatalogProduct[]>;
+  getProduct(productId: string): Promise<CatalogProduct>;                       // NotFoundError
+  createProduct(input: NewProductInput): Promise<CatalogProduct>;               // product + 1–5 sizes, one transaction
+  updateProduct(productId: string, patch: ProductPatch): Promise<CatalogProduct>;
+  addSku(productId: string, input: NewSkuInput & { codePrefix?: string }): Promise<CatalogProduct>;
+  updateSku(skuId: string, patch: SkuPatch): Promise<CatalogProduct>;           // returns the whole product
+}
+
+interface CatalogSku extends SkuLookup { productId: string; }
+interface CatalogProduct { id; name; category: ProductCategory; isActive: boolean; skus: CatalogSku[] /* FULL → 330 */; }
+interface NewSkuInput { sizeCode: SizeCode; salePricePaise: Paise; purchasePricePaise?: Paise | null; caseSize: number; barcode?: string | null; }
+interface NewProductInput { name: string; category: ProductCategory; codePrefix: string; skus: NewSkuInput[]; }
+interface ProductPatch { name?: string; category?: ProductCategory; isActive?: boolean; }
+interface SkuPatch { salePricePaise?: Paise; purchasePricePaise?: Paise | null; caseSize?: number; barcode?: string | null; isActive?: boolean; }  // null clears
+```
+
+- **Derived names:** `sku_code` = `PREFIX-F / -H / -Q / -650 / -330`; `display_name` = `Name — Full / Half / Quarter / 650 / 330` (same as the seed). A rename re-derives every size's display name; `sku_code` and `size_code` never change.
+- **Validation (`RangeError`):** name 1–80 chars (whitespace collapsed), category one of `PRODUCT_CATEGORIES`, prefix 2–10 A–Z/0–9 (upper-cased), 1–5 distinct sizes, sale price > 0, purchase price ≥ 0, case size 1–1000, barcode ≤ 40 chars with no spaces (blank → null).
+- **Active flags:** deactivating a product deactivates its sizes; reactivating it leaves them as they are. Adding a size to, or reactivating a size of, an inactive product → `InactiveError`.
+- **List:** products by name; without `includeInactive`, inactive products and sizes are left out. `q` matches the name (contains), any SKU code (prefix) or barcode (exact) and returns the whole product.
+- New SKUs start at 0 stock (stock comes only from a GRN). Constants: `DEFAULT_CASE_SIZE`, `MAX_CASE_SIZE`, `SIZE_CODES`, `PRODUCT_CATEGORIES`, `skuCodeFor`, `displayNameFor`.
 
 ### `CaptainService` (`src/services/captain.service.ts`)
 
@@ -422,7 +463,7 @@ Neither server holds business rules.
 
 | Command | What it does |
 |---|---|
-| `npm run api:dev` | Embedded PGlite under `.data/pglite` (git-ignored). On an empty database, seeds demo data (cashier, 8 SKUs with barcodes `8900000000001`–`8900000000008`, waiters W01 trusted / W02 untrusted / W03 trusted with ₹5,000 limit, 3 members, an open business day) and acts as the seeded cashier. |
+| `npm run api:dev` | Embedded PGlite under `.data/pglite` (git-ignored). On an empty database, seeds demo data (cashier, 8 SKUs with barcodes `8900000000001`–`8900000000008`, purchase prices and case sizes 12 / 32 / 64 (beer 12 / 24), waiters W01 trusted / W02 untrusted / W03 trusted with ₹5,000 limit, 3 members, an open business day) and acts as the seeded cashier. |
 | `npm run api` | Same server without demo data; `FL2_CASHIER_ID` is required. |
 
 | Variable | Default | Meaning |
@@ -450,10 +491,10 @@ Migrations run on every boot (already-applied ones are skipped).
 | 403 | `FORBIDDEN` | `Host` header is not `localhost`, `127.0.0.1` or `[::1]` (blocks DNS rebinding) |
 | 404 | `NOT_FOUND` | Unknown route, or `NotFoundError` (adds `entity`, `id`) |
 | 405 | `METHOD_NOT_ALLOWED` | Known path, wrong method |
-| 409 | `PS001`–`PS011` | Business-rule violation (adds `constraint` when one fired) |
+| 409 | `PS001`–`PS012` | Business-rule violation (adds `constraint` when one fired) |
 | 409 | `IDEMPOTENCY_CONFLICT` | Captain `requestId` reused for a different order or handset (adds `requestId`) |
 | 413 | `PAYLOAD_TOO_LARGE` | Body over 64 KB |
-| 415 | `UNSUPPORTED_MEDIA_TYPE` | POST/PUT without `Content-Type: application/json` (forces a CORS preflight, which is never approved) |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | POST/PUT/PATCH without `Content-Type: application/json` (forces a CORS preflight, which is never approved) |
 | 500 | `INTERNAL` | Anything else (details only in the server log) |
 
 **Routes** (cashier = `FL2_CASHIER_ID`)
@@ -489,7 +530,12 @@ Migrations run on every boot (already-applied ones are skipped).
 | `POST /api/expenses/:expenseId/void` | | `voidCashExpense(…, cashier)` | 201 |
 | `GET /api/purchases` | | `listReceipts(open day)`; 404 when no day is open | 200 `StockReceipt[]` |
 | `GET /api/purchases/:receiptId` | | `getReceipt` | 200 `StockReceiptDetail` |
-| `POST /api/purchases` | `{ invoiceNo, vendorName?, lines: [{ skuId, quantity, unitCost }] }` (`unitCost` in paise, `"0"` allowed) | `recordReceipt(…, cashier)` | 201 `StockReceiptDetail` |
+| `POST /api/purchases` | `{ invoiceNo, vendorName?, lines: [{ skuId, cases, looseBottles?, caseSize, unitCost }] }` or the loose-only `{ skuId, quantity, unitCost }` (`unitCost` in paise, `"0"` allowed) | `recordReceipt(…, cashier)` | 201 `StockReceiptDetail` |
+| `GET /api/catalog` | `?q=&includeInactive=true` | `listCatalog` | 200 `CatalogProduct[]` |
+| `POST /api/catalog/products` | `{ name, category, codePrefix, skus: [{ sizeCode, salePrice, purchasePrice?, caseSize, barcode? }] }` | `createProduct` | 201 `CatalogProduct` |
+| `PATCH /api/catalog/products/:productId` | `{ name?, category?, isActive? }` | `updateProduct` | 200 `CatalogProduct` |
+| `POST /api/catalog/products/:productId/skus` | `{ sizeCode, salePrice, purchasePrice?, caseSize, barcode?, codePrefix? }` | `addSku` | 201 `CatalogProduct` |
+| `PATCH /api/catalog/skus/:skuId` | `{ salePrice?, purchasePrice? (null clears), caseSize?, barcode? (null clears), isActive? }` | `updateSku` | 200 `CatalogProduct` |
 
 The frontend dev server proxies `/api` to `http://127.0.0.1:4310`.
 

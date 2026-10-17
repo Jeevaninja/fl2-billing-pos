@@ -7,8 +7,10 @@ import { counterErrorMessage } from '../billing/errors'
 import { Modal } from '../billing/Modal'
 import { beep } from '../lib/beep'
 import { formatPaise } from '../lib/money'
-import { FOCUS_RING, keepFocus } from '../lib/ui'
+import { FOCUS_RING, keepFocus, SIZE_NAME } from '../lib/ui'
 import {
+  countLabel,
+  entryCount,
   initialPurchaseState,
   lineError,
   lineTotal,
@@ -32,8 +34,9 @@ interface PurchaseScreenProps {
 }
 
 /**
- * Stock inwarding (GRN): enter a supplier invoice line by line (SKU → qty → unit cost, all on
- * Enter), review the staging list, and post it with F9. The server raises stock for every line in
+ * Stock inwarding (GRN): enter a supplier invoice line by line (SKU → cases → loose bottles → unit
+ * cost, all on Enter; the cost is pre-filled from the catalog), review the staging list, and post
+ * it with F9. Bottles = cases × the SKU's case size + loose. The server raises stock for every line in
  * one transaction; a posted receipt is final (append-only), and a repeated invoice is refused.
  */
 export default function PurchaseScreen({ onExit, onOpenDayEnd }: PurchaseScreenProps) {
@@ -41,7 +44,8 @@ export default function PurchaseScreen({ onExit, onOpenDayEnd }: PurchaseScreenP
   const invoiceRef = useRef<HTMLInputElement>(null)
   const vendorRef = useRef<HTMLInputElement>(null)
   const skuRef = useRef<HTMLInputElement>(null)
-  const qtyRef = useRef<HTMLInputElement>(null)
+  const casesRef = useRef<HTMLInputElement>(null)
+  const looseRef = useRef<HTMLInputElement>(null)
   const costRef = useRef<HTMLInputElement>(null)
   const escAt = useRef(0)
   const stateRef = useRef(state)
@@ -95,11 +99,11 @@ export default function PurchaseScreen({ onExit, onOpenDayEnd }: PurchaseScreenP
     return () => clearTimeout(timer)
   }, [query, picked])
 
-  /** Enter in the SKU field: resolve a scan or the highlighted result, then move to quantity. */
+  /** Enter in the SKU field: resolve a scan or the highlighted result, then move to cases. */
   const resolveSku = useCallback(async () => {
     const current = stateRef.current
     if (current.picked) {
-      qtyRef.current?.focus()
+      casesRef.current?.focus()
       return
     }
     const text = current.query.trim()
@@ -119,7 +123,7 @@ export default function PurchaseScreen({ onExit, onOpenDayEnd }: PurchaseScreenP
       return
     }
     dispatch({ type: 'pick', sku })
-    if (sku.isActive) qtyRef.current?.focus()
+    if (sku.isActive) casesRef.current?.focus()
     else beep('error')
   }, [flash])
 
@@ -188,7 +192,7 @@ export default function PurchaseScreen({ onExit, onOpenDayEnd }: PurchaseScreenP
       }
       if (event.key === 'Escape') {
         event.preventDefault()
-        if (current.query !== '' || current.qty !== '' || current.cost !== '') {
+        if (current.query !== '' || current.cases !== '' || current.loose !== '' || current.cost !== '') {
           dispatch({ type: 'clearEntry' })
           skuRef.current?.focus()
           return
@@ -341,7 +345,7 @@ export default function PurchaseScreen({ onExit, onOpenDayEnd }: PurchaseScreenP
                           {...keepFocus}
                           onClick={() => {
                             dispatch({ type: 'pick', sku: s })
-                            if (s.isActive) qtyRef.current?.focus()
+                            if (s.isActive) casesRef.current?.focus()
                           }}
                           className={`flex min-h-12 w-full items-center gap-3 px-3 text-left ${i === state.highlighted ? 'bg-amber-400/15' : 'hover:bg-zinc-800'} ${
                             s.isActive ? '' : 'text-zinc-500'
@@ -349,6 +353,7 @@ export default function PurchaseScreen({ onExit, onOpenDayEnd }: PurchaseScreenP
                         >
                           <span className="min-w-0 flex-1 truncate font-semibold">{s.displayName}</span>
                           <SizeChip size={s.sizeCode} />
+                          <span className="w-20 shrink-0 text-right font-mono text-xs text-zinc-500 tabular-nums">case {s.caseSize}</span>
                           <span className="w-24 shrink-0 text-right font-mono text-sm text-zinc-400 tabular-nums">{s.isActive ? `${s.onHandQty} on hand` : 'inactive'}</span>
                         </button>
                       </li>
@@ -358,29 +363,22 @@ export default function PurchaseScreen({ onExit, onOpenDayEnd }: PurchaseScreenP
               </div>
               {state.picked && (
                 <p className="-mt-2 text-sm text-zinc-400">
-                  {state.picked.skuCode} · {state.picked.onHandQty} on hand · sells at {formatPaise(state.picked.pricePaise)}
+                  {state.picked.skuCode} · {SIZE_NAME[state.picked.sizeCode]} · <span className="font-semibold text-zinc-200">case of {state.picked.caseSize}</span> ·{' '}
+                  {state.picked.onHandQty} on hand · sells at {formatPaise(state.picked.pricePaise)}
                 </p>
               )}
-              <div className="grid grid-cols-[8rem_1fr] gap-4">
-                <label className="block">
-                  <span className="text-sm font-semibold text-zinc-300">Qty (bottles)</span>
-                  <input
-                    ref={qtyRef}
-                    value={state.qty}
-                    inputMode="numeric"
-                    autoComplete="off"
-                    onChange={(e) => dispatch({ type: 'qty', text: e.target.value })}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault()
-                        costRef.current?.focus()
-                      }
-                    }}
-                    className="mt-1 w-full rounded-md border-2 border-zinc-600 bg-zinc-950 px-3 py-2 font-mono text-2xl tabular-nums outline-none focus:border-amber-400"
-                  />
-                </label>
-                <RupeeField label="Unit cost (₹0 = free)" value={state.cost} onChange={(text) => dispatch({ type: 'cost', text })} onEnter={addLine} inputRef={costRef} />
+              <div className="grid grid-cols-[1fr_1fr_auto] items-end gap-4">
+                <CountField label="Cases" value={state.cases} onChange={(text) => dispatch({ type: 'cases', text })} onEnter={() => looseRef.current?.focus()} inputRef={casesRef} />
+                <CountField label="Loose bottles" value={state.loose} onChange={(text) => dispatch({ type: 'loose', text })} onEnter={() => costRef.current?.focus()} inputRef={looseRef} />
+                <BottleTotal count={entryCount(state)} />
               </div>
+              <RupeeField
+                label={state.picked?.purchasePricePaise != null ? 'Unit cost per bottle (catalog default — editable)' : 'Unit cost per bottle (₹0 = free)'}
+                value={state.cost}
+                onChange={(text) => dispatch({ type: 'cost', text })}
+                onEnter={addLine}
+                inputRef={costRef}
+              />
               <button
                 type="button"
                 onClick={addLine}
@@ -392,7 +390,7 @@ export default function PurchaseScreen({ onExit, onOpenDayEnd }: PurchaseScreenP
               </button>
               {entryError && <p className="-mt-2 text-center text-sm text-amber-300">{entryError}</p>}
               <p className="mt-auto text-sm text-zinc-500">
-                Scan or type → <Kbd>Enter</Kbd> → qty <Kbd>Enter</Kbd> → cost <Kbd>Enter</Kbd>. <Kbd>Esc</Kbd> clears the line.
+                Scan or type → <Kbd>Enter</Kbd> → cases <Kbd>Enter</Kbd> → loose <Kbd>Enter</Kbd> → cost <Kbd>Enter</Kbd>. <Kbd>Esc</Kbd> clears the line.
               </p>
             </section>
 
@@ -402,7 +400,7 @@ export default function PurchaseScreen({ onExit, onOpenDayEnd }: PurchaseScreenP
                 <span className="ml-auto" />
                 <FlashLine flash={state.flash} />
               </div>
-              <div className="grid grid-cols-[2.5rem_1fr_5rem_5rem_8rem_9rem_3.5rem] items-center gap-2 border-b border-zinc-800 px-4 py-2 text-xs font-bold tracking-widest text-zinc-500 uppercase">
+              <div className="grid grid-cols-[2.5rem_1fr_5rem_9rem_8rem_9rem_3.5rem] items-center gap-2 border-b border-zinc-800 px-4 py-2 text-xs font-bold tracking-widest text-zinc-500 uppercase">
                 <span>#</span>
                 <span>SKU</span>
                 <span>Size</span>
@@ -417,7 +415,7 @@ export default function PurchaseScreen({ onExit, onOpenDayEnd }: PurchaseScreenP
                     key={line.sku.id}
                     aria-selected={state.selectedLine === i}
                     onClick={() => dispatch({ type: 'selectLine', index: i })}
-                    className={`grid min-h-14 cursor-pointer grid-cols-[2.5rem_1fr_5rem_5rem_8rem_9rem_3.5rem] items-center gap-2 border-b border-zinc-800 px-4 ${
+                    className={`grid min-h-14 cursor-pointer grid-cols-[2.5rem_1fr_5rem_9rem_8rem_9rem_3.5rem] items-center gap-2 border-b border-zinc-800 px-4 ${
                       state.selectedLine === i ? 'bg-amber-400/10' : ''
                     }`}
                   >
@@ -429,7 +427,10 @@ export default function PurchaseScreen({ onExit, onOpenDayEnd }: PurchaseScreenP
                     <span>
                       <SizeChip size={line.sku.sizeCode} />
                     </span>
-                    <span className="text-right font-mono text-lg font-bold tabular-nums">{line.quantity}</span>
+                    <span className="text-right font-mono tabular-nums">
+                      <span className="block text-lg font-bold">{line.quantity}</span>
+                      {line.cases > 0 && <span className="block text-xs text-zinc-500">{countLabel(line)} · case {line.caseSize}</span>}
+                    </span>
                     <span className="text-right font-mono tabular-nums">{line.unitCostPaise === 0n ? <span className="text-emerald-300">FREE</span> : formatPaise(line.unitCostPaise)}</span>
                     <span className="text-right font-mono font-bold tabular-nums">{formatPaise(lineTotal(line))}</span>
                     <button
@@ -447,14 +448,14 @@ export default function PurchaseScreen({ onExit, onOpenDayEnd }: PurchaseScreenP
                 ))}
                 {state.lines.length === 0 && <li className="p-12 text-center text-lg text-zinc-500">No lines yet — scan the first bottle on the invoice.</li>}
               </ul>
-              <div className="flex items-center gap-6 border-t-2 border-zinc-800 bg-zinc-900 px-4 py-3">
+              <div className="flex items-center gap-6 border-t-2 border-zinc-800 bg-zinc-900 px-4 py-3 whitespace-nowrap">
                 <span className="text-zinc-300">
                   {staged.lineCount} line{staged.lineCount === 1 ? '' : 's'} · <span className="font-bold">{staged.bottles}</span> bottle{staged.bottles === 1 ? '' : 's'}
                 </span>
                 <span className="text-zinc-300">
                   Invoice total <span className="font-mono text-2xl font-black tabular-nums">{formatPaise(staged.totalPaise)}</span>
                 </span>
-                <span className="ml-auto text-xs text-zinc-500">
+                <span className="ml-auto min-w-0 truncate text-xs text-zinc-500">
                   <Kbd>Del</Kbd> removes the selected line
                 </span>
                 <button
@@ -462,7 +463,7 @@ export default function PurchaseScreen({ onExit, onOpenDayEnd }: PurchaseScreenP
                   onClick={askPost}
                   disabled={state.submitting || postError !== null}
                   title={postError ?? undefined}
-                  className={`flex min-h-14 items-center gap-4 rounded-lg bg-violet-400 px-5 text-xl font-black text-zinc-950 hover:bg-violet-300 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-400 ${FOCUS_RING}`}
+                  className={`flex min-h-14 shrink-0 items-center gap-4 rounded-lg bg-violet-400 px-5 text-xl font-black text-zinc-950 hover:bg-violet-300 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-400 ${FOCUS_RING}`}
                 >
                   <PackagePlus className="size-6" aria-hidden /> {state.submitting ? 'Posting…' : 'Post GRN'}
                   <Kbd>F9</Kbd>
@@ -504,6 +505,7 @@ export default function PurchaseScreen({ onExit, onOpenDayEnd }: PurchaseScreenP
               <li key={line.sku.id} className="flex items-center gap-3 px-3 py-2">
                 <span className="min-w-0 flex-1 truncate">{line.sku.displayName}</span>
                 <span className="font-mono tabular-nums">
+                  {line.cases > 0 ? `${countLabel(line)} = ` : ''}
                   {line.quantity} × {line.unitCostPaise === 0n ? 'free' : formatPaise(line.unitCostPaise)}
                 </span>
                 <span className="w-32 text-right font-mono font-bold tabular-nums">{formatPaise(lineTotal(line))}</span>
@@ -520,6 +522,50 @@ export default function PurchaseScreen({ onExit, onOpenDayEnd }: PurchaseScreenP
         </Modal>
       )}
     </div>
+  )
+}
+
+interface CountFieldProps {
+  label: string
+  value: string
+  onChange: (text: string) => void
+  onEnter: () => void
+  inputRef: Ref<HTMLInputElement>
+}
+
+/** Whole-number field (digits only; empty means 0). Enter moves on. */
+function CountField({ label, value, onChange, onEnter, inputRef }: CountFieldProps) {
+  return (
+    <label className="block">
+      <span className="text-sm font-semibold text-zinc-300">{label}</span>
+      <input
+        ref={inputRef}
+        value={value}
+        inputMode="numeric"
+        autoComplete="off"
+        placeholder="0"
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            onEnter()
+          }
+        }}
+        className="mt-1 w-full rounded-md border-2 border-zinc-600 bg-zinc-950 px-3 py-2 font-mono text-2xl tabular-nums outline-none placeholder:text-zinc-700 focus:border-amber-400"
+      />
+    </label>
+  )
+}
+
+/** The live whole-bottle total for the entry fields ("= 131 bottles"). */
+function BottleTotal({ count }: { count: { total: number } | null }) {
+  const total = count && Number.isSafeInteger(count.total) ? count.total : 0
+  return (
+    <p className="min-w-36 pb-2.5 text-right whitespace-nowrap" aria-live="polite" aria-label="Bottles on this line">
+      <span className="text-zinc-500">= </span>
+      <span className="font-mono text-2xl font-black tabular-nums">{total}</span>
+      <span className="text-zinc-400"> bottle{total === 1 ? '' : 's'}</span>
+    </p>
   )
 }
 

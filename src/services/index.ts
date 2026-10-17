@@ -1,5 +1,15 @@
 export { BillingService } from './billing.service.js';
 export type { BillLine, CounterPayment, ReversalResult, ReverseBillOptions, SettledBill } from './billing.service.js';
+export {
+  CatalogService,
+  DEFAULT_CASE_SIZE,
+  MAX_CASE_SIZE,
+  PRODUCT_CATEGORIES,
+  SIZE_CODES,
+  displayNameFor,
+  skuCodeFor,
+} from './catalog.service.js';
+export type { CatalogFilter, CatalogProduct, CatalogSku, NewProductInput, NewSkuInput, ProductCategory, ProductPatch, SkuPatch } from './catalog.service.js';
 export { CaptainService, MAX_ORDER_LINES, orderFingerprint } from './captain.service.js';
 export type { KotStatus, OrderLine, OrderRequest, PlacedOrder, WaiterProfile } from './captain.service.js';
 export { CounterQueries } from './counter-queries.js';

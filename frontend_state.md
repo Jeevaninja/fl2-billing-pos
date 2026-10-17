@@ -1,6 +1,6 @@
 # FL2 POS — Frontend State Reference
 
-As of Phase 9 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders, Phase 7 Day End, Phase 8 Expenses and peak controls, Phase 9 Purchase / GRN). Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
+As of Phase 10 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders, Phase 7 Day End, Phase 8 Expenses and peak controls, Phase 9 Purchase / GRN, Phase 10 Inventory Catalog and case-based GRN; plan `docs/ui/phase10-catalog-case-grn-plan.md`). Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
 
 - **Stack:** Vite 8, React 19, TypeScript, Tailwind CSS 4 (`@tailwindcss/vite`), Lucide icons, Vitest. No router, no state library.
 - **Run:** `npm run api:dev` at the repo root (API on `127.0.0.1:4310`), then `npm run dev` in `frontend/` (http://localhost:5173). Vite proxies `/api` to the API.
@@ -14,12 +14,13 @@ As of Phase 9 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Capt
 
 ```
 main.tsx                      StrictMode → <App/>, imports index.css (Tailwind)
-└─ App                        view: 'dashboard' | 'billing' | 'captain-orders' | 'day-end' | 'expenses' | 'purchase'; holds the Recently Used list
+└─ App                        view: 'dashboard' | 'billing' | 'captain-orders' | 'day-end' | 'expenses' | 'purchase' | 'catalog'; holds the Recently Used list
    ├─ Dashboard               module tiles + Recently Used rail + key legend footer
    │  ├─ header               Start peak (F8) button when a day is open and no peak runs
    │  ├─ PeakBanner           amber "PEAK #n running · since · expected drawer total" strip with End peak session (F8)
    │  ├─ day banner           "No business day is open" strip → Day End (context polled 15 s)
-   │  ├─ ModuleTile ×6        Billing Screen, Captain Orders (live "n open" badge, polled 15 s), Expense (live), Purchase (→ PurchaseScreen),
+   │  ├─ ModuleTile ×7        4 × 2 grid (2 × 4 narrow); Billing Screen spans two rows. Billing, Captain Orders (live "n open" badge,
+   │  │                       polled 15 s), Expense (live), Purchase (→ PurchaseScreen), Inventory Catalog (→ CatalogScreen),
    │  │                       Day End (reads "Open Day" and becomes the primary tile when no day is open), Reports
    │  ├─ RailButton ×≤6       most-recently-used actions
    │  └─ LiveClock, Kbd       (components/ui.tsx)
@@ -65,12 +66,27 @@ main.tsx                      StrictMode → <App/>, imports index.css (Tailwind
    └─ PurchaseScreen          useReducer(purchaseReducer); GET /api/context + /api/purchases polled 15 s
       ├─ header               day, "Received by <till cashier>", "Today n receipts · m btl"
       ├─ invoice strip        Invoice no (focused on load) → Enter → Vendor (optional) → Enter → SKU; both turn red on a duplicate
-      ├─ Add line (left)      SKU combobox (scan or type; debounced GET /api/skus; ↑/↓ + Enter; results show SizeChip and on-hand),
-      │                       Qty → Enter → Unit cost RupeeField (₹0 = free) → Enter stages the line and refocuses SKU
-      ├─ This invoice (right) staged lines (#, SKU + code, size, qty, unit / FREE, line total, × remove; click selects, Del removes),
+      ├─ Add line (left)      SKU combobox (scan or type; debounced GET /api/skus; ↑/↓ + Enter; results show SizeChip, case size, on-hand),
+      │                       picked note "code · Quarter 180ml · case of 64 · n on hand · sells at ₹…",
+      │                       Cases → Enter → Loose bottles → Enter (live "= 131 bottles") → Unit cost RupeeField (pre-filled from
+      │                       the catalog purchase price, editable; ₹0 = free) → Enter stages the line and refocuses SKU
+      ├─ This invoice (right) staged lines (#, SKU + code, size, bottles with "2 cs + 3 · case 64", unit / FREE, line total, × remove;
+      │                       click selects, Del removes),
       │                       FlashLine, footer: lines · bottles · invoice total, Post GRN (F9)
       ├─ Today's receipts     time, invoice, vendor, lines · bottles, total cost
-      └─ confirm              Modal: vendor, lines, bottles, total; Enter / F9 posts
+      └─ confirm              Modal: vendor, lines ("2 cs + 3 = 131 × ₹180.00"), bottles, total; Enter / F9 posts
+   └─ CatalogScreen           useReducer(catalogReducer); GET /api/catalog (debounced on search / "Show inactive"; re-read after a save)
+      ├─ header               "n liquors · m sizes"
+      ├─ toolbar              search (name, SKU code, barcode; focused on load), Show inactive, FlashLine, + New liquor (Ins)
+      ├─ list                 liquor rows (name, category, inactive badge, + Size, Edit) each followed by its sizes (code, Full 750ml …
+      │                       + barcode, sale, purchase or —, case, on hand, active / inactive, edit); ↑/↓ selection, click opens the editor
+      └─ CatalogFormModal     Modal (Enter / F9 saves, Esc cancels), one of:
+                              New liquor: name, code prefix (suggested from the name until edited), category chips, size grid
+                                (tick · SKU code preview · sale · purchase · case · barcode; ticking or typing pre-fills the case size)
+                              Edit liquor: name, category, active · Add size: missing sizes as chips + price / case / barcode fields
+                              Edit size: sale, purchase, case, barcode, active (code and size read-only)
+                              Footer shows the live validation hint or the server's refusal; deactivating turns Save into
+                              "Deactivate & save" with a warning. A PS012 duplicate keeps the form and outlines the clashing field.
 
 Shared: components/peak/PeakControls.tsx: PeakBanner, StartPeakButton, PeakStartDialog (cash + UPI readings → start),
         PeakEndDialog (closing readings → end → result view: expected, cash/UPI change, actual, variance; Enter closes).
@@ -94,10 +110,12 @@ Shared: components/peak/PeakControls.tsx: PeakBanner, StartPeakButton, PeakStart
 | `components/DayEndScreen.tsx` | `DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrders })` |
 | `components/ExpenseScreen.tsx` | `ExpenseScreen({ onExit, onOpenDayEnd })` |
 | `components/PurchaseScreen.tsx` | `PurchaseScreen({ onExit, onOpenDayEnd })` |
+| `components/CatalogScreen.tsx` | `CatalogScreen({ onExit })` |
 | `components/peak/PeakControls.tsx` | `PeakBanner`, `StartPeakButton`, `PeakStartDialog`, `PeakEndDialog` |
 | `components/RupeeField.tsx` | `RupeeField` |
 | `expense/expenseReducer.ts` | `expenseReducer`, `initialExpenseState`, `CATEGORIES`, `CATEGORY_LABEL`, `formError`, `formPayload`, `todayTotals` |
-| `purchase/purchaseReducer.ts` | `purchaseReducer`, `initialPurchaseState`, `MAX_LINE_QTY`, `lineError`, `submitError`, `submitPayload`, `lineTotal`, `stagedTotals`, `pickFromSearch` |
+| `purchase/purchaseReducer.ts` | `purchaseReducer`, `initialPurchaseState`, `MAX_LINE_QTY`, `lineError`, `submitError`, `submitPayload`, `lineTotal`, `stagedTotals`, `pickFromSearch`, `entryCount`, `bottlesFor`, `mergeCounts`, `countLabel` |
+| `catalog/catalogReducer.ts` | `catalogReducer`, `initialCatalogState`, `catalogRows`, `suggestPrefix`, `skuCodePreview`, `formError`, `newProductPayload`, `productPatch`, `addSkuPayload`, `skuPatch`, `deactivates`, `conflictField`, `DEFAULT_CASE_SIZE` |
 | `peak/peakMath.ts` | `parseReadings`, `describeVariance` |
 | `dayend/dayEndReducer.ts` | `dayEndReducer`, `initialDayEndState`, `dayEndView`, `blockerCount`, `openCounterBills`, `countedPaise`, `variancePreview`, `lockBlock` |
 
@@ -125,14 +143,22 @@ Only the Reports tile still calls `runStub`; every other tile (and F1/F2/F9, whi
 - **Keys:** 1–6 pick a category when no text field has focus (and move focus to the amount) · Enter records · Enter confirms a void · Esc dashboard.
 
 **Purchase screen (GRN)** (`purchaseReducer`, pure and unit-tested):
-- **State:** `load` (`loading` / `ready` / `offline` / `noDay`), `till`, `receipts` (today's, newest first), `invoiceNo`, `vendorName`, `invoiceError` (set by a PS011 duplicate, cleared on edit), the picker (`query`, `results`, `highlighted`, `picked`), `qty`, `cost`, `lines: StagedLine[]` (`sku`, `quantity`, `unitCostPaise`), `selectedLine`, `confirming`, `submitting`, `flash`.
+- **State:** `load` (`loading` / `ready` / `offline` / `noDay`), `till`, `receipts` (today's, newest first), `invoiceNo`, `vendorName`, `invoiceError` (set by a PS011 duplicate, cleared on edit), the picker (`query`, `results`, `highlighted`, `picked`), `cases`, `loose` (digits; empty = 0), `cost`, `lines: StagedLine[]` (`sku`, `cases`, `looseBottles`, `caseSize`, `quantity`, `unitCostPaise`), `selectedLine`, `confirming`, `submitting`, `flash`.
+- **Picking** a SKU pre-fills `cost` from its `purchasePricePaise` ("210", "1100.50"); with none the field is left empty.
 - **Selectors:**
-  - `lineError` checks a picked SKU, then qty 1–100,000, then a unit cost in valid rupees (₹0 allowed).
-  - `submitError` checks the invoice number, then at least one line. `submitPayload` trims both, blank vendor → null.
+  - `entryCount` = `{ cases, loose, total: cases × sku.caseSize + loose }`.
+  - `lineError` checks a picked SKU, then some cases or loose bottles, then loose below one case ("64 loose is a full case of 64 — add it to Cases"), then a total of 1–100,000, then a unit cost in valid rupees (₹0 allowed).
+  - `submitError` checks the invoice number, then at least one line. `submitPayload` trims both, blank vendor → null, and sends each line as `{ skuId, cases, looseBottles, caseSize, unitCost }`.
   - `stagedTotals` / `lineTotal` are bigint paise. `pickFromSearch` takes an exact barcode / SKU code match (a scan), else the only result, else the highlighted one.
-- **Staging:** re-adding a staged SKU at the same cost adds to its qty (capped at 100,000); at a different cost it's refused ("already on this invoice at ₹X — remove it first"). An inactive SKU can't be picked. Search results for a stale query are dropped.
+- **Staging:** re-adding a staged SKU at the same cost adds its cases and loose bottles, carrying a full case of loose into cases (`mergeCounts`; capped at 100,000 bottles); at a different cost it's refused ("already on this invoice at ₹X — remove it first"), and so is a re-add after the case size changed. A server `PS002` (case size changed in the catalog since the line was staged) keeps the lines and flashes the message. An inactive SKU can't be picked. Search results for a stale query are dropped.
 - **Posting:** `posted` clears the invoice, vendor and lines; `duplicate` keeps everything, closes the dialog and flags the invoice fields. Once the form is up, a failed poll only flashes (the invoice being keyed in stays).
-- **Keys:** Enter moves invoice → vendor → SKU → qty → cost → stage · ↑/↓ in SKU results · F9 asks to post, Enter / F9 confirms · Del removes the selected line (outside text fields) · Esc clears the line being entered; with lines staged, the first Esc warns and a second within 3 s leaves.
+- **Keys:** Enter moves invoice → vendor → SKU → cases → loose → cost → stage · ↑/↓ in SKU results · F9 asks to post, Enter / F9 confirms · Del removes the selected line (outside text fields) · Esc clears the line being entered; with lines staged, the first Esc warns and a second within 3 s leaves.
+
+**Inventory Catalog screen** (`catalogReducer`, pure and unit-tested):
+- **State:** `load` (`loading` / `ready` / `offline`), `products`, `query`, `includeInactive`, `selected` (index into `catalogRows`: each liquor followed by its sizes), `form` (`newProduct` / `editProduct` / `addSku` / `editSku`), `conflict` (`name` / `codePrefix` / `barcode` / `size`), `saveError`, `submitting`, `flash`.
+- **Forms:** prices are typed rupees parsed with `parseRupeesToPaise` (sale > ₹0, purchase optional ≥ ₹0), case size digits 1–1000, barcode no spaces. `formError` gives the first problem (prefixed with the SKU code for a size row). Edits send only the changed fields (`productPatch` / `skuPatch`; an empty purchase price or barcode sends `null` to clear it); no change just closes.
+- **Results:** `saved` upserts the server's copy of the liquor in name order and selects it; `conflict` keeps the form open with the reason in `saveError` (cleared by the next edit) and the clashing field outlined until it's edited. Results for a stale search are dropped. New sizes start at 0 stock.
+- **Keys:** ↑/↓ select · Enter edits the selected liquor or size · Ins new liquor · Esc clears the search, else back to the dashboard · in the form: Enter / F9 save, Esc cancel.
 
 **Billing scan stock note:** each scan's flash now ends with the bottles left (`stockLeft`: "57 left", or "last in stock"), computed from the `lookupSku` taken just before the sale. Stock received in Purchase shows on the very next scan.
 
@@ -207,13 +233,13 @@ No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDow
 
 | File | Contents |
 |---|---|
-| `api/client.ts` | `api.*` (`context`, `lookupSku`, `searchMembers`, `listWaiters`, `getBill`, `captainOrders`, `createBill`, `addItem`, `cancelItem` (optional `restock`), `setMember`, `tagWaiter`, `settle`, `settleWaiter`, `closeEmpty`, `reverse`, `peakSale`, `searchSkus`, `listPurchases`, `postPurchase`), `ApiError` (`status`, `code`; `NETWORK` when unreachable or the proxy answers non-JSON 5xx), `reviveJson`, `encodeJson` |
+| `api/client.ts` | `api.*` (`context`, `lookupSku`, `searchMembers`, `listWaiters`, `getBill`, `captainOrders`, `createBill`, `addItem`, `cancelItem` (optional `restock`), `setMember`, `tagWaiter`, `settle`, `settleWaiter`, `closeEmpty`, `reverse`, `peakSale`, `searchSkus`, `listPurchases`, `postPurchase`, `listCatalog`, `createProduct`, `updateProduct`, `addSku`, `updateSku`), `ApiError` (`status`, `code`, `constraint` on a 409; `NETWORK` when unreachable or the proxy answers non-JSON 5xx), `reviveJson`, `encodeJson` |
 | `api/types.ts` | Frontend mirrors of the API DTOs (`Bill`, `BillDetail`, `CounterContext`, `SkuLookup`, …) with `Paise = bigint`; dates stay ISO strings |
 | `billing/payment.ts` | `payOptions(detail)`, `planPayment(detail, input)` → counter tenders or waiter settle steps plus change, credit-limit pre-check, `describePlan` |
 | `billing/errors.ts` | `CounterError` (screen-raised), `counterErrorMessage(err)` (PS code → cashier wording) |
 | `hooks/scanBuffer.ts` | `scanKey(state, input)` pure state machine; `IDLE_RESET_MS` = 2 s; max 64 chars |
-| `lib/money.ts` | `formatPaise` (₹1,00,000.00 Indian grouping, bigint), `parseRupeesToPaise` |
-| `lib/ui.ts` | `FOCUS_RING`, `formatTime`, `keepFocus` |
+| `lib/money.ts` | `formatPaise` (₹1,00,000.00 Indian grouping, bigint), `parseRupeesToPaise`, `paiseToRupeeInput` (editable "1100.50") |
+| `lib/ui.ts` | `FOCUS_RING`, `formatTime`, `keepFocus`, `SIZE_NAME` (Full 750ml, Half 375ml, Quarter 180ml, Beer 650ml / 330ml — labels only), `SIZE_ORDER` |
 | `lib/beep.ts` | WebAudio scan feedback; silent if audio is unavailable |
 
 **Tests** (`*.test.ts`, Node environment, no DOM):
@@ -232,4 +258,5 @@ No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDow
 - Expense entries are stamped with the till's `FL2_CASHIER_ID`; there's no per-person attribution until staff login exists.
 - Breakage written off with `X` is a cancel line with `restock: false`; there is no separate breakage/ADJUSTMENT report yet.
 - The cashier is fixed by the API's `FL2_CASHIER_ID`; there's no login.
-- The headless-Chrome end-to-end scripts used to verify Phases 4 and 9 are not in the repo.
+- The headless-Chrome end-to-end scripts used to verify Phases 4, 9 and 10 are not in the repo.
+- Catalog edits are open to whoever is at the till (no staff login / role check yet). GRN unit cost is per bottle; there's no per-case price entry.

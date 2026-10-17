@@ -111,6 +111,8 @@ describe('CounterQueries', () => {
         displayName: 'House Rum — Full',
         sizeCode: 'FULL',
         pricePaise: PAISE.full,
+        purchasePricePaise: null,
+        caseSize: 12,
         onHandQty: OPENING_QTY - 2,
         isActive: true,
       });

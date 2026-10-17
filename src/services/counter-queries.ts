@@ -76,6 +76,10 @@ export interface SkuLookup {
   displayName: string;
   sizeCode: SizeCode;
   pricePaise: Paise;
+  /** Default per-bottle cost for a GRN line; null when the catalog has none. */
+  purchasePricePaise: Paise | null;
+  /** Sealed bottles per supplier case. */
+  caseSize: number;
   onHandQty: number;
   isActive: boolean;
 }
@@ -118,18 +122,20 @@ export interface WaiterRow {
   credit_limit_paise: DbInt | null;
 }
 
-interface SkuLookupRow {
+export interface SkuLookupRow {
   id: string;
   sku_code: string;
   barcode: string | null;
   display_name: string;
   size_code: SizeCode;
   price_paise: DbInt;
+  purchase_price_paise: DbInt | null;
+  case_size: number;
   on_hand_qty: number;
   is_active: boolean;
 }
 
-function mapSkuLookup(row: SkuLookupRow): SkuLookup {
+export function mapSkuLookup(row: SkuLookupRow): SkuLookup {
   return {
     id: row.id,
     skuCode: row.sku_code,
@@ -137,6 +143,8 @@ function mapSkuLookup(row: SkuLookupRow): SkuLookup {
     displayName: row.display_name,
     sizeCode: row.size_code,
     pricePaise: toPaise(row.price_paise),
+    purchasePricePaise: toPaiseOrNull(row.purchase_price_paise),
+    caseSize: row.case_size,
     onHandQty: row.on_hand_qty,
     isActive: row.is_active,
   };
@@ -207,7 +215,7 @@ export class CounterQueries {
     if (text === '') return null;
     const row = await maybeOne<SkuLookupRow>(
       this.db,
-      `SELECT k.id, k.sku_code, k.barcode, k.display_name, k.size_code, k.price_paise, k.is_active,
+      `SELECT k.id, k.sku_code, k.barcode, k.display_name, k.size_code, k.price_paise, k.purchase_price_paise, k.case_size, k.is_active,
               coalesce(s.on_hand_qty, 0) AS on_hand_qty
          FROM skus k
          LEFT JOIN sku_stock s ON s.sku_id = k.id
@@ -227,7 +235,7 @@ export class CounterQueries {
     const text = query.trim();
     if (text === '') return [];
     const { rows } = await this.db.query<SkuLookupRow>(
-      `SELECT k.id, k.sku_code, k.barcode, k.display_name, k.size_code, k.price_paise, k.is_active,
+      `SELECT k.id, k.sku_code, k.barcode, k.display_name, k.size_code, k.price_paise, k.purchase_price_paise, k.case_size, k.is_active,
               coalesce(s.on_hand_qty, 0) AS on_hand_qty
          FROM skus k
          JOIN products p ON p.id = k.product_id

@@ -103,6 +103,10 @@ export interface SkuLookup {
   displayName: string
   sizeCode: SizeCode
   pricePaise: Paise
+  /** Default per-bottle cost for a GRN line; null when the catalog has none. */
+  purchasePricePaise: Paise | null
+  /** Sealed bottles per supplier case. */
+  caseSize: number
   onHandQty: number
   isActive: boolean
 }
@@ -234,7 +238,12 @@ export interface StockReceiptLine {
   skuCode: string
   displayName: string
   sizeCode: SizeCode
+  /** Whole bottles posted to stock. */
   quantity: number
+  cases: number
+  /** Case size the line was counted at; null for a loose-only line. */
+  caseSize: number | null
+  looseBottles: number
   unitCostPaise: Paise
   lineTotalPaise: Paise
 }
@@ -244,9 +253,63 @@ export interface StockReceiptDetail {
   lines: StockReceiptLine[]
 }
 
-/** One invoice line as posted: `unitCost` is whole paise (0 for scheme / free bottles). */
+/**
+ * One invoice line as posted: the server computes cases × caseSize + looseBottles, and refuses the
+ * line (PS002) if the catalog's case size has changed. `unitCost` is whole paise per bottle (0 = free).
+ */
 export interface ReceiptLinePayload {
   skuId: string
-  quantity: number
+  cases: number
+  looseBottles: number
+  caseSize: number
   unitCost: Paise
+}
+
+// ── Inventory catalog ───────────────────────────────────────────────────────
+
+export const PRODUCT_CATEGORIES = ['WHISKY', 'RUM', 'VODKA', 'BRANDY', 'GIN', 'WINE', 'BEER', 'OTHER'] as const
+export type ProductCategory = (typeof PRODUCT_CATEGORIES)[number]
+
+export interface CatalogSku extends SkuLookup {
+  productId: string
+}
+
+export interface CatalogProduct {
+  id: string
+  name: string
+  category: ProductCategory
+  isActive: boolean
+  /** Ordered FULL → HALF → QUARTER → 650 → 330. */
+  skus: CatalogSku[]
+}
+
+/** A size on a new liquor (or one added later). Prices are whole paise. */
+export interface NewSkuPayload {
+  sizeCode: SizeCode
+  salePrice: Paise
+  purchasePrice: Paise | null
+  caseSize: number
+  barcode: string | null
+}
+
+export interface NewProductPayload {
+  name: string
+  category: ProductCategory
+  codePrefix: string
+  skus: NewSkuPayload[]
+}
+
+export interface ProductPatch {
+  name?: string
+  category?: ProductCategory
+  isActive?: boolean
+}
+
+/** `null` clears the purchase price or barcode; a missing key leaves the field as it is. */
+export interface SkuPatchPayload {
+  salePrice?: Paise
+  purchasePrice?: Paise | null
+  caseSize?: number
+  barcode?: string | null
+  isActive?: boolean
 }

@@ -11,6 +11,7 @@ export const PosErrorCode = {
   DERIVED_COLUMN: 'PS009',
   BILL_ON_BILL: 'PS010',
   DUPLICATE_RECEIPT: 'PS011',
+  DUPLICATE_CATALOG_ENTRY: 'PS012',
 } as const;
 
 export type PosErrorCode = (typeof PosErrorCode)[keyof typeof PosErrorCode];
@@ -52,9 +53,13 @@ const CONSTRAINT_CODES: Readonly<Record<string, PosErrorCode>> = {
   business_days_one_open: PosErrorCode.DAY_OR_PEAK_RULE,
   business_days_date_unique: PosErrorCode.DAY_OR_PEAK_RULE,
   stock_receipts_invoice_unique: PosErrorCode.DUPLICATE_RECEIPT,
+  products_name_unique: PosErrorCode.DUPLICATE_CATALOG_ENTRY,
+  skus_sku_code_unique: PosErrorCode.DUPLICATE_CATALOG_ENTRY,
+  skus_barcode_unique: PosErrorCode.DUPLICATE_CATALOG_ENTRY,
+  skus_product_size_unique: PosErrorCode.DUPLICATE_CATALOG_ENTRY,
 };
 
-/** A POS business-rule violation, carrying one of the PS001–PS011 codes. */
+/** A POS business-rule violation, carrying one of the PS001–PS012 codes. */
 export class PosError extends Error {
   override readonly name = 'PosError';
   readonly code: PosErrorCode;

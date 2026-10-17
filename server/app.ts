@@ -8,15 +8,20 @@ import type { SqlDatabase } from '../src/db/client.js';
 import type { CounterTender, Tender } from '../src/domain/types.js';
 import {
   BillingService,
+  CatalogService,
   CounterQueries,
   DayEndService,
   EXPENSE_CATEGORIES,
   NotFoundError,
   PeakSessionService,
+  PRODUCT_CATEGORIES,
   PurchaseService,
+  SIZE_CODES,
   WaiterService,
   type CounterPayment,
+  type NewSkuInput,
   type ReceiptLineInput,
+  type SkuPatch,
 } from '../src/services/index.js';
 import {
   BadRequestError,
@@ -44,6 +49,36 @@ const TENDERS = ['CASH', 'UPI', 'WAITER_CREDIT'] as const satisfies readonly Ten
 /** Loopback names only: blocks DNS-rebinding pages from reaching the till through a foreign Host. */
 const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
 
+/** Optional, nullable text: undefined = unchanged, null = clear. */
+function optNullableStr(value: unknown, name: string): string | null | undefined {
+  return value === undefined || value === null ? (value as null | undefined) : str(value, name);
+}
+
+function newSku(value: unknown, name: string): NewSkuInput {
+  const sku = (value ?? {}) as Body;
+  return {
+    sizeCode: oneOf(sku.sizeCode, `${name}.sizeCode`, SIZE_CODES),
+    salePricePaise: paise(sku.salePrice, `${name}.salePrice`),
+    purchasePricePaise: sku.purchasePrice === undefined || sku.purchasePrice === null ? null : paise(sku.purchasePrice, `${name}.purchasePrice`),
+    caseSize: int(sku.caseSize, `${name}.caseSize`),
+    barcode: optNullableStr(sku.barcode, `${name}.barcode`) ?? null,
+  };
+}
+
+/** A GRN line: `{ cases, looseBottles, caseSize }` (Phase 10) or the loose-only `{ quantity }`. */
+function receiptLine(value: unknown, i: number): ReceiptLineInput {
+  const line = (value ?? {}) as Body;
+  const name = `lines[${i}]`;
+  const base = { skuId: id(line.skuId, `${name}.skuId`), unitCostPaise: paise(line.unitCost, `${name}.unitCost`) };
+  if (line.cases === undefined) return { ...base, quantity: int(line.quantity, `${name}.quantity`) };
+  return {
+    ...base,
+    cases: int(line.cases, `${name}.cases`),
+    looseBottles: line.looseBottles === undefined ? 0 : int(line.looseBottles, `${name}.looseBottles`),
+    caseSize: int(line.caseSize, `${name}.caseSize`),
+  };
+}
+
 function buildRoutes({ db, cashierId }: ApiConfig): Route[] {
   const billing = new BillingService(db);
   const peak = new PeakSessionService(db);
@@ -51,6 +86,7 @@ function buildRoutes({ db, cashierId }: ApiConfig): Route[] {
   const queries = new CounterQueries(db);
   const dayEnd = new DayEndService(db);
   const purchases = new PurchaseService(db);
+  const catalog = new CatalogService(db);
 
   return [
     route('GET', '/api/health', async () => ok({ ok: true })),
@@ -201,16 +237,52 @@ function buildRoutes({ db, cashierId }: ApiConfig): Route[] {
     route('GET', '/api/purchases/:receiptId', async ({ params }) => ok(await purchases.getReceipt(id(params.receiptId, 'receiptId')))),
     route('POST', '/api/purchases', async ({ body }) => {
       if (!Array.isArray(body.lines)) throw new BadRequestError('lines must be an array');
-      const lines = body.lines.map((l: unknown, i): ReceiptLineInput => {
-        const line = (l ?? {}) as Body;
-        return {
-          skuId: id(line.skuId, `lines[${i}].skuId`),
-          quantity: int(line.quantity, `lines[${i}].quantity`),
-          unitCostPaise: paise(line.unitCost, `lines[${i}].unitCost`),
-        };
-      });
+      const lines = body.lines.map((l: unknown, i) => receiptLine(l, i));
       const vendorName = body.vendorName === undefined || body.vendorName === null ? null : str(body.vendorName, 'vendorName');
       return created(await purchases.recordReceipt({ invoiceNo: str(body.invoiceNo, 'invoiceNo'), vendorName, lines }, cashierId));
+    }),
+
+    // ── Inventory catalog ──
+    route('GET', '/api/catalog', async ({ query }) =>
+      ok(await catalog.listCatalog({ q: query.get('q') ?? '', includeInactive: query.get('includeInactive') === 'true' })),
+    ),
+    route('POST', '/api/catalog/products', async ({ body }) => {
+      if (!Array.isArray(body.skus)) throw new BadRequestError('skus must be an array');
+      return created(
+        await catalog.createProduct({
+          name: str(body.name, 'name'),
+          category: oneOf(body.category, 'category', PRODUCT_CATEGORIES),
+          codePrefix: str(body.codePrefix, 'codePrefix'),
+          skus: body.skus.map((s: unknown, i) => newSku(s, `skus[${i}]`)),
+        }),
+      );
+    }),
+    route('PATCH', '/api/catalog/products/:productId', async ({ params, body }) =>
+      ok(
+        await catalog.updateProduct(id(params.productId, 'productId'), {
+          name: body.name === undefined ? undefined : str(body.name, 'name'),
+          category: optOneOf(body.category, 'category', PRODUCT_CATEGORIES),
+          isActive: optBool(body.isActive, 'isActive'),
+        }),
+      ),
+    ),
+    route('POST', '/api/catalog/products/:productId/skus', async ({ params, body }) =>
+      created(
+        await catalog.addSku(id(params.productId, 'productId'), {
+          ...newSku(body, 'sku'),
+          codePrefix: body.codePrefix === undefined ? undefined : str(body.codePrefix, 'codePrefix'),
+        }),
+      ),
+    ),
+    route('PATCH', '/api/catalog/skus/:skuId', async ({ params, body }) => {
+      const patch: SkuPatch = {
+        salePricePaise: optPaise(body.salePrice, 'salePrice'),
+        purchasePricePaise: body.purchasePrice === null ? null : optPaise(body.purchasePrice, 'purchasePrice'),
+        caseSize: body.caseSize === undefined ? undefined : int(body.caseSize, 'caseSize'),
+        barcode: optNullableStr(body.barcode, 'barcode'),
+        isActive: optBool(body.isActive, 'isActive'),
+      };
+      return ok(await catalog.updateSku(id(params.skuId, 'skuId'), patch));
     }),
 
     // ── Waiter accounts ──

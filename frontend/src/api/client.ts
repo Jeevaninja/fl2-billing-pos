@@ -9,14 +9,19 @@ import type {
   DayEndSummary,
   DaySummary,
   CashExpense,
+  CatalogProduct,
   ExpenseCategory,
   ExpenseEntry,
   MemberSummary,
+  NewProductPayload,
+  NewSkuPayload,
   Paise,
   PeakReconciliation,
   PeakSession,
+  ProductPatch,
   ReceiptLinePayload,
   SkuLookup,
+  SkuPatchPayload,
   StockReceipt,
   StockReceiptDetail,
   Tender,
@@ -24,16 +29,19 @@ import type {
   WaiterSummary,
 } from './types'
 
-/** A failed API call. `code` is the server's error code (PS001–PS011, NOT_FOUND, …) or NETWORK. */
+/** A failed API call. `code` is the server's error code (PS001–PS012, NOT_FOUND, …) or NETWORK. */
 export class ApiError extends Error {
   override readonly name = 'ApiError'
   readonly status: number
   readonly code: string
+  /** The database constraint behind a 409, when one fired (e.g. `skus_barcode_unique`). */
+  readonly constraint: string | undefined
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, constraint?: string) {
     super(message)
     this.status = status
     this.code = code
+    this.constraint = constraint
   }
 }
 
@@ -49,7 +57,7 @@ export function encodeJson(value: unknown): string {
   return JSON.stringify(value, (_key, v: unknown) => (typeof v === 'bigint' ? v.toString() : v))
 }
 
-async function call<T>(method: 'GET' | 'POST' | 'PUT', path: string, body?: unknown): Promise<T> {
+async function call<T>(method: 'GET' | 'POST' | 'PUT' | 'PATCH', path: string, body?: unknown): Promise<T> {
   let res: Response
   try {
     res = await fetch(path, {
@@ -69,8 +77,8 @@ async function call<T>(method: 'GET' | 'POST' | 'PUT', path: string, body?: unkn
     throw new ApiError(res.status, res.status >= 500 ? 'NETWORK' : 'BAD_RESPONSE', 'unexpected response from the POS server')
   }
   if (!res.ok) {
-    const error = (parsed as { error?: { code?: string; message?: string } } | undefined)?.error
-    throw new ApiError(res.status, error?.code ?? 'INTERNAL', error?.message ?? `HTTP ${res.status}`)
+    const error = (parsed as { error?: { code?: string; message?: string; constraint?: string } } | undefined)?.error
+    throw new ApiError(res.status, error?.code ?? 'INTERNAL', error?.message ?? `HTTP ${res.status}`, error?.constraint)
   }
   return parsed as T
 }
@@ -124,4 +132,14 @@ export const api = {
   listPurchases: () => call<StockReceipt[]>('GET', '/api/purchases'),
   postPurchase: (invoiceNo: string, vendorName: string | null, lines: ReceiptLinePayload[]) =>
     call<StockReceiptDetail>('POST', '/api/purchases', { invoiceNo, vendorName, lines }),
+
+  /** Liquors with their sizes; inactive ones only with `includeInactive`. */
+  listCatalog: (q: string, includeInactive: boolean) =>
+    call<CatalogProduct[]>('GET', `/api/catalog?q=${encodeURIComponent(q)}&includeInactive=${includeInactive}`),
+  createProduct: (payload: NewProductPayload) => call<CatalogProduct>('POST', '/api/catalog/products', payload),
+  updateProduct: (productId: string, patch: ProductPatch) =>
+    call<CatalogProduct>('PATCH', `/api/catalog/products/${encodeURIComponent(productId)}`, patch),
+  addSku: (productId: string, sku: NewSkuPayload) =>
+    call<CatalogProduct>('POST', `/api/catalog/products/${encodeURIComponent(productId)}/skus`, sku),
+  updateSku: (skuId: string, patch: SkuPatchPayload) => call<CatalogProduct>('PATCH', `/api/catalog/skus/${encodeURIComponent(skuId)}`, patch),
 }

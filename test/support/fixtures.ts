@@ -29,6 +29,9 @@ export interface Fixture {
   };
 }
 
+/** Bottles per supplier case (skus.case_size). */
+export const CASE_SIZE: Record<SkuKey, number> = { full: 12, half: 32, quarter: 64, beer650: 12, beer330: 24 };
+
 const SKUS: ReadonlyArray<{ key: SkuKey; product: 'rum' | 'lager'; code: string; size: string; name: string }> = [
   { key: 'full', product: 'rum', code: 'HRUM-F', size: 'FULL', name: 'House Rum — Full' },
   { key: 'half', product: 'rum', code: 'HRUM-H', size: 'HALF', name: 'House Rum — Half' },
@@ -51,9 +54,9 @@ export async function seed(db: SqlClient): Promise<Fixture> {
   const sku = {} as Record<SkuKey, string>;
   for (const s of SKUS) {
     sku[s.key] = await id(
-      `INSERT INTO skus (product_id, sku_code, size_code, display_name, price_paise)
-       VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-      [products[s.product], s.code, s.size, s.name, PRICE[s.key]],
+      `INSERT INTO skus (product_id, sku_code, size_code, display_name, price_paise, case_size)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+      [products[s.product], s.code, s.size, s.name, PRICE[s.key], CASE_SIZE[s.key]],
     );
     await db.query(`INSERT INTO stock_movements (sku_id, movement_type, qty_delta) VALUES ($1, 'OPENING', $2)`, [
       sku[s.key],

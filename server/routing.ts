@@ -25,7 +25,7 @@ export interface Request {
 export type Handler = (req: Request) => Promise<{ status?: number; body: unknown }>;
 
 export interface Route {
-  method: 'GET' | 'POST' | 'PUT';
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH';
   pattern: RegExp;
   handler: Handler;
 }
