@@ -47,6 +47,17 @@ describe('formatKot', () => {
   it('formats the time in the configured zone', () => {
     expect(formatKot(ticket, { timeZone: 'UTC' })).toContain('14/10/2026, 15:00');
   });
+
+  it('prints catalog names with an em dash as plain ASCII (printer code pages)', () => {
+    const text = formatKot({
+      ...ticket,
+      waiter: { code: 'W01', displayName: 'Suresh – Floor 2' },
+      lines: [{ skuCode: 'HWHS-Q', displayName: 'House Whisky — Quarter', sizeCode: 'QUARTER', quantity: 1 }],
+    });
+    expect(text).toContain('  1  House Whisky - Quarter');
+    expect(text).toContain('Waiter: W01 Suresh - Floor 2');
+    expect(text).toMatch(/^[\x20-\x7e\n]*$/);
+  });
 });
 
 describe('PrinterService (stub)', () => {
