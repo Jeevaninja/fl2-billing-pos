@@ -131,6 +131,44 @@ export interface WaiterDayTotals {
 
 export type WaiterStats = WaiterSummary & WaiterDayTotals;
 
+/** A waiter's account for the open day (Phase 16 Waiter Ledger). Billed − Paid = Balance in normal flows. */
+export interface WaiterLedgerRow extends WaiterSummary {
+  /** Σ totals of the day's sale bills tagged to the waiter, reversed bills left out. */
+  billedPaise: Paise;
+  /** Σ CASH / UPI tenders on those bills + Σ the day's repayments (net of voids). */
+  paidPaise: Paise;
+  /** What the waiter owes now: dues on their OPEN bills + credit balance. Must be ₹0 to close the day. */
+  balancePaise: Paise;
+  openBills: number;
+  openDuePaise: Paise;
+  /** When their newest open bill was created (new-order hint); null with none open. */
+  newestOpenAt: Date | null;
+}
+
+export type LedgerAllocation =
+  | { kind: 'BILL'; billId: string; billNo: number; amountPaise: Paise; settled: boolean; remainingDuePaise: Paise }
+  | { kind: 'CREDIT'; amountPaise: Paise }
+  | { kind: 'VOID'; amountPaise: Paise };
+
+/** Money handed in at one moment: one payment, possibly spread over several bills and the credit balance. */
+export interface LedgerReceipt {
+  at: Date;
+  tender: 'CASH' | 'UPI';
+  amountPaise: Paise;
+  allocations: LedgerAllocation[];
+}
+
+export interface WaiterLedger {
+  waiter: WaiterLedgerRow;
+  /** Credit not yet repaid (`outstanding_balance`); part of the balance. */
+  creditPaise: Paise;
+  /** OPEN sale bills tagged to the waiter (any source), oldest first. */
+  openBills: BillDetail[];
+  /** Today's money from the waiter, newest first. */
+  receipts: LedgerReceipt[];
+}
+
+
 export interface WaiterStatsReport {
   /** The open business day; null when none is open (every waiter then reports zeros). */
   businessDayId: string | null;
@@ -190,6 +228,60 @@ export function mapWaiter(r: WaiterRow): WaiterSummary {
     isTrusted: r.is_trusted,
     outstandingPaise: toPaise(r.outstanding_balance),
     creditLimitPaise: toPaiseOrNull(r.credit_limit_paise),
+  };
+}
+
+type WaiterLedgerDbRow = WaiterRow & { billed: DbInt; paid: DbInt; open_bills: number; open_due: DbInt; newest_open_at: Date | null };
+
+/**
+ * Per-waiter figures for the open day. Open dues cover every OPEN bill (an open bill can't outlive its
+ * day, since Day End refuses to close over one). `$1` = waiter id filter or null for all.
+ */
+const WAITER_LEDGER_SQL = `
+  WITH day AS (SELECT id FROM business_days WHERE status = 'OPEN'),
+  wb AS (
+    SELECT b.waiter_id, b.total_paise,
+           coalesce((SELECT sum(p.amount_paise) FROM bill_payments p
+                      WHERE p.bill_id = b.id AND p.tender_type IN ('CASH', 'UPI')), 0) AS cash_upi
+      FROM bills b
+     WHERE b.waiter_id IS NOT NULL AND b.bill_kind = 'SALE' AND b.business_day_id = (SELECT id FROM day)
+       AND NOT EXISTS (SELECT 1 FROM bills r WHERE r.reverses_bill_id = b.id)
+  ),
+  billed AS (SELECT waiter_id, count(*) AS n, sum(total_paise) AS billed, sum(cash_upi) AS paid FROM wb GROUP BY waiter_id),
+  repaid AS (
+    SELECT waiter_id, count(*) AS n, sum(amount_paise) AS repaid FROM waiter_payments
+     WHERE business_day_id = (SELECT id FROM day) GROUP BY waiter_id
+  ),
+  open AS (
+    SELECT b.waiter_id, count(*) AS n, max(b.created_at) AS newest,
+           sum(b.total_paise - coalesce((SELECT sum(p.amount_paise) FROM bill_payments p WHERE p.bill_id = b.id), 0)) AS due
+      FROM bills b
+     WHERE b.waiter_id IS NOT NULL AND b.status = 'OPEN' AND b.bill_kind = 'SALE'
+     GROUP BY b.waiter_id
+  )
+  SELECT ${WAITER_COLUMNS.split(', ').map((c) => `w.${c}`).join(', ')},
+         coalesce(bl.billed, 0)::text                         AS billed,
+         (coalesce(bl.paid, 0) + coalesce(rp.repaid, 0))::text AS paid,
+         coalesce(o.n, 0)::int                                AS open_bills,
+         coalesce(o.due, 0)::text                             AS open_due,
+         o.newest                                             AS newest_open_at
+    FROM waiters w
+    LEFT JOIN billed bl ON bl.waiter_id = w.id
+    LEFT JOIN repaid rp ON rp.waiter_id = w.id
+    LEFT JOIN open o ON o.waiter_id = w.id
+   WHERE ($1::uuid IS NULL AND (bl.n > 0 OR rp.n > 0 OR o.n > 0 OR w.outstanding_balance > 0)) OR w.id = $1::uuid
+   ORDER BY (w.outstanding_balance + coalesce(o.due, 0)) DESC, w.waiter_code`;
+
+function mapLedgerRow(r: WaiterLedgerDbRow): WaiterLedgerRow {
+  const openDuePaise = toPaise(r.open_due);
+  return {
+    ...mapWaiter(r),
+    billedPaise: toPaise(r.billed),
+    paidPaise: toPaise(r.paid),
+    balancePaise: toPaise(r.outstanding_balance) + openDuePaise,
+    openBills: r.open_bills,
+    openDuePaise,
+    newestOpenAt: r.newest_open_at,
   };
 }
 
@@ -340,6 +432,71 @@ export class CounterQueries {
       totals.settledPaise += w.settledPaise;
     }
     return { businessDayId, waiters, totals };
+  }
+
+  /** Waiters with a bill or a payment today, or anything owed: biggest balance first, then by code. */
+  async listWaiterLedger(): Promise<WaiterLedgerRow[]> {
+    const { rows } = await this.db.query<WaiterLedgerDbRow>(WAITER_LEDGER_SQL, [null]);
+    return rows.map(mapLedgerRow);
+  }
+
+  /** One waiter's account: figures, open bills with their lines, and today's receipts. */
+  async getWaiterLedger(waiterId: string): Promise<WaiterLedger> {
+    const { rows } = await this.db.query<WaiterLedgerDbRow>(WAITER_LEDGER_SQL, [waiterId]);
+    const row = rows[0];
+    if (!row) throw new NotFoundError('waiter', waiterId);
+
+    const { rows: openIds } = await this.db.query<{ id: string }>(
+      `SELECT id FROM bills WHERE waiter_id = $1 AND status = 'OPEN' AND bill_kind = 'SALE' ORDER BY created_at, bill_no`,
+      [waiterId],
+    );
+    const openBills: BillDetail[] = [];
+    for (const { id } of openIds) openBills.push(await this.getBillDetail(id));
+
+    // Rows written in one transaction share now(): one receipt = one waiter + tender + timestamp.
+    const { rows: money } = await this.db.query<{
+      at: Date; at_key: string; tender: 'CASH' | 'UPI'; amount: DbInt; bill_id: string | null; bill_no: number | null; remaining: DbInt | null;
+    }>(
+      `WITH day AS (SELECT id FROM business_days WHERE status = 'OPEN'),
+       pay AS (
+         SELECT p.created_at, p.id, p.tender_type, p.amount_paise, p.business_day_id, p.bill_id, b.bill_no,
+                b.total_paise - sum(p.amount_paise) OVER (PARTITION BY p.bill_id ORDER BY p.created_at, p.id) AS remaining
+           FROM bill_payments p
+           JOIN bills b ON b.id = p.bill_id
+          WHERE b.waiter_id = $1 AND b.bill_kind = 'SALE' AND NOT EXISTS (SELECT 1 FROM bills r WHERE r.reverses_bill_id = b.id)
+       )
+       SELECT created_at AS at, created_at::text AS at_key, tender_type AS tender, amount_paise::text AS amount,
+              bill_id, bill_no, remaining::text AS remaining
+         FROM pay
+        WHERE business_day_id = (SELECT id FROM day) AND tender_type IN ('CASH', 'UPI')
+       UNION ALL
+       SELECT created_at, created_at::text, tender_type, amount_paise::text, NULL, NULL, NULL
+         FROM waiter_payments
+        WHERE waiter_id = $1 AND business_day_id = (SELECT id FROM day)
+       ORDER BY at_key DESC, bill_no NULLS LAST`,
+      [waiterId],
+    );
+    const receipts: LedgerReceipt[] = [];
+    const byKey = new Map<string, LedgerReceipt>();
+    for (const m of money) {
+      const key = `${m.at_key}|${m.tender}`;
+      let receipt = byKey.get(key);
+      if (!receipt) {
+        receipt = { at: m.at, tender: m.tender, amountPaise: 0n, allocations: [] };
+        byKey.set(key, receipt);
+        receipts.push(receipt);
+      }
+      const amountPaise = toPaise(m.amount);
+      receipt.amountPaise += amountPaise;
+      if (m.bill_id !== null && m.bill_no !== null) {
+        const remainingDuePaise = toPaise(m.remaining ?? 0);
+        receipt.allocations.push({ kind: 'BILL', billId: m.bill_id, billNo: m.bill_no, amountPaise, settled: remainingDuePaise === 0n, remainingDuePaise });
+      } else {
+        receipt.allocations.push({ kind: amountPaise < 0n ? 'VOID' : 'CREDIT', amountPaise });
+      }
+    }
+
+    return { waiter: mapLedgerRow(row), creditPaise: toPaise(row.outstanding_balance), openBills, receipts };
   }
 
   /** Every OPEN sale bill placed from the Captain app, oldest first: the cashier's settle queue. */

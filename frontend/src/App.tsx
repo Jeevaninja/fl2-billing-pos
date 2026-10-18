@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react'
 import BillingScreen from './billing/BillingScreen'
 import BankDepositScreen from './components/BankDepositScreen'
-import CaptainOrdersScreen from './components/CaptainOrdersScreen'
+import WaiterLedgerScreen from './components/WaiterLedgerScreen'
 import CatalogScreen from './components/CatalogScreen'
 import Dashboard from './components/Dashboard'
 import DayEndScreen from './components/DayEndScreen'
@@ -44,7 +44,7 @@ export default function App() {
   const exitToDashboard = useCallback(() => setView('dashboard'), [])
 
   if (view === 'billing') return <BillingScreen onExit={exitToDashboard} />
-  if (view === 'captain-orders') return <CaptainOrdersScreen onExit={exitToDashboard} />
+  if (view === 'captain-orders') return <WaiterLedgerScreen onExit={exitToDashboard} />
   if (view === 'expenses') return (
       <ExpenseScreen
         onExit={fromDayEnd ? openDayEnd : exitToDashboard}

@@ -1,4 +1,4 @@
-import type { SqlDatabase } from '../db/client.js';
+import type { SqlClient, SqlDatabase } from '../db/client.js';
 import { NotFoundError, PosError, PosErrorCode, withPosErrors } from '../db/errors.js';
 import { assertPaise, type DbInt, type Paise, paiseParam, toPaise } from '../domain/money.js';
 import type { Bill, BillPayment, CounterTender, Tender, WaiterPayment } from '../domain/types.js';
@@ -18,7 +18,77 @@ export interface WaiterRepayment {
   outstandingPaise: Paise;
 }
 
+/** Mode A: several whole bills paid off at once. */
+export interface WaiterBillsSettlement {
+  bills: Bill[];
+  /** Σ amounts paid (each bill's exact due). */
+  totalPaise: Paise;
+  /** What the waiter still owes afterwards: open-bill dues + credit balance. */
+  balancePaise: Paise;
+}
+
+/** Where one slice of a lump sum went. */
+export type ReceiptAllocation =
+  | { kind: 'BILL'; billId: string; billNo: number; amountPaise: Paise; settled: boolean; remainingDuePaise: Paise }
+  | { kind: 'CREDIT'; amountPaise: Paise };
+
+/** Mode B: money handed in without naming bills, spread oldest open bill first, then onto the credit balance. */
+export interface WaiterReceipt {
+  tender: CounterTender;
+  amountPaise: Paise;
+  allocations: ReceiptAllocation[];
+  balancePaise: Paise;
+}
+
+interface OpenDue {
+  id: string;
+  bill_no: number;
+  due: DbInt;
+}
+
 const WAITER_TENDERS: ReadonlySet<string> = new Set<Tender>(['CASH', 'UPI', 'WAITER_CREDIT']);
+
+/** Locks the waiter row (serialising every money movement for them) and returns it. */
+async function lockWaiter(tx: SqlClient, waiterId: string): Promise<{ waiter_code: string; is_trusted: boolean; outstanding_balance: DbInt }> {
+  const waiter = await maybeOne<{ waiter_code: string; is_trusted: boolean; outstanding_balance: DbInt }>(
+    tx,
+    `SELECT waiter_code, is_trusted, outstanding_balance::text FROM waiters WHERE id = $1 FOR UPDATE`,
+    [waiterId],
+  );
+  if (!waiter) throw new NotFoundError('waiter', waiterId);
+  return waiter;
+}
+
+/** The waiter's OPEN sale bills with what is still due, oldest first. */
+async function openDues(tx: SqlClient, waiterId: string): Promise<OpenDue[]> {
+  const { rows } = await tx.query<OpenDue>(
+    `SELECT b.id, b.bill_no,
+            (b.total_paise - coalesce((SELECT sum(p.amount_paise) FROM bill_payments p WHERE p.bill_id = b.id), 0))::text AS due
+       FROM bills b
+      WHERE b.waiter_id = $1 AND b.status = 'OPEN' AND b.bill_kind = 'SALE'
+      ORDER BY b.created_at, b.bill_no`,
+    [waiterId],
+  );
+  return rows;
+}
+
+/** Open-bill dues + credit balance: everything the waiter owes the house. */
+async function waiterBalance(tx: SqlClient, waiterId: string): Promise<Paise> {
+  const row = await one<{ balance: DbInt }>(
+    tx,
+    `SELECT (w.outstanding_balance + coalesce((
+              SELECT sum(b.total_paise - coalesce((SELECT sum(p.amount_paise) FROM bill_payments p WHERE p.bill_id = b.id), 0))
+                FROM bills b WHERE b.waiter_id = w.id AND b.status = 'OPEN' AND b.bill_kind = 'SALE'), 0))::text AS balance
+       FROM waiters w WHERE w.id = $1`,
+    [waiterId],
+  );
+  return toPaise(row.balance);
+}
+
+async function requireOpenDay(tx: SqlClient): Promise<void> {
+  const day = await maybeOne(tx, `SELECT 1 FROM business_days WHERE status = 'OPEN'`);
+  if (!day) throw new PosError(PosErrorCode.DAY_OR_PEAK_RULE, 'no business day is open');
+}
 
 export class WaiterService {
   constructor(private readonly db: SqlDatabase) {}
@@ -90,6 +160,100 @@ export class WaiterService {
         const remainingDuePaise = due - paying;
         const updated = remainingDuePaise === 0n ? await settle(tx, billId, null) : await getBill(tx, billId);
         return { bill: updated, payment, remainingDuePaise };
+      }),
+    );
+  }
+
+  /**
+   * Mode A: pays off the chosen bills, each for exactly what is still due, with one tender. All or
+   * nothing: a bill that is not this waiter's (PS002) or no longer open (PS001) rolls every bill back.
+   * WAITER_CREDIT (collect later) is for trusted waiters only (PS004); whole bills suit untrusted waiters.
+   */
+  async settleWaiterBills(waiterId: string, billIds: readonly string[], tender: Tender, staffId: string): Promise<WaiterBillsSettlement> {
+    if (!WAITER_TENDERS.has(tender)) throw new RangeError(`tender must be CASH, UPI or WAITER_CREDIT, got ${String(tender)}`);
+    if (billIds.length === 0) throw new RangeError('choose at least one bill');
+    if (new Set(billIds).size !== billIds.length) throw new RangeError('a bill is listed twice');
+
+    return withPosErrors(() =>
+      this.db.transaction(async (tx) => {
+        await requireOpenDay(tx);
+        const waiter = await lockWaiter(tx, waiterId);
+        if (tender === 'WAITER_CREDIT' && !waiter.is_trusted) {
+          throw new PosError(
+            PosErrorCode.CREDIT_NOT_ALLOWED,
+            `waiter ${waiter.waiter_code} is not trusted: bill-on-bill settlement only, no collect-later credit`,
+          );
+        }
+
+        const bills: Bill[] = [];
+        let totalPaise = 0n;
+        for (const billId of billIds) {
+          const bill = await getBill(tx, billId, { forUpdate: true });
+          if (bill.waiterId !== waiterId) {
+            throw new PosError(PosErrorCode.ILLEGAL_TRANSITION, `bill ${bill.billNo} is not tagged to waiter ${waiter.waiter_code}`);
+          }
+          if (bill.status !== 'OPEN') {
+            throw new PosError(PosErrorCode.APPEND_ONLY, `bill ${bill.billNo} is ${bill.status} and frozen`);
+          }
+          const due = bill.totalPaise - (await tenderedPaise(tx, billId));
+          if (due > 0n) await insertPayment(tx, billId, tender, due, null, staffId);
+          bills.push(await settle(tx, billId, staffId));
+          totalPaise += due;
+        }
+        bills.sort((a, b) => a.billNo - b.billNo);
+        return { bills, totalPaise, balancePaise: await waiterBalance(tx, waiterId) };
+      }),
+    );
+  }
+
+  /**
+   * Mode B (trusted waiters only, PS004): a lump sum handed in without naming bills. It pays the
+   * oldest open bill first, settling each one it covers and part-paying the next; anything left
+   * repays the credit balance. More than the waiter owes is refused (PS008), so the house never owes
+   * change. The money still lands on bills as CASH / UPI tenders, so sales and drawer figures stay right.
+   */
+  async receiveWaiterPayment(waiterId: string, amount: Paise, tender: CounterTender, staffId: string): Promise<WaiterReceipt> {
+    assertPaise(amount, 'amount');
+    if (tender !== 'CASH' && tender !== 'UPI') throw new RangeError(`tender must be CASH or UPI, got ${String(tender)}`);
+
+    return withPosErrors(() =>
+      this.db.transaction(async (tx) => {
+        await requireOpenDay(tx);
+        const waiter = await lockWaiter(tx, waiterId);
+        if (!waiter.is_trusted) {
+          throw new PosError(
+            PosErrorCode.CREDIT_NOT_ALLOWED,
+            `waiter ${waiter.waiter_code} is not trusted: bill-on-bill only — settle whole bills instead of a lump sum`,
+          );
+        }
+        const dues = await openDues(tx, waiterId);
+        const credit = toPaise(waiter.outstanding_balance);
+        const owed = dues.reduce((sum, d) => sum + toPaise(d.due), 0n) + credit;
+        if (amount > owed) {
+          throw new PosError(PosErrorCode.WAITER_BALANCE, `waiter ${waiter.waiter_code} owes only ${owed} paise; received ${amount} paise`);
+        }
+
+        const allocations: ReceiptAllocation[] = [];
+        let left = amount;
+        for (const d of dues) {
+          if (left === 0n) break;
+          const due = toPaise(d.due);
+          if (due <= 0n) continue;
+          const paying = left < due ? left : due;
+          await insertPayment(tx, d.id, tender, paying, null, staffId);
+          const settled = paying === due;
+          if (settled) await settle(tx, d.id, staffId);
+          allocations.push({ kind: 'BILL', billId: d.id, billNo: d.bill_no, amountPaise: paying, settled, remainingDuePaise: due - paying });
+          left -= paying;
+        }
+        if (left > 0n) {
+          await tx.query(
+            `INSERT INTO waiter_payments (waiter_id, tender_type, amount_paise, received_by_staff_id) VALUES ($1, $2, $3, $4)`,
+            [waiterId, tender, paiseParam(left), staffId],
+          );
+          allocations.push({ kind: 'CREDIT', amountPaise: left });
+        }
+        return { tender, amountPaise: amount, allocations, balancePaise: owed - amount };
       }),
     );
   }

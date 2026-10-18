@@ -150,7 +150,12 @@ describe('DayEndService', () => {
       expect(ended.breakdown).toMatchObject({ billCashPaise: PAISE.beer330, cashExpensesPaise: 50_00n, expectedPaise: 900_00n, variancePaise: 0n });
 
       const summary = await dayEnd.getDayEndSummary(fx.dayId);
-      expect(summary.blockers).toEqual({ openBills: [], runningPeakSession: null, waitersOwing: [] });
+      expect(summary.blockers).toEqual({
+        openBills: [],
+        runningPeakSession: null,
+        waitersOwing: [],
+        waiterBalance: { totalPaise: 0n, openBillsPaise: 0n, creditPaise: 0n, waiters: 0 },
+      });
       expect(summary.breakdown).toEqual({
         openingFloatPaise: 0n,
         normalCashPaise: PAISE.full, // 2,200 + 500 − 500; bill D's cash was taken inside the peak

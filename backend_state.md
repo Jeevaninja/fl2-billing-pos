@@ -1,6 +1,6 @@
 # FL2 POS — Backend State Reference
 
-Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`), Phase 10 master catalog and case-based inwarding (`0009_catalog_case_size`, `CatalogService`; plan `docs/ui/phase10-catalog-case-grn-plan.md`), Phase 11 peak start baseline and Day End sales breakdown (no migration; plan `docs/ui/phase11-peak-day-end-visibility-plan.md`), Phase 12 server-side peak undo (no migration; plan `docs/ui/phase12-billing-speed-plan.md`), Phase 13 Day End tally adjustments and running peak analytics (`0010_tender_adjustments`; plan `docs/ui/phase13-peak-close-tally-plan.md`), Phase 14 bank deposits / cash drops (`0011_bank_deposits`; plan `docs/ui/phase14-bank-deposits-plan.md`), and Phase 15 held bills in `/api/context` and per-waiter day stats (no migration; plan `docs/ui/phase15-billing-tabs-waiter-sidebar-plan.md`). Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
+Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`), Phase 10 master catalog and case-based inwarding (`0009_catalog_case_size`, `CatalogService`; plan `docs/ui/phase10-catalog-case-grn-plan.md`), Phase 11 peak start baseline and Day End sales breakdown (no migration; plan `docs/ui/phase11-peak-day-end-visibility-plan.md`), Phase 12 server-side peak undo (no migration; plan `docs/ui/phase12-billing-speed-plan.md`), Phase 13 Day End tally adjustments and running peak analytics (`0010_tender_adjustments`; plan `docs/ui/phase13-peak-close-tally-plan.md`), Phase 14 bank deposits / cash drops (`0011_bank_deposits`; plan `docs/ui/phase14-bank-deposits-plan.md`), Phase 15 held bills in `/api/context` and per-waiter day stats (no migration; plan `docs/ui/phase15-billing-tabs-waiter-sidebar-plan.md`), and Phase 16 waiter ledger, multi-bill and lump-sum waiter settlement and the Day End waiter-balance blocker (no migration; plan `docs/ui/phase16-waiter-ledger-plan.md`). Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
 
 - **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`, `0006_expense_category`, `0007_peak_drawer_cash`, `0008_stock_receipts`, `0009_catalog_case_size`, `0010_tender_adjustments`, `0011_bank_deposits`.
 - **Money:** `BIGINT` whole paise in SQL, `bigint` in TypeScript (`type Paise = bigint`). No floats anywhere.
@@ -274,7 +274,8 @@ interface DayEndSummary {
     openBills: OpenBillBlocker[];             // OPEN + PEAK_UNSETTLED bills of the day: billId, billNo, source, status, waiter, duePaise, createdAt
     runningPeakSession: PeakSessionView | null;
     waitersOwing: OwingWaiter[];              // WaiterSummary & { isActive }, any balance > 0
-  };
+    waiterBalance: WaiterBalanceBlocker;      // Phase 16: { totalPaise, openBillsPaise (Σ due on OPEN waiter bills), creditPaise (Σ outstanding_balance), waiters }
+  };                                          // canClose also requires waiterBalance.totalPaise = 0 (the close trigger already enforces both parts)
   canClose: boolean;
   breakdown: CashBreakdown;                   // openingFloat, normalCash, peakCash, waiterCash, cashExpenses, tenderAdjustment (13), bankDeposits (14), expectedCash, upiTotal (info)
   sales: SalesBreakdown;                      // Phase 11
@@ -308,15 +309,25 @@ class WaiterService {
   tagBillToWaiter(billId: string, waiterId: string): Promise<Bill>;
   settleWaiterBill(billId: string, waiterId: string, paymentMode: Tender, amount?: Paise): Promise<WaiterSettlement>;
   recordWaiterRepayment(waiterId: string, amount: Paise, mode: CounterTender, staffId: string): Promise<WaiterRepayment>;
+  settleWaiterBills(waiterId: string, billIds: readonly string[], tender: Tender, staffId: string): Promise<WaiterBillsSettlement>;   // Phase 16 Mode A
+  receiveWaiterPayment(waiterId: string, amount: Paise, tender: CounterTender, staffId: string): Promise<WaiterReceipt>;            // Phase 16 Mode B
 }
 
 interface WaiterSettlement { bill: Bill; payment: BillPayment; remainingDuePaise: Paise; }
 interface WaiterRepayment { payment: WaiterPayment; outstandingPaise: Paise; }
+interface WaiterBillsSettlement { bills: Bill[]; totalPaise: Paise; balancePaise: Paise; }
+type ReceiptAllocation =
+  | { kind: 'BILL'; billId: string; billNo: number; amountPaise: Paise; settled: boolean; remainingDuePaise: Paise }
+  | { kind: 'CREDIT'; amountPaise: Paise };
+interface WaiterReceipt { tender: CounterTender; amountPaise: Paise; allocations: ReceiptAllocation[]; balancePaise: Paise; }
 ```
 
 **Behaviour notes:**
 - **`settleWaiterBill`:** `amount` defaults to the full amount due, and the bill settles once nothing is due. Trusted waiters may pay part now and put the rest on `WAITER_CREDIT`. Untrusted waiters get `PS004` for credit and `PS005` for anything but the exact amount due.
 - **`tagBillToWaiter`:** works only on OPEN NORMAL sale bills, and only until the first tender is recorded.
+- **Waiter balance (Phase 16)** = Σ due on the waiter's OPEN sale bills + `outstanding_balance`. Both methods below lock the waiter row first (one money movement per waiter at a time) and need an open day (`PS007`).
+- **`settleWaiterBills` (Mode A):** each listed bill is paid exactly its due with one tender (₹0 bills just settle), all or nothing. A bill that isn't this waiter's gives `PS002`, and one that isn't OPEN gives `PS001`. `WAITER_CREDIT` needs a trusted waiter (`PS004`). An empty or duplicate list is a `RangeError`.
+- **`receiveWaiterPayment` (Mode B):** trusted waiters only (`PS004`); `amount` must be ≤ the balance (`PS008`). The amount pays the oldest OPEN bill first (by `created_at`, bill no), settling each bill it covers and part-paying the next with CASH / UPI bill tenders. Anything left is a `waiter_payments` repayment against the credit. Day End's sales breakdown and the peak windows therefore see bill tenders as before.
 
 ### `CounterQueries` (`src/services/counter-queries.ts`)
 
@@ -333,6 +344,8 @@ class CounterQueries {
   searchMembers(query: string, limit?: number): Promise<MemberSummary[]>; // active; number prefix or name substring; default limit 20
   listWaiters(): Promise<WaiterSummary[]>;                         // active, by waiter_code
   getWaiterStats(): Promise<WaiterStatsReport>;                    // Phase 15: open day's figures per active waiter
+  listWaiterLedger(): Promise<WaiterLedgerRow[]>;                  // Phase 16: waiters with a bill / payment today or a balance; biggest balance first
+  getWaiterLedger(waiterId: string): Promise<WaiterLedger>;        // Phase 16: NotFoundError for an unknown waiter
   getBillDetail(billId: string): Promise<BillDetail>;              // NotFoundError for a missing bill
   listCaptainOrders(): Promise<BillDetail[]>;                      // OPEN WAITER_APP sale bills, oldest first (any day)
 }
@@ -350,6 +363,18 @@ interface WaiterDayTotals {
 }
 type WaiterStats = WaiterSummary & WaiterDayTotals;
 interface WaiterStatsReport { businessDayId: string | null; waiters: WaiterStats[]; totals: WaiterDayTotals }
+interface WaiterLedgerRow extends WaiterSummary {           // Phase 16, open day; billed − paid = balance in normal flows
+  billedPaise: Paise;      // Σ totals of the day's non-reversed sale bills tagged to the waiter
+  paidPaise: Paise;        // Σ CASH / UPI tenders on those bills + Σ the day's waiter_payments (net of voids)
+  balancePaise: Paise;     // Σ due on OPEN waiter bills + outstanding_balance
+  openBills: number; openDuePaise: Paise; newestOpenAt: Date | null;
+}
+interface WaiterLedger {
+  waiter: WaiterLedgerRow; creditPaise: Paise;
+  openBills: BillDetail[];                 // OPEN sale bills, oldest first
+  receipts: LedgerReceipt[];               // today, newest first; rows of one transaction (same now()) + tender form one receipt
+}
+interface LedgerReceipt { at: Date; tender: 'CASH' | 'UPI'; amountPaise: Paise; allocations: LedgerAllocation[] }  // BILL (settled?, remainingDuePaise) | CREDIT | VOID
 interface StaffSummary { id: string; displayName: string; role: 'CASHIER' | 'MANAGER' | 'ADMIN'; }
 interface BusinessDaySummary { id: string; businessDate: string /* 'YYYY-MM-DD' */; openedAt: Date; }
 interface PeakSessionView extends PeakSession { runningExpectedPaise: Paise; expectedDrawerCashPaise: Paise; }  // drawer total: see 0007
@@ -568,6 +593,10 @@ Migrations run on every boot (already-applied ones are skipped).
 | `POST /api/peak/sessions` | `{ businessDayId, declaredCash, declaredUpi }` | `startPeakSession(…, cashier)` | 201 |
 | `POST /api/peak/sessions/:sessionId/end` | `{ countedCash, countedUpi }` | `endPeakSession(…, cashier)` | 200 |
 | `POST /api/waiters/:waiterId/repayments` | `{ amount, tender: 'CASH'\|'UPI' }` | `recordWaiterRepayment(…, cashier)` | 201 |
+| `GET /api/waiter-ledger` | | `listWaiterLedger` (Phase 16) | 200 |
+| `GET /api/waiter-ledger/:waiterId` | | `getWaiterLedger` (Phase 16) | 200 |
+| `POST /api/waiters/:waiterId/settle-bills` | `{ billIds: string[], tender }` | `settleWaiterBills(…, cashier)` (Phase 16) | 201 |
+| `POST /api/waiters/:waiterId/receive` | `{ amount, tender: 'CASH'\|'UPI' }` | `receiveWaiterPayment(…, cashier)` (Phase 16) | 201 |
 | `GET /api/day-end` | | `getDayEndSummary(getCurrentDayId())`: the open day, else the last closed one; 404 before any day. Carries `sales` (Phase 11) | 200 |
 | `POST /api/days` | `{ openingFloat }` | `openBusinessDay(…, cashier)` | 201 |
 | `POST /api/days/:dayId/close` | `{ countedCash }` | `closeBusinessDay(…, cashier)` | 200 |

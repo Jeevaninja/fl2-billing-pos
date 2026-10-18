@@ -114,6 +114,60 @@ export interface WaiterDayTotals {
 
 export type WaiterStats = WaiterSummary & WaiterDayTotals
 
+/** Phase 16 Day End blocker: open waiter-bill dues + credit balances. */
+export interface WaiterBalanceBlocker {
+  totalPaise: Paise
+  openBillsPaise: Paise
+  creditPaise: Paise
+  waiters: number
+}
+
+/** A waiter's account for the open day (GET /api/waiter-ledger). Billed − Paid = Balance. */
+export interface WaiterLedgerRow extends WaiterSummary {
+  billedPaise: Paise
+  paidPaise: Paise
+  /** Open-bill dues + credit balance. */
+  balancePaise: Paise
+  openBills: number
+  openDuePaise: Paise
+  newestOpenAt: string | null
+}
+
+export type LedgerAllocation =
+  | { kind: 'BILL'; billId: string; billNo: number; amountPaise: Paise; settled: boolean; remainingDuePaise: Paise }
+  | { kind: 'CREDIT'; amountPaise: Paise }
+  | { kind: 'VOID'; amountPaise: Paise }
+
+export interface LedgerReceipt {
+  at: string
+  tender: CounterTender
+  amountPaise: Paise
+  allocations: LedgerAllocation[]
+}
+
+/** GET /api/waiter-ledger/:waiterId */
+export interface WaiterLedger {
+  waiter: WaiterLedgerRow
+  creditPaise: Paise
+  /** OPEN bills, oldest first. */
+  openBills: BillDetail[]
+  /** Today's money from the waiter, newest first. */
+  receipts: LedgerReceipt[]
+}
+
+export interface WaiterBillsSettlement {
+  bills: Bill[]
+  totalPaise: Paise
+  balancePaise: Paise
+}
+
+export interface WaiterReceipt {
+  tender: CounterTender
+  amountPaise: Paise
+  allocations: Array<Exclude<LedgerAllocation, { kind: 'VOID' }>>
+  balancePaise: Paise
+}
+
 export interface WaiterStatsReport {
   businessDayId: string | null
   waiters: WaiterStats[]
@@ -222,7 +276,13 @@ export interface SalesBreakdown {
 
 export interface DayEndSummary {
   day: DaySummary
-  blockers: { openBills: OpenBillBlocker[]; runningPeakSession: PeakSessionView | null; waitersOwing: OwingWaiter[] }
+  blockers: {
+    openBills: OpenBillBlocker[]
+    runningPeakSession: PeakSessionView | null
+    waitersOwing: OwingWaiter[]
+    /** Phase 16: everything waiters owe; Day End locks only at ₹0. */
+    waiterBalance: WaiterBalanceBlocker
+  }
   canClose: boolean
   breakdown: CashBreakdown
   sales: SalesBreakdown

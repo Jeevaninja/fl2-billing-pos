@@ -23,13 +23,18 @@ export type {
   SkuLookup,
   StaffRole,
   StaffSummary,
+  LedgerAllocation,
+  LedgerReceipt,
   WaiterDayTotals,
+  WaiterLedger,
+  WaiterLedgerRow,
   WaiterStats,
   WaiterStatsReport,
   WaiterSummary,
 } from './counter-queries.js';
 export { DayEndService, EXPENSE_CATEGORIES } from './day-end.service.js';
 export type {
+  WaiterBalanceBlocker,
   BankDeposit,
   BankDepositEntry,
   CashBreakdown,
@@ -54,5 +59,5 @@ export { formatKot, PrinterService } from './printer.service.js';
 export type { KotFormat, KotPrinter, KotPrintResult, KotStation, KotTicket } from './printer.service.js';
 export type { PeakBreakdown, PeakReconciliation, PeakStartBaseline } from './peak-session.service.js';
 export { WaiterService } from './waiter.service.js';
-export type { WaiterRepayment, WaiterSettlement } from './waiter.service.js';
+export type { ReceiptAllocation, WaiterBillsSettlement, WaiterReceipt, WaiterRepayment, WaiterSettlement } from './waiter.service.js';
 export { IdempotencyConflictError, InactiveError, NotFoundError, PosError, PosErrorCode, isPosError } from '../db/errors.js';

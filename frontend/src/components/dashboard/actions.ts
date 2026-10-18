@@ -39,7 +39,7 @@ export const ACTIONS: Record<PosActionId, PosAction> = {
   member: { id: 'member', label: 'Member', hint: 'Attach a member (optional)', icon: UserSearch, shortcut: 'F2' },
   pay: { id: 'pay', label: 'Pay', hint: 'Settle with Cash / UPI', icon: CreditCard, shortcut: 'F9' },
   billing: { id: 'billing', label: 'Billing Screen', hint: 'Scan bottles, take Cash / UPI', icon: ReceiptText },
-  'captain-orders': { id: 'captain-orders', label: 'Captain Orders', hint: 'Edit and settle waiter handset orders', icon: Smartphone },
+  'captain-orders': { id: 'captain-orders', label: 'Waiter Ledger', hint: 'Captain orders, waiter balances and payments', icon: Smartphone },
   expense: { id: 'expense', label: 'Expense', hint: 'Petty cash and daily spends', icon: Wallet },
   'bank-deposit': { id: 'bank-deposit', label: 'Bank Deposit', hint: 'Cash drops for bank / RTGS', icon: Landmark },
   purchase: { id: 'purchase', label: 'Purchase', hint: 'Stock inwarding (GRN)', icon: PackagePlus },

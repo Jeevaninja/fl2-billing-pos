@@ -30,6 +30,10 @@ import type {
   StockReceipt,
   StockReceiptDetail,
   Tender,
+  WaiterBillsSettlement,
+  WaiterLedger,
+  WaiterLedgerRow,
+  WaiterReceipt,
   WaiterSettlement,
   WaiterStatsReport,
   WaiterSummary,
@@ -125,6 +129,14 @@ export const api = {
     call<PeakSession>('POST', '/api/peak/sessions', { businessDayId, declaredCash, declaredUpi }),
   endPeak: (sessionId: string, countedCash: Paise, countedUpi: Paise) =>
     call<PeakReconciliation>('POST', `/api/peak/sessions/${encodeURIComponent(sessionId)}/end`, { countedCash, countedUpi }),
+  waiterLedger: () => call<WaiterLedgerRow[]>('GET', '/api/waiter-ledger'),
+  waiterLedgerDetail: (waiterId: string) => call<WaiterLedger>('GET', `/api/waiter-ledger/${encodeURIComponent(waiterId)}`),
+  /** Mode A: the chosen bills, each for exactly its due, with one tender (all or nothing). */
+  settleWaiterBills: (waiterId: string, billIds: string[], tender: Tender) =>
+    call<WaiterBillsSettlement>('POST', `/api/waiters/${encodeURIComponent(waiterId)}/settle-bills`, { billIds, tender }),
+  /** Mode B (trusted waiters): a lump sum, oldest open bill first, then the credit balance. */
+  receiveWaiterPayment: (waiterId: string, amount: Paise, tender: CounterTender) =>
+    call<WaiterReceipt>('POST', `/api/waiters/${encodeURIComponent(waiterId)}/receive`, { amount, tender }),
   repayWaiter: (waiterId: string, amount: Paise, tender: CounterTender) =>
     call<{ outstandingPaise: Paise }>('POST', `/api/waiters/${encodeURIComponent(waiterId)}/repayments`, { amount, tender }),
 

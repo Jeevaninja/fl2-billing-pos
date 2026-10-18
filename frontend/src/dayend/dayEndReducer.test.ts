@@ -9,12 +9,19 @@ import {
   initialDayEndStateFrom,
   lockBlock,
   variancePreview,
+  waiterBalanceBlock,
   type DayEndAction,
   type DayEndState,
 } from './dayEndReducer'
 
 function summary(over: { id?: string; status?: 'OPEN' | 'CLOSED'; expected?: bigint; blockers?: Partial<DayEndSummary['blockers']> } = {}): DayEndSummary {
-  const blockers = { openBills: [], runningPeakSession: null, waitersOwing: [], ...over.blockers }
+  const blockers = {
+    openBills: [],
+    runningPeakSession: null,
+    waitersOwing: [],
+    waiterBalance: { totalPaise: 0n, openBillsPaise: 0n, creditPaise: 0n, waiters: 0 },
+    ...over.blockers,
+  }
   const status = over.status ?? 'OPEN'
   return {
     day: {
@@ -100,6 +107,19 @@ describe('dayEndReducer', () => {
     expect(lockBlock(ready)).toMatch(/Enter the counted cash/)
     expect(lockBlock(run(ready, { type: 'counted', text: 'abc' }))).toMatch(/rupees/)
     expect(lockBlock(run(ready, { type: 'counted', text: '0' }))).toBeNull()
+  })
+
+  it('strictly blocks the lock while waiters owe anything, naming the total', () => {
+    const waiterBalance = { totalPaise: 650_00n, openBillsPaise: 400_00n, creditPaise: 250_00n, waiters: 2 }
+    const s = run(initialDayEndState, { type: 'loaded', summary: summary({ blockers: { waiterBalance } }) }, { type: 'counted', text: '100' })
+    const sentence = 'Waiters owe ₹650.00 — All waiter balances must be settled to ₹0 before closing.'
+    expect(waiterBalanceBlock(s.summary!)).toBe(sentence)
+    // It wins over every other reason, even with a valid count and no other blocker listed.
+    expect(lockBlock(s)).toBe(sentence)
+
+    const settled = run(s, { type: 'loaded', summary: summary() })
+    expect(waiterBalanceBlock(settled.summary!)).toBeNull()
+    expect(lockBlock(settled)).toBeNull()
   })
 
   it('counts every open bill, a running peak and each owing waiter as blockers', () => {

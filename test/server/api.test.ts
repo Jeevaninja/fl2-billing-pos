@@ -25,6 +25,35 @@ describe('local HTTP API', () => {
     expect(body.openBills).toEqual([]);
   });
 
+  it('runs the waiter ledger: list, detail, lump sum, settle selected', async () => {
+    const { fx, call } = await start();
+    const bills: string[] = [];
+    for (const skuId of [fx.sku.half, fx.sku.quarter]) {
+      const bill = await call('POST', '/api/bills', { mode: 'NORMAL' });
+      await call('POST', `/api/bills/${bill.body.id}/items`, { skuId, quantity: 1 });
+      await call('PUT', `/api/bills/${bill.body.id}/waiter`, { waiterId: fx.waiter.trusted });
+      bills.push(bill.body.id);
+    }
+
+    const list = await call('GET', '/api/waiter-ledger');
+    expect(list.status).toBe(200);
+    expect(list.body).toMatchObject([{ code: 'W01', billedPaise: String(PRICE.half + PRICE.quarter), paidPaise: '0', openBills: 2 }]);
+
+    const lump = await call('POST', `/api/waiters/${fx.waiter.trusted}/receive`, { amount: String(PRICE.half), tender: 'CASH' });
+    expect(lump).toMatchObject({ status: 201, body: { amountPaise: String(PRICE.half), balancePaise: String(PRICE.quarter), allocations: [{ kind: 'BILL', settled: true }] } });
+
+    const over = await call('POST', `/api/waiters/${fx.waiter.trusted}/receive`, { amount: String(PRICE.full), tender: 'CASH' });
+    expect(over).toMatchObject({ status: 409, body: { error: { code: 'PS008' } } });
+    expect((await call('POST', `/api/waiters/${fx.waiter.trusted}/settle-bills`, { billIds: 'x', tender: 'CASH' })).status).toBe(400);
+
+    const settled = await call('POST', `/api/waiters/${fx.waiter.trusted}/settle-bills`, { billIds: [bills[1]], tender: 'UPI' });
+    expect(settled).toMatchObject({ status: 201, body: { totalPaise: String(PRICE.quarter), balancePaise: '0' } });
+
+    const detail = await call('GET', `/api/waiter-ledger/${fx.waiter.trusted}`);
+    expect(detail.body).toMatchObject({ creditPaise: '0', openBills: [], waiter: { balancePaise: '0' } });
+    expect(detail.body.receipts.map((r: { tender: string }) => r.tender)).toEqual(['UPI', 'CASH']);
+  });
+
   it("reports today's waiter figures with money as strings, and every held bill in the context", async () => {
     const { fx, call } = await start();
     const held = await call('POST', '/api/bills', { mode: 'NORMAL' });
@@ -160,7 +189,12 @@ describe('local HTTP API', () => {
       body: {
         day: { id: fx.dayId, status: 'OPEN', openingFloatPaise: '0', countedCashPaise: null },
         canClose: false,
-        blockers: { openBills: [], runningPeakSession: null, waitersOwing: [{ code: 'W01', outstandingPaise: String(PRICE.quarter) }] },
+        blockers: {
+          openBills: [],
+          runningPeakSession: null,
+          waitersOwing: [{ code: 'W01', outstandingPaise: String(PRICE.quarter) }],
+          waiterBalance: { totalPaise: String(PRICE.quarter), openBillsPaise: '0', creditPaise: String(PRICE.quarter), waiters: 1 },
+        },
         breakdown: { cashExpensesPaise: '5000', expectedCashPaise: '-5000' },
       },
     });

@@ -317,6 +317,29 @@ function buildRoutes({ db, cashierId }: ApiConfig): Route[] {
     }),
 
     // ── Waiter accounts ──
+    route('GET', '/api/waiter-ledger', async () => ok(await queries.listWaiterLedger())),
+    route('GET', '/api/waiter-ledger/:waiterId', async ({ params }) => ok(await queries.getWaiterLedger(id(params.waiterId, 'waiterId')))),
+    route('POST', '/api/waiters/:waiterId/settle-bills', async ({ params, body }) => {
+      if (!Array.isArray(body.billIds)) throw new BadRequestError('billIds must be an array of bill ids');
+      return created(
+        await waiters.settleWaiterBills(
+          id(params.waiterId, 'waiterId'),
+          body.billIds.map((b: unknown, i: number) => id(b, `billIds[${i}]`)),
+          oneOf(body.tender, 'tender', TENDERS),
+          cashierId,
+        ),
+      );
+    }),
+    route('POST', '/api/waiters/:waiterId/receive', async ({ params, body }) =>
+      created(
+        await waiters.receiveWaiterPayment(
+          id(params.waiterId, 'waiterId'),
+          paise(body.amount, 'amount'),
+          oneOf(body.tender, 'tender', COUNTER_TENDERS),
+          cashierId,
+        ),
+      ),
+    ),
     route('POST', '/api/waiters/:waiterId/repayments', async ({ params, body }) =>
       created(
         await waiters.recordWaiterRepayment(

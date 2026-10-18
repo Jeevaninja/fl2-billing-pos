@@ -16,6 +16,7 @@ import {
   type CountDraft,
   openCounterBills,
   variancePreview,
+  waiterBalanceBlock,
 } from '../dayend/dayEndReducer'
 import { useGlobalShortcuts } from '../hooks/useGlobalShortcuts'
 import { beep } from '../lib/beep'
@@ -368,9 +369,25 @@ function Checklist({ summary, busy, onRepay, onEndPeak, onOpenBilling, onOpenCap
   const bills = openCounterBills(summary)
   const peakBills = openBills.length - bills.length
 
+  const owed = waiterBalanceBlock(summary)
+  const { openBillsPaise, creditPaise } = summary.blockers.waiterBalance
+
   return (
     <>
       <h2 className="text-xs font-bold tracking-widest text-zinc-400 uppercase">Before closing</h2>
+
+      <CheckItem ok={owed === null} title={owed ?? 'Waiter balances are ₹0'}>
+        {owed && (
+          <div className="mt-2 flex items-center gap-3">
+            <span className="text-sm text-zinc-300">
+              <span className="font-mono">{formatPaise(openBillsPaise)}</span> on open bills · <span className="font-mono">{formatPaise(creditPaise)}</span> on collect-later credit
+            </span>
+            <SmallButton onClick={onOpenCaptainOrders} primary>
+              Waiter Ledger
+            </SmallButton>
+          </div>
+        )}
+      </CheckItem>
 
       <CheckItem ok={bills.length === 0} title={bills.length === 0 ? 'No open bills' : `${bills.length} open bill${bills.length === 1 ? '' : 's'}`}>
         {bills.length > 0 && (
@@ -381,8 +398,8 @@ function Checklist({ summary, busy, onRepay, onEndPeak, onOpenBilling, onOpenCap
                 <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs font-bold text-zinc-300 uppercase">{b.source === 'WAITER_APP' ? 'Captain' : 'Counter'}</span>
                 {b.waiter && <span className="truncate text-sm text-zinc-300">{b.waiter.code} {b.waiter.displayName}</span>}
                 <span className="ml-auto font-mono font-bold tabular-nums">{formatPaise(b.duePaise)}</span>
-                <SmallButton onClick={b.source === 'WAITER_APP' ? onOpenCaptainOrders : onOpenBilling}>
-                  {b.source === 'WAITER_APP' ? 'Captain Orders' : 'Billing'}
+                <SmallButton onClick={b.waiter || b.source === 'WAITER_APP' ? onOpenCaptainOrders : onOpenBilling}>
+                  {b.waiter || b.source === 'WAITER_APP' ? 'Waiter Ledger' : 'Billing'}
                 </SmallButton>
               </li>
             ))}
@@ -423,7 +440,11 @@ function Checklist({ summary, busy, onRepay, onEndPeak, onOpenBilling, onOpenCap
 
       <CheckItem
         ok={waitersOwing.length === 0}
-        title={waitersOwing.length === 0 ? 'No waiter owes money' : `${waitersOwing.length} waiter${waitersOwing.length === 1 ? '' : 's'} still owe${waitersOwing.length === 1 ? 's' : ''}`}
+        title={
+          waitersOwing.length === 0
+            ? 'No collect-later credit outstanding'
+            : `${waitersOwing.length} waiter${waitersOwing.length === 1 ? '' : 's'} owe${waitersOwing.length === 1 ? 's' : ''} collect-later credit`
+        }
       >
         {waitersOwing.length > 0 && (
           <ul className="mt-2 flex flex-col gap-1">

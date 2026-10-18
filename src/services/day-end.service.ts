@@ -53,6 +53,18 @@ export interface DayEndBlockers {
   runningPeakSession: PeakSessionView | null;
   /** Every waiter with a balance above zero, whichever day the credit was raised on. */
   waitersOwing: OwingWaiter[];
+  /** Phase 16: everything waiters owe (open waiter-bill dues + credit balances). Must be ₹0 to close. */
+  waiterBalance: WaiterBalanceBlocker;
+}
+
+export interface WaiterBalanceBlocker {
+  totalPaise: Paise;
+  /** Σ due on OPEN bills tagged to a waiter. */
+  openBillsPaise: Paise;
+  /** Σ waiter credit balances (collect later, not yet repaid). */
+  creditPaise: Paise;
+  /** Waiters owing anything (open-bill due or credit). */
+  waiters: number;
 }
 
 export interface CashBreakdown {
@@ -534,6 +546,29 @@ export class DayEndService {
   }
 }
 
+function waiterBalanceBlocker(
+  openBills: ReadonlyArray<{ status: BillStatus; waiter_id: string | null; due: DbInt }>,
+  waiters: ReadonlyArray<WaiterRow>,
+): WaiterBalanceBlocker {
+  const owing = new Set<string>();
+  let openBillsPaise = 0n;
+  for (const b of openBills) {
+    if (b.status !== 'OPEN' || b.waiter_id === null) continue;
+    const due = toPaise(b.due);
+    if (due <= 0n) continue;
+    openBillsPaise += due;
+    owing.add(b.waiter_id);
+  }
+  let creditPaise = 0n;
+  for (const w of waiters) {
+    const credit = toPaise(w.outstanding_balance);
+    if (credit <= 0n) continue;
+    creditPaise += credit;
+    owing.add(w.id);
+  }
+  return { totalPaise: openBillsPaise + creditPaise, openBillsPaise, creditPaise, waiters: owing.size };
+}
+
 async function summarise(db: SqlClient, day: DaySummary): Promise<DayEndSummary> {
   const { rows: billRows } = await db.query<{
     id: string;
@@ -577,9 +612,14 @@ async function summarise(db: SqlClient, day: DaySummary): Promise<DayEndSummary>
       .filter((w) => toPaise(w.outstanding_balance) > 0n)
       .sort((a, b) => a.waiter_code.localeCompare(b.waiter_code))
       .map((w) => ({ ...mapWaiter(w), isActive: w.is_active })),
+    waiterBalance: waiterBalanceBlocker(billRows, waiterRows),
   };
   const canClose =
-    day.status === 'OPEN' && blockers.openBills.length === 0 && blockers.runningPeakSession === null && blockers.waitersOwing.length === 0;
+    day.status === 'OPEN' &&
+    blockers.openBills.length === 0 &&
+    blockers.runningPeakSession === null &&
+    blockers.waitersOwing.length === 0 &&
+    blockers.waiterBalance.totalPaise === 0n;
 
   const { rows: adjustments } = await db.query<AdjustmentRow & { voided_at: Date | null }>(
     `SELECT a.*, v.created_at AS voided_at

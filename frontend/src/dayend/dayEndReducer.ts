@@ -4,7 +4,7 @@
  */
 import type { DayEndSummary, Paise, PeakSessionView, TenderAdjustmentEntry } from '../api/types'
 import type { Flash } from '../billing/billingReducer'
-import { parseRupeesToPaise } from '../lib/money'
+import { formatPaise, parseRupeesToPaise } from '../lib/money'
 
 /** endPeak keeps its own snapshot: the dialog outlives the session it ends (it shows the result). */
 export type DayEndDialog =
@@ -89,9 +89,20 @@ export function variancePreview(state: DayEndState): Paise | null {
 }
 
 /** Why "Confirm & Lock Day" is disabled, or null when it can go ahead. */
+/**
+ * Phase 16: the strict waiter rule, worded for the checklist and the lock button. Everything waiters
+ * owe (open waiter-bill dues + collect-later credit) must be ₹0; null once it is.
+ */
+export function waiterBalanceBlock(summary: DayEndSummary): string | null {
+  const { totalPaise } = summary.blockers.waiterBalance
+  return totalPaise > 0n ? `Waiters owe ${formatPaise(totalPaise)} — All waiter balances must be settled to ₹0 before closing.` : null
+}
+
 export function lockBlock(state: DayEndState): string | null {
   const summary = state.summary
   if (!summary || summary.day.status !== 'OPEN') return 'No open business day'
+  const owed = waiterBalanceBlock(summary)
+  if (owed) return owed
   const blockers = blockerCount(summary)
   if (blockers > 0 || !summary.canClose) return `Clear ${blockers} item${blockers === 1 ? '' : 's'} in the checklist first`
   if (state.counted.trim() === '') return 'Enter the counted cash'
