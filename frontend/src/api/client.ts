@@ -31,6 +31,7 @@ import type {
   StockReceiptDetail,
   Tender,
   WaiterSettlement,
+  WaiterStatsReport,
   WaiterSummary,
 } from './types'
 
@@ -96,6 +97,7 @@ export const api = {
   searchSkus: (q: string) => call<SkuLookup[]>('GET', `/api/skus?q=${encodeURIComponent(q)}&limit=12`),
   searchMembers: (q: string) => call<MemberSummary[]>('GET', `/api/members?q=${encodeURIComponent(q)}&limit=12`),
   listWaiters: () => call<WaiterSummary[]>('GET', '/api/waiters'),
+  waiterStats: () => call<WaiterStatsReport>('GET', '/api/waiters/stats'),
   getBill: (billId: string) => call<BillDetail>('GET', bill(billId)),
   captainOrders: () => call<BillDetail[]>('GET', '/api/captain-orders'),
 

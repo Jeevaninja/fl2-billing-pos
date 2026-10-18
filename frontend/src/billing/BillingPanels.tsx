@@ -180,6 +180,8 @@ const FOOTER_KEYS: Record<'NORMAL' | 'PEAK', Array<[string[], string]>> = {
     [['−'], 'remove one'],
     [['Enter'], 'qty → pay'],
     [['F1'], 'new'],
+    [['F3'], 'hold · new tab'],
+    [['PgUp', 'PgDn'], 'switch tab'],
     [['F2'], 'member'],
     [['F4'], 'waiter'],
     [['F9'], 'pay'],

@@ -1,10 +1,10 @@
 # FL2 POS — Frontend State Reference
 
-As of Phase 11 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders, Phase 7 Day End, Phase 8 Expenses and peak controls, Phase 9 Purchase / GRN, Phase 10 Inventory Catalog and case-based GRN, Phase 11 peak start baseline and Day End sales breakdown, Phase 12 Enter → qty → pay, payment arrow keys and server-side peak undo; plan `docs/ui/phase12-billing-speed-plan.md`, Phase 13 peak end live split, Day End tally adjustments and Day End ⇄ Expenses; plan `docs/ui/phase13-peak-close-tally-plan.md`, Phase 14 bank deposits; plan `docs/ui/phase14-bank-deposits-plan.md`). Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
+As of Phase 11 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders, Phase 7 Day End, Phase 8 Expenses and peak controls, Phase 9 Purchase / GRN, Phase 10 Inventory Catalog and case-based GRN, Phase 11 peak start baseline and Day End sales breakdown, Phase 12 Enter → qty → pay, payment arrow keys and server-side peak undo; plan `docs/ui/phase12-billing-speed-plan.md`, Phase 13 peak end live split, Day End tally adjustments and Day End ⇄ Expenses; plan `docs/ui/phase13-peak-close-tally-plan.md`, Phase 14 bank deposits; plan `docs/ui/phase14-bank-deposits-plan.md`, Phase 15 multi-tab billing and the waiter sidebar; plan `docs/ui/phase15-billing-tabs-waiter-sidebar-plan.md`). Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
 
 - **Stack:** Vite 8, React 19, TypeScript, Tailwind CSS 4 (`@tailwindcss/vite`), Lucide icons, Vitest. No router, no state library.
 - **Run:** `npm run api:dev` at the repo root (API on `127.0.0.1:4310`), then `npm run dev` in `frontend/` (http://localhost:5173). Vite proxies `/api` to the API.
-- **Check:** `npm test` (Vitest, 111 tests), `npx tsc -b`, `npx oxlint src`, `npm run build`.
+- **Check:** `npm test` (Vitest, 189 tests), `npx tsc -b`, `npx oxlint src`, `npm run build`.
 - **Money:** `bigint` paise end to end. The API client decodes every `…Paise` JSON string to `bigint` and encodes `bigint` back to strings. Display goes through `formatPaise`; cashier input goes through `parseRupeesToPaise`. No floats.
 - **Server is the source of truth:** bills enter screen state only as `BillDetail` responses, so the UI never adds up prices to get a total.
 
@@ -29,6 +29,8 @@ main.tsx                      StrictMode → <App/>, imports index.css (Tailwind
       ├─ PeakBanner           while a session runs (PEAK mode, or NORMAL finishing a pre-peak bill); F8 ends it
       ├─ CenterNote           LOADING / OFFLINE (retry) / BLOCKED (no open business day)
       ├─ main (left pane)
+      │  ├─ BillTabs          Phase 15, Chrome-style held bills: "Bill n · #billNo · waiter code · total", × per tab, + (F3);
+      │  │                    shown in NORMAL, and in PEAK while more than one tab exists
       │  ├─ ScanBar           scan buffer display, qty-prefix chip, FlashLine (ok / error)
       │  ├─ ItemsGrid         NORMAL: rows grouped by SKU+price, pending "adding…" rows,
       │  │                    EmptyBill (hint or last-settled receipt with change)
@@ -40,8 +42,10 @@ main.tsx                      StrictMode → <App/>, imports index.css (Tailwind
       └─ dialogs (one at a time, all built on Modal)
          ├─ PaymentDialog     option radios C/U/S/P/L, rupee input, change / split / credit preview
          ├─ MemberDialog      Picker: debounced member search; Enter on empty = walk-in
-         ├─ WaiterDialog      Picker: filter waiters, TrustBadge, outstanding / limit
-         └─ abandon confirm   Modal: cancel every line, then close the ₹0 bill
+         ├─ WaiterSidebar     Phase 15 (F4 / Waiter card): right-hand slide-in Modal with today's figures per waiter
+         │                    (GET /api/waiters/stats): open · Σ due, closed · Σ settled, credit owed / limit, "On this bill",
+         │                    bill-on-bill / credit-limit notes, footer totals; filter + ↑/↓ + Enter tags the current tab
+         └─ abandon confirm   Modal: cancel every line, then close the ₹0 bill (and the tab, when opened from its ×)
    └─ CaptainOrdersScreen     useReducer(captainOrdersReducer); polls GET /api/captain-orders every 5 s
       ├─ header               "n open", updated-ago / OFFLINE pill, Refresh (R), LiveClock
       ├─ OrderList (left)     #bill · waiter code/name + TrustBadge · handset · bottles · due · age; new orders tinted + beep
@@ -117,8 +121,11 @@ Shared: components/peak/PeakControls.tsx: PeakBanner, StartPeakButton, PeakStart
 | `billing/BillingScreen.tsx` | `BillingScreen({ onExit })` |
 | `billing/BillingPanels.tsx` | `ScanBar`, `ItemsGrid`, `GridFooter`, `SidePanel`, `PeakTicker`, `PeakSide`, `SizeChip` |
 | `billing/PaymentDialog.tsx` | `PaymentDialog({ detail, busy, onConfirm, onClose })` |
-| `billing/PickerDialogs.tsx` | `MemberDialog`, `WaiterDialog`, `TrustBadge` |
-| `billing/Modal.tsx` | `Modal({ title, onClose, onKey?, footer?, width? })` |
+| `billing/PickerDialogs.tsx` | `MemberDialog`, `TrustBadge` (Phase 15: `WaiterDialog` replaced by `WaiterSidebar`) |
+| `billing/Modal.tsx` | `Modal({ title, onClose, onKey?, footer?, width?, placement? })` (`placement: 'right'` = slide-in panel) |
+| `billing/BillTabs.tsx` | `BillTabs({ tabs, activeTabId, newBlock, onSwitch, onClose, onNew })` |
+| `billing/WaiterSidebar.tsx` | `WaiterSidebar({ currentWaiterId, onPick, onClose })` |
+| `billing/waiterStats.ts` | `filterWaiters`, `waiterNote`, `sumStats` |
 | `components/CaptainOrdersScreen.tsx` | `CaptainOrdersScreen({ onExit })` |
 | `captain/captainOrdersReducer.ts` | `captainOrdersReducer`, `initialCaptainOrdersState`, `selectedOrder`, `editBlock`, `formatAge` |
 | `components/DayEndScreen.tsx` | `DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrders })` |
@@ -133,7 +140,7 @@ Shared: components/peak/PeakControls.tsx: PeakBanner, StartPeakButton, PeakStart
 | `expense/expenseReducer.ts` | `expenseReducer`, `initialExpenseState`, `CATEGORIES`, `CATEGORY_LABEL`, `formError`, `formPayload`, `todayTotals` |
 | `purchase/purchaseReducer.ts` | `purchaseReducer`, `initialPurchaseState`, `MAX_LINE_QTY`, `lineError`, `submitError`, `submitPayload`, `lineTotal`, `stagedTotals`, `pickFromSearch`, `entryCount`, `bottlesFor`, `mergeCounts`, `countLabel` |
 | `catalog/catalogReducer.ts` | `catalogReducer`, `initialCatalogState`, `catalogRows`, `suggestPrefix`, `skuCodePreview`, `formError`, `newProductPayload`, `productPatch`, `addSkuPayload`, `skuPatch`, `deactivates`, `conflictField`, `DEFAULT_CASE_SIZE` |
-| `billing/billingReducer.ts` (Phase 12) | adds `cancelPlan` |
+| `billing/billingReducer.ts` (Phase 12) | adds `cancelPlan`; Phase 15 adds `activeTab`, `findTab`, `isEmptyTab`, `newTabBlock`, `MAX_TABS`, `BillTab` |
 | `billing/payment.ts` (Phase 12) | adds `moveOption` |
 | `peak/peakMath.ts` | `parseReadings`, `describeVariance`, `compareReading`, `describeBaseline`, `peakSplit` (Phase 13) |
 | `dayend/tallyForm.ts` | `EMPTY_TALLY`, `MAX_REASON`, `tallyResult`, `describeShift` |
@@ -204,19 +211,31 @@ Only the Reports tile still calls `runStub`; every other tile (and F1/F2/F9, whi
 ## 3. Billing state (`billing/billingReducer.ts`)
 
 ```ts
+interface BillTab {                                   // Phase 15: one held or current customer
+  id: number; label: number;                          // "Bill n": lowest free number when opened
+  bill: BillDetail | null;                            // the tab's open NORMAL bill (created on its first scan)
+  pendingMember: MemberSummary | null; pendingWaiter: WaiterSummary | null;  // chosen before the first scan
+  selectedKey: string | null; receipt: Receipt | null;
+}
 interface BillingState {
   load: 'loading' | 'ready' | 'offline'; offlineMessage: string | null;
-  context: Omit<CounterContext, 'openBill'> | null;   // cashier, business day, running peak session
-  bill: BillDetail | null;                            // open NORMAL bill (created on first scan)
-  pendingMember: MemberSummary | null; pendingWaiter: WaiterSummary | null;  // chosen before the first scan
-  selectedKey: string | null; pending: PendingScan[]; ticker: PeakEntry[];   // ticker capped at 50
-  receipt: Receipt | null; dialog: 'payment' | 'member' | 'waiter' | 'abandon' | null; flash: Flash | null;
+  context: Omit<CounterContext, 'openBill' | 'openBills'> | null;   // cashier, business day, running peak session
+  tabs: BillTab[]; activeTabId: number; nextTabId: number;
+  pending: PendingScan[];                             // each carries its tabId; the grid shows the current tab's
+  ticker: PeakEntry[];                                // capped at 50
+  dialog: 'payment' | 'member' | 'waiter' | 'abandon' | null; flash: Flash | null;
 }
 ```
 
-- **Actions:** `contextLoaded` (`resume` adopts the server's `openBill`), `contextFailed`, `billLoaded` (`focusSkuId` selects that row), `billFinished`, `pendingMember`, `pendingWaiter`, `scanQueued` / `scanDone`, `peakSale` / `peakUndone`, `select`, `move`, `dialog`, `flash`.
+- **Actions:** `contextLoaded` (`resume` adopts every server `openBills` entry not already in a tab: empty tabs first, then new tabs; lands on the newest unless the current tab holds a bill), `contextFailed`, `billLoaded` / `billFinished` / `pendingMember` / `pendingWaiter` (all take a `tabId`; a `billLoaded` for a vanished tab re-creates one, so a server bill is never lost), `scanQueued` / `scanDone`, `peakSale` / `peakUndone`, `select`, `move`, `tabOpened`, `tabSwitched`, `tabCycled`, `tabClosed`, `dialog`, `flash`.
+- **Tab rules:**
+  - At most `MAX_TABS` = 9. `newTabBlock` refuses a new tab on an already-empty tab or at the limit; during a peak a new tab is simply an empty one that scans to peak.
+  - Leaving an empty tab (no bill, no pending member or waiter, no scan on its way) drops it.
+  - `tabClosed` closes only empty tabs; the last one resets to an empty "Bill 1".
+  - Settling or cancelling a bill empties **that** tab in place (with its receipt); held tabs are never auto-activated.
 - **Selectors:**
-  - `screenMode(state)` → `LOADING | OFFLINE | BLOCKED | NORMAL | PEAK`. It is PEAK only when a peak session is running **and** there is no open NORMAL bill, so a bill started before the peak finishes as NORMAL.
+  - `screenMode(state)` → `LOADING | OFFLINE | BLOCKED | NORMAL | PEAK`. It is PEAK only when a peak session is running **and** the current tab has no open NORMAL bill, so a bill started before the peak finishes as NORMAL.
+  - `activeTab`, `findTab`, `isEmptyTab`, `newTabBlock`.
   - `groupItems(items)` → `ItemRow[]`: rows keyed by SKU + unit price, holding remaining quantity, Σ line totals, and `cancelItemId` (the newest line with bottles left).
   - `totals(detail)` → `{ lines, bottles }`.
 
@@ -226,7 +245,8 @@ interface BillingState {
   - On failure the scan bar flashes the error.
   - `PS007` refreshes the context.
   - Other API errors re-read the bill (`resync`).
-- **Synchronous mirrors.** `billRef`, `contextRef` and `stateRef` let queued tasks see the latest bill before React re-renders. Bill changes always go through `setBill` and `finishBill`, which update the ref and dispatch together.
+- **Synchronous mirror (Phase 15).** Every action goes through `apply(action)`, which folds it into `stateRef` with the same pure reducer and dispatches it, so queued tasks always read the newest tabs (`billOf(tabId)`). `contextRef` mirrors the context.
+- **Tab capture.** Each action reads the current `tabId` when the key is pressed and passes it into its queued task (and to `run` for `resync`), so a scanner burst followed by a quick tab switch still lands on the tab it was scanned on. Enter → qty → pay opens Payment only if that tab is still current.
 - **First NORMAL scan.** The screen calls `createBill` (with any pending member), then `tagWaiter` (if a waiter is pending), then `getBill` to start tracking the bill, then `addItem`. The bill is tracked before the first line is added, so a failed line leaves no orphan bill.
 - **PEAK scan.** `peakSale` adds a ticker entry and refreshes the context, which updates the expected-so-far total.
 
@@ -242,7 +262,11 @@ interface BillingState {
 | ↑ / ↓ | Select row (empty buffer) | — | Move picker highlight |
 | `+` / `−` / Delete | Add / cancel one bottle on the selected row (empty buffer) | — | — |
 | F1 | New bill (close an empty bill or confirm abandon) | — | Swallowed |
-| F2 / F4 | Member / waiter dialog (waiter locked after the first tender) | Refused with a message | Swallowed |
+| F3 (or the on-screen +) | Hold this bill, open a new tab | Same (an empty tab scans to peak) | Swallowed |
+| PageDown / PageUp | Next / previous tab (wraps) | Same | — |
+| Alt+1…9 | Jump to tab n | Same | — |
+| Ctrl+T / Ctrl+Tab | New tab / cycle — only when Chrome runs in kiosk / `--app` mode (a normal window keeps these keys) | Same | — |
+| F2 / F4 | Member dialog / waiter sidebar (waiter locked after the first tender) | Refused with a message | Swallowed |
 | F9 | Pay (closes a ₹0 bill instead) | Refused: peak bills reconcile at session end | Confirm (payment) |
 | Ctrl+Z | — | `POST /api/peak/undo-last`: voids this till's newest un-voided scan (works after a reload; auto-repeat ignored) | — |
 | Esc | Clear buffer, else back to the dashboard | Same | Close dialog |
@@ -258,7 +282,7 @@ No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDow
 
 | File | Contents |
 |---|---|
-| `api/client.ts` | `api.*` (`context`, `lookupSku`, `searchMembers`, `listWaiters`, `getBill`, `captainOrders`, `createBill`, `addItem`, `cancelItem` (optional `restock`), `setMember`, `tagWaiter`, `settle`, `settleWaiter`, `closeEmpty`, `reverse`, `peakSale`, `searchSkus`, `listPurchases`, `postPurchase`, `listCatalog`, `createProduct`, `updateProduct`, `addSku`, `updateSku`, `peakBaseline`, `undoLastPeak`, `listBankDeposits`, `addBankDeposit`, `voidBankDeposit`), `ApiError` (`status`, `code`, `constraint` on a 409; `NETWORK` when unreachable or the proxy answers non-JSON 5xx), `reviveJson`, `encodeJson` |
+| `api/client.ts` | `api.*` (`context`, `lookupSku`, `searchMembers`, `listWaiters`, `getBill`, `captainOrders`, `createBill`, `addItem`, `cancelItem` (optional `restock`), `setMember`, `tagWaiter`, `settle`, `settleWaiter`, `closeEmpty`, `reverse`, `peakSale`, `searchSkus`, `listPurchases`, `postPurchase`, `listCatalog`, `createProduct`, `updateProduct`, `addSku`, `updateSku`, `peakBaseline`, `undoLastPeak`, `listBankDeposits`, `addBankDeposit`, `voidBankDeposit`, `waiterStats` (Phase 15)), `ApiError` (`status`, `code`, `constraint` on a 409; `NETWORK` when unreachable or the proxy answers non-JSON 5xx), `reviveJson`, `encodeJson` |
 | `api/types.ts` | Frontend mirrors of the API DTOs (`Bill`, `BillDetail`, `CounterContext`, `SkuLookup`, …) with `Paise = bigint`; dates stay ISO strings |
 | `billing/payment.ts` | `payOptions(detail)`, `planPayment(detail, input)` → counter tenders or waiter settle steps plus change, credit-limit pre-check, `describePlan` |
 | `billing/errors.ts` | `CounterError` (screen-raised), `counterErrorMessage(err)` (PS code → cashier wording) |
@@ -268,7 +292,7 @@ No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDow
 | `lib/beep.ts` | WebAudio scan feedback; silent if audio is unavailable |
 
 **Tests** (`*.test.ts`, Node environment, no DOM):
-- `billingReducer.test.ts` and `payment.test.ts`, with fixtures in `testData.ts`
+- `billingReducer.test.ts` (Phase 15: tab isolation, replies to a non-current tab, drop / close / cycle / limit, resume into tabs, peak per tab), `payment.test.ts` and `waiterStats.test.ts`, with fixtures in `testData.ts`
 - `scanBuffer.test.ts`
 - `money.test.ts`, which also covers the JSON codec
 
@@ -283,5 +307,6 @@ No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDow
 - Expense entries are stamped with the till's `FL2_CASHIER_ID`; there's no per-person attribution until staff login exists.
 - Breakage written off with `X` is a cancel line with `restock: false`; there is no separate breakage/ADJUSTMENT report yet.
 - The cashier is fixed by the API's `FL2_CASHIER_ID`; there's no login.
+- Held tabs that only have a member or waiter picked (nothing scanned) live in the browser only, so a reload drops them; tabs holding a bill are restored from `openBills`. A bill opened in another browser window shows up only on the next resume (first load or after being offline).
 - The headless-Chrome end-to-end scripts used to verify Phases 4, 9 and 10 are not in the repo.
 - Catalog edits are open to whoever is at the till (no staff login / role check yet). GRN unit cost is per bottle; there's no per-case price entry.

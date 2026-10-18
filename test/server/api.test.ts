@@ -22,6 +22,32 @@ describe('local HTTP API', () => {
     expect(body.businessDay.openedAt).toMatch(/^\d{4}-\d{2}-\d{2}T.*Z$/);
     expect(body.peakSession).toMatchObject({ id: started.body.id, runningExpectedPaise: '0' });
     expect(body.openBill).toBeNull();
+    expect(body.openBills).toEqual([]);
+  });
+
+  it("reports today's waiter figures with money as strings, and every held bill in the context", async () => {
+    const { fx, call } = await start();
+    const held = await call('POST', '/api/bills', { mode: 'NORMAL' });
+    await call('POST', `/api/bills/${held.body.id}/items`, { skuId: fx.sku.full, quantity: 1 });
+    await call('PUT', `/api/bills/${held.body.id}/waiter`, { waiterId: fx.waiter.trusted });
+    const next = await call('POST', '/api/bills', { mode: 'NORMAL' });
+
+    const context = await call('GET', '/api/context');
+    expect(context.body.openBills.map((d: { bill: { id: string } }) => d.bill.id)).toEqual([held.body.id, next.body.id]);
+    expect(context.body.openBill.bill.id).toBe(next.body.id);
+
+    const stats = await call('GET', '/api/waiters/stats');
+    expect(stats.status).toBe(200);
+    expect(stats.body.businessDayId).toBe(fx.dayId);
+    expect(stats.body.waiters[0]).toMatchObject({
+      code: 'W01',
+      openBills: 1,
+      openDuePaise: String(PRICE.full),
+      closedBills: 0,
+      settledPaise: '0',
+      outstandingPaise: '0',
+    });
+    expect(stats.body.totals).toEqual({ openBills: 1, openDuePaise: String(PRICE.full), closedBills: 0, settledPaise: '0' });
   });
 
   it('runs a NORMAL bill end to end: lookup, create, add, cancel, member, settle', async () => {

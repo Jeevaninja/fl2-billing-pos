@@ -25,6 +25,7 @@ describe('CounterQueries', () => {
         businessDay: { id: fx.dayId, businessDate: '2026-10-14', openedAt: expect.any(Date) },
         peakSession: null,
         openBill: null,
+        openBills: [],
       });
     });
 
@@ -85,10 +86,28 @@ describe('CounterQueries', () => {
       expect(openBill?.items).toHaveLength(1);
     });
 
+    it("lists every open NORMAL counter bill of this cashier, oldest first, for held billing tabs", async () => {
+      const { fx, queries, billing, peak } = setup();
+      const first = await billing.createBill('NORMAL', fx.cashier);
+      await billing.addItemToBill(first.id, fx.sku.full, 1);
+      const settled = await billing.createBill('NORMAL', fx.cashier);
+      await billing.addItemToBill(settled.id, fx.sku.quarter, 1);
+      await billing.settleNormalBill(settled.id, [{ mode: 'CASH', amount: PAISE.quarter }]);
+      await billing.createBill('NORMAL', fx.manager);
+      const second = await billing.createBill('NORMAL', fx.cashier);
+      const session = await peak.startPeakSession(fx.dayId, 0n, 0n, fx.cashier);
+      await billing.recordPeakSale(session.id, fx.sku.beer650, 1, fx.cashier);
+
+      const { openBills, openBill } = await queries.getCounterContext(fx.cashier);
+      expect(openBills.map((d) => d.bill.id)).toEqual([first.id, second.id]);
+      expect(openBills[0]?.items).toHaveLength(1);
+      expect(openBill?.bill.id).toBe(second.id);
+    });
+
     it('reports a null business day when none is open', async () => {
       const { db, fx, queries } = setup();
       await db.query(`UPDATE business_days SET status = 'CLOSED', closed_at = now(), closed_by_staff_id = $1, counted_cash_paise = 0`, [fx.manager]);
-      expect(await queries.getCounterContext(fx.cashier)).toMatchObject({ businessDay: null, peakSession: null, openBill: null });
+      expect(await queries.getCounterContext(fx.cashier)).toMatchObject({ businessDay: null, peakSession: null, openBill: null, openBills: [] });
     });
 
     it('throws NotFoundError for an unknown cashier', async () => {

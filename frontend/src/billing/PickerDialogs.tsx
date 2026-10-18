@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { api } from '../api/client'
-import type { MemberSummary, WaiterSummary } from '../api/types'
+import type { MemberSummary } from '../api/types'
 import { Kbd } from '../components/ui'
-import { formatPaise } from '../lib/money'
 import { counterErrorMessage } from './errors'
 import { Modal } from './Modal'
 
@@ -128,58 +127,6 @@ export function MemberDialog({ onPick, onClose }: { onPick: (m: MemberSummary | 
             Walk-in (no member)
           </button>
         </div>
-      }
-    />
-  )
-}
-
-export function WaiterDialog({ onPick, onClose }: { onPick: (w: WaiterSummary) => void; onClose: () => void }) {
-  const [query, setQuery] = useState('')
-  const [all, setAll] = useState<WaiterSummary[]>([])
-  const [status, setStatus] = useState<string | null>('Loading waiters…')
-
-  useEffect(() => {
-    api
-      .listWaiters()
-      .then((w) => {
-        setAll(w)
-        setStatus(w.length === 0 ? 'No active waiters' : null)
-      })
-      .catch((err: unknown) => setStatus(counterErrorMessage(err)))
-  }, [])
-
-  const q = query.trim().toLowerCase()
-  const items = q === '' ? all : all.filter((w) => w.code.toLowerCase().includes(q) || w.displayName.toLowerCase().includes(q))
-
-  return (
-    <Picker
-      title="Tag waiter"
-      placeholder="Code or name"
-      query={query}
-      onQuery={setQuery}
-      items={items}
-      status={status}
-      onPick={onPick}
-      onClose={onClose}
-      itemKey={(w) => w.id}
-      render={(w) => (
-        <span className="flex items-center justify-between gap-3">
-          <span>
-            <span className="font-mono text-zinc-400">{w.code}</span> <span className="font-bold">{w.displayName}</span>
-          </span>
-          <span className="flex items-center gap-3 text-sm">
-            <TrustBadge trusted={w.isTrusted} />
-            <span className="font-mono text-zinc-300">
-              {formatPaise(w.outstandingPaise)}
-              {w.creditLimitPaise !== null && <span className="text-zinc-500"> / {formatPaise(w.creditLimitPaise)}</span>}
-            </span>
-          </span>
-        </span>
-      )}
-      footer={
-        <span className="text-sm text-zinc-400">
-          <Kbd>↑</Kbd> <Kbd>↓</Kbd> select · <Kbd>Enter</Kbd> tag · trusted waiters may pay later; untrusted pay bill-on-bill
-        </span>
       }
     />
   )

@@ -10,12 +10,27 @@ import type { ScanEffect } from '../hooks/scanBuffer'
 import { beep } from '../lib/beep'
 import { formatPaise } from '../lib/money'
 import { GridFooter, ItemsGrid, PeakSide, PeakTicker, ScanBar, SidePanel } from './BillingPanels'
-import { billingReducer, cancelPlan, groupItems, initialBillingState, screenMode, stockLeft, totals, type Receipt } from './billingReducer'
+import { BillTabs } from './BillTabs'
+import {
+  activeTab,
+  billingReducer,
+  cancelPlan,
+  findTab,
+  groupItems,
+  initialBillingState,
+  newTabBlock,
+  screenMode,
+  stockLeft,
+  totals,
+  type BillingAction,
+  type Receipt,
+} from './billingReducer'
 import { CounterError, counterErrorMessage } from './errors'
 import { Modal } from './Modal'
 import { describePlan, type PayPlan } from './payment'
 import { PaymentDialog } from './PaymentDialog'
-import { MemberDialog, WaiterDialog } from './PickerDialogs'
+import { MemberDialog } from './PickerDialogs'
+import { WaiterSidebar } from './WaiterSidebar'
 import { PeakBanner, PeakEndDialog, PeakStartDialog } from '../components/peak/PeakControls'
 import { describeVariance } from '../peak/peakMath'
 
@@ -31,51 +46,62 @@ const CONTEXT_POLL_MS = 15_000
 export default function BillingScreen({ onExit }: { onExit: () => void }) {
   const [state, dispatch] = useReducer(billingReducer, initialBillingState)
   const [peakDialog, setPeakDialog] = useState<PeakDialog>(null)
+  /** The abandon confirm came from a tab's ×: close the tab once the bill is cancelled. */
+  const [abandonClosesTab, setAbandonClosesTab] = useState(false)
+  const tab = activeTab(state)
   const mode = screenMode(state)
-  const rows = useMemo(() => groupItems(state.bill?.items ?? []), [state.bill])
-  const { lines, bottles } = totals(state.bill)
+  const rows = useMemo(() => groupItems(tab.bill?.items ?? []), [tab.bill])
+  const pendingHere = useMemo(() => state.pending.filter((p) => p.tabId === tab.id), [state.pending, tab.id])
+  const { lines, bottles } = totals(tab.bill)
 
-  // Synchronous mirrors for queued work: the queue may run before React re-renders.
-  const billRef = useRef<BillDetail | null>(null)
-  const contextRef = useRef<CounterContext | null>(null)
+  // Synchronous mirror for queued work, which may run before React re-renders. Every action goes
+  // through `apply`, which folds it into the mirror with the same pure reducer, so the mirror is
+  // always the newest state (React's own state catches up with the identical result).
   const stateRef = useRef(state)
-  useEffect(() => {
-    stateRef.current = state
-  })
+  const contextRef = useRef<CounterContext | null>(null)
   const queue = useRef<Promise<void>>(Promise.resolve())
   const scanSeq = useRef(0)
   const loadedOnce = useRef(false)
   const busyRef = useRef(0)
 
-  const setBill = useCallback((detail: BillDetail, focusSkuId?: string) => {
-    billRef.current = detail
-    dispatch(focusSkuId === undefined ? { type: 'billLoaded', detail } : { type: 'billLoaded', detail, focusSkuId })
+  const apply = useCallback((action: BillingAction) => {
+    stateRef.current = billingReducer(stateRef.current, action)
+    dispatch(action)
   }, [])
 
-  const finishBill = useCallback((receipt: Receipt | null) => {
-    billRef.current = null
-    dispatch({ type: 'billFinished', receipt })
-  }, [])
+  /** The newest bill of a tab (null before its first scan, or once settled). */
+  const billOf = useCallback((tabId: number): BillDetail | null => findTab(stateRef.current, tabId)?.bill ?? null, [])
+  const currentTabId = () => stateRef.current.activeTabId
 
-  const flash = useCallback((kind: 'ok' | 'error', text: string) => {
-    beep(kind)
-    dispatch({ type: 'flash', kind, text })
-  }, [])
+  const setBill = useCallback(
+    (tabId: number, detail: BillDetail, focusSkuId?: string) =>
+      apply(focusSkuId === undefined ? { type: 'billLoaded', tabId, detail } : { type: 'billLoaded', tabId, detail, focusSkuId }),
+    [apply],
+  )
+
+  const finishBill = useCallback((tabId: number, receipt: Receipt | null) => apply({ type: 'billFinished', tabId, receipt }), [apply])
+
+  const flash = useCallback(
+    (kind: 'ok' | 'error', text: string) => {
+      beep(kind)
+      apply({ type: 'flash', kind, text })
+    },
+    [apply],
+  )
 
   const refreshContext = useCallback(async () => {
     try {
       const context = await api.context()
-      // Resume the cashier's open bill only on the first successful load (also after being offline).
+      // Resume the cashier's open bills only on the first successful load (also after being offline).
       const resume = !loadedOnce.current && busyRef.current === 0
       loadedOnce.current = true
       contextRef.current = context
-      if (resume && context.openBill && !billRef.current) billRef.current = context.openBill
-      dispatch({ type: 'contextLoaded', context, resume })
+      apply({ type: 'contextLoaded', context, resume })
     } catch (err) {
       loadedOnce.current = false
-      dispatch({ type: 'contextFailed', message: counterErrorMessage(err) })
+      apply({ type: 'contextFailed', message: counterErrorMessage(err) })
     }
-  }, [])
+  }, [apply])
 
   useEffect(() => {
     void refreshContext()
@@ -83,29 +109,32 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
     return () => clearInterval(timer)
   }, [refreshContext])
 
-  /** Re-reads the bill after a failed write, in case the failure means it changed elsewhere. */
-  const resync = useCallback(async () => {
-    const current = billRef.current
-    if (!current) return
-    try {
-      const detail = await api.getBill(current.bill.id)
-      if (detail.bill.status === 'OPEN') setBill(detail)
-      else finishBill(null)
-    } catch {
-      // Leave the screen as it is; the next action or poll will surface the problem.
-    }
-  }, [setBill, finishBill])
+  /** Re-reads a tab's bill after a failed write, in case the failure means it changed elsewhere. */
+  const resync = useCallback(
+    async (tabId: number) => {
+      const current = billOf(tabId)
+      if (!current) return
+      try {
+        const detail = await api.getBill(current.bill.id)
+        if (detail.bill.status === 'OPEN') setBill(tabId, detail)
+        else finishBill(tabId, null)
+      } catch {
+        // Leave the screen as it is; the next action or poll will surface the problem.
+      }
+    },
+    [billOf, setBill, finishBill],
+  )
 
   /** Runs a write after every earlier one, reporting failures on the scan bar. */
   const run = useCallback(
-    (task: () => Promise<void>) => {
+    (task: () => Promise<void>, tabId?: number) => {
       busyRef.current += 1
       queue.current = queue.current
         .then(task)
         .catch(async (err: unknown) => {
           flash('error', counterErrorMessage(err))
           if (err instanceof ApiError && err.code === 'PS007') await refreshContext()
-          else if (err instanceof ApiError) await resync()
+          else if (err instanceof ApiError && tabId !== undefined) await resync(tabId)
         })
         .finally(() => {
           busyRef.current -= 1
@@ -116,11 +145,14 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
   )
 
   // ── Actions ────────────────────────────────────────────────────────────────
+  // Each one captures its tab when the key is pressed, so its writes land on that tab's bill even if
+  // the cashier switches tabs before the queue gets to them.
 
   const scan = useCallback(
     (code: string, quantity: number) => {
       const id = ++scanSeq.current
-      dispatch({ type: 'scanQueued', scan: { id, code, quantity } })
+      const tabId = currentTabId()
+      apply({ type: 'scanQueued', scan: { id, tabId, code, quantity } })
       void run(async () => {
         try {
           const context = contextRef.current
@@ -132,9 +164,9 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
           if (!sku.isActive) throw new CounterError(`${sku.displayName} is not on sale (inactive)`)
 
           const session = context.peakSession
-          if (session && !billRef.current) {
+          if (session && !billOf(tabId)) {
             const { bill, item } = await api.peakSale(session.id, sku.id, quantity)
-            dispatch({
+            apply({
               type: 'peakSale',
               entry: {
                 billId: bill.id,
@@ -152,82 +184,88 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
             return
           }
 
-          let billId = billRef.current?.bill.id
+          let billId = billOf(tabId)?.bill.id
           if (!billId) {
-            const { pendingMember, pendingWaiter } = stateRef.current
-            billId = (await api.createBill('NORMAL', pendingMember?.id)).id
-            if (pendingWaiter) await api.tagWaiter(billId, pendingWaiter.id)
+            const held = findTab(stateRef.current, tabId)
+            billId = (await api.createBill('NORMAL', held?.pendingMember?.id)).id
+            if (held?.pendingWaiter) await api.tagWaiter(billId, held.pendingWaiter.id)
             // Track the bill before adding to it, so a failed first line (e.g. out of stock) leaves
             // an open bill the next scan reuses rather than an orphan.
-            setBill(await api.getBill(billId))
+            setBill(tabId, await api.getBill(billId))
           }
           await api.addItem(billId, sku.id, quantity)
-          setBill(await api.getBill(billId), sku.id)
+          setBill(tabId, await api.getBill(billId), sku.id)
           flash('ok', `Added ${quantity} × ${sku.displayName} · ${stockLeft(sku.onHandQty, quantity)}`)
         } finally {
-          dispatch({ type: 'scanDone', id })
+          apply({ type: 'scanDone', id })
         }
-      })
+      }, tabId)
     },
-    [run, flash, refreshContext, setBill],
+    [apply, run, billOf, flash, refreshContext, setBill],
   )
 
   const adjustSelected = useCallback(
     (delta: 1 | -1) => {
-      const { selectedKey } = stateRef.current
-      const row = groupItems(billRef.current?.items ?? []).find((r) => r.key === selectedKey)
+      const tabId = currentTabId()
+      const selectedKey = findTab(stateRef.current, tabId)?.selectedKey
+      const row = groupItems(billOf(tabId)?.items ?? []).find((r) => r.key === selectedKey)
       if (!row) return
       void run(async () => {
-        const billId = billRef.current?.bill.id
+        const billId = billOf(tabId)?.bill.id
         if (!billId) return
         if (delta === 1) await api.addItem(billId, row.skuId, 1)
         else if (row.cancelItemId) await api.cancelItem(billId, row.cancelItemId, 1)
-        setBill(await api.getBill(billId), row.skuId)
+        setBill(tabId, await api.getBill(billId), row.skuId)
         flash('ok', `${delta === 1 ? 'Added' : 'Removed'} 1 × ${row.displayName}`)
-      })
+      }, tabId)
     },
-    [run, setBill, flash],
+    [run, billOf, setBill, flash],
   )
 
   const pickMember = useCallback(
     (member: MemberSummary | null) => {
-      dispatch({ type: 'dialog', dialog: null })
-      const billId = billRef.current?.bill.id
+      apply({ type: 'dialog', dialog: null })
+      const tabId = currentTabId()
+      const billId = billOf(tabId)?.bill.id
       if (!billId) {
-        dispatch({ type: 'pendingMember', member })
+        apply({ type: 'pendingMember', tabId, member })
         return
       }
       void run(async () => {
         await api.setMember(billId, member?.id ?? null)
-        setBill(await api.getBill(billId))
+        setBill(tabId, await api.getBill(billId))
         flash('ok', member ? `Member ${member.displayName} attached` : 'Member removed (walk-in)')
-      })
+      }, tabId)
     },
-    [run, setBill, flash],
+    [apply, run, billOf, setBill, flash],
   )
 
   const pickWaiter = useCallback(
     (waiter: WaiterSummary) => {
-      dispatch({ type: 'dialog', dialog: null })
-      const billId = billRef.current?.bill.id
+      apply({ type: 'dialog', dialog: null })
+      const tabId = currentTabId()
+      const label = findTab(stateRef.current, tabId)?.label
+      const billId = billOf(tabId)?.bill.id
       if (!billId) {
-        dispatch({ type: 'pendingWaiter', waiter })
+        apply({ type: 'pendingWaiter', tabId, waiter })
+        flash('ok', `${waiter.displayName} on Bill ${label} — scan the first bottle`)
         return
       }
       void run(async () => {
         await api.tagWaiter(billId, waiter.id)
-        setBill(await api.getBill(billId))
-        flash('ok', `Tagged to ${waiter.displayName}`)
-      })
+        setBill(tabId, await api.getBill(billId))
+        flash('ok', `Bill ${label} tagged to ${waiter.displayName}`)
+      }, tabId)
     },
-    [run, setBill, flash],
+    [apply, run, billOf, setBill, flash],
   )
 
   const pay = useCallback(
     (plan: PayPlan) => {
-      const detail = billRef.current
+      const tabId = currentTabId()
+      const detail = billOf(tabId)
       if (!detail) return
-      dispatch({ type: 'dialog', dialog: null }) // closing first makes a double Enter harmless
+      apply({ type: 'dialog', dialog: null }) // closing first makes a double Enter harmless
       void run(async () => {
         const billId = detail.bill.id
         if (plan.kind === 'counter') {
@@ -235,26 +273,34 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
         } else {
           for (const step of plan.steps) await api.settleWaiter(billId, plan.waiterId, step.tender, step.amount)
         }
-        finishBill({ billNo: detail.bill.billNo, totalPaise: detail.bill.totalPaise, changePaise: plan.changePaise, summary: describePlan(plan, detail) })
+        finishBill(tabId, { billNo: detail.bill.billNo, totalPaise: detail.bill.totalPaise, changePaise: plan.changePaise, summary: describePlan(plan, detail) })
         flash('ok', `Bill #${detail.bill.billNo} settled${plan.changePaise > 0n ? ` · change ${formatPaise(plan.changePaise)}` : ''}`)
-      })
+      }, tabId)
     },
-    [run, finishBill, flash],
+    [apply, run, billOf, finishBill, flash],
   )
 
+  const closeDialog = useCallback(() => {
+    setAbandonClosesTab(false)
+    apply({ type: 'dialog', dialog: null })
+  }, [apply])
+
   const abandonBill = useCallback(() => {
-    dispatch({ type: 'dialog', dialog: null })
+    const tabId = currentTabId()
+    const closesTab = abandonClosesTab
+    closeDialog()
     void run(async () => {
-      const detail = billRef.current
+      const detail = billOf(tabId)
       if (!detail) return
       for (const item of detail.items) {
         if (item.quantity > 0 && item.remainingQuantity > 0) await api.cancelItem(detail.bill.id, item.id, item.remainingQuantity)
       }
       await api.closeEmpty(detail.bill.id)
-      finishBill(null)
+      finishBill(tabId, null)
+      if (closesTab) apply({ type: 'tabClosed', tabId })
       flash('ok', `Bill #${detail.bill.billNo} cancelled`)
-    })
-  }, [run, finishBill, flash])
+    }, tabId)
+  }, [abandonClosesTab, closeDialog, run, billOf, finishBill, apply, flash])
 
   /** Ctrl+Z in peak: the server finds this till's newest scan, so it works after a reload too. */
   const undoPeak = useCallback(() => {
@@ -262,11 +308,61 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
       const { undone } = await api.undoLastPeak().catch((err: unknown) => {
         throw err instanceof ApiError && err.code === 'NOT_FOUND' ? new CounterError('Nothing left to undo in this peak') : err
       })
-      dispatch({ type: 'peakUndone', billId: undone.billId })
+      apply({ type: 'peakUndone', billId: undone.billId })
       flash('ok', `Last scan voided: ${undone.displayName} ×${undone.quantity} (peak bill #${undone.billNo})`)
       void refreshContext()
     })
-  }, [run, flash, refreshContext])
+  }, [run, apply, flash, refreshContext])
+
+  // ── Tabs ───────────────────────────────────────────────────────────────────
+
+  const openTab = useCallback(() => {
+    const block = newTabBlock(stateRef.current)
+    if (block) {
+      flash('error', block)
+      return
+    }
+    const held = activeTab(stateRef.current)
+    apply({ type: 'tabOpened' })
+    flash('ok', `Bill ${held.label} held · Bill ${activeTab(stateRef.current).label} ready — scan the first bottle`)
+  }, [apply, flash])
+
+  const switchTab = useCallback((tabId: number) => apply({ type: 'tabSwitched', tabId }), [apply])
+  const cycleTab = useCallback((delta: 1 | -1) => apply({ type: 'tabCycled', delta }), [apply])
+
+  /** ×: an empty tab just closes; a bill is cancelled first (confirm), unless it is part-paid. */
+  const closeTab = useCallback(
+    (tabId: number) => {
+      const s = stateRef.current
+      const target = findTab(s, tabId)
+      if (!target) return
+      if (s.pending.some((p) => p.tabId === tabId)) {
+        flash('error', `Bill ${target.label} is still adding bottles — try again in a moment`)
+        return
+      }
+      const detail = target.bill
+      if (!detail) {
+        apply({ type: 'tabClosed', tabId })
+        return
+      }
+      if (detail.tenderedPaise > 0n) {
+        flash('error', `Bill #${detail.bill.billNo} is part-paid — settle it with F9`)
+        return
+      }
+      if (groupItems(detail.items).length === 0) {
+        void run(async () => {
+          await api.closeEmpty(detail.bill.id)
+          finishBill(tabId, null)
+          apply({ type: 'tabClosed', tabId })
+        }, tabId)
+        return
+      }
+      apply({ type: 'tabSwitched', tabId })
+      setAbandonClosesTab(true)
+      apply({ type: 'dialog', dialog: 'abandon' })
+    },
+    [apply, flash, run, finishBill],
+  )
 
   // ── Keyboard ───────────────────────────────────────────────────────────────
 
@@ -281,22 +377,24 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
   const canEditBill = mode === 'NORMAL'
 
   const openPayment = useCallback(() => {
-    const detail = billRef.current
+    const tabId = currentTabId()
+    const detail = billOf(tabId)
     if (!detail || groupItems(detail.items).length === 0) {
       if (detail && detail.bill.totalPaise === 0n) {
         void run(async () => {
           await api.closeEmpty(detail.bill.id)
-          finishBill(null)
+          finishBill(tabId, null)
           flash('ok', `Empty bill #${detail.bill.billNo} closed`)
-        })
+        }, tabId)
       } else flash('error', 'Scan a bottle first')
       return
     }
-    dispatch({ type: 'dialog', dialog: 'payment' })
-  }, [run, finishBill, flash])
+    apply({ type: 'dialog', dialog: 'payment' })
+  }, [billOf, run, finishBill, flash, apply])
 
   const newBill = useCallback(() => {
-    const detail = billRef.current
+    const tabId = currentTabId()
+    const detail = billOf(tabId)
     if (!detail) {
       flash('ok', 'Ready — scan the first bottle')
       return
@@ -304,21 +402,22 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
     if (detail.bill.totalPaise === 0n && detail.tenderedPaise === 0n) {
       void run(async () => {
         await api.closeEmpty(detail.bill.id)
-        finishBill(null)
-      })
+        finishBill(tabId, null)
+      }, tabId)
       return
     }
-    dispatch({ type: 'dialog', dialog: 'abandon' })
-  }, [run, finishBill, flash])
+    apply({ type: 'dialog', dialog: 'abandon' })
+  }, [billOf, run, finishBill, flash, apply])
 
   useGlobalShortcuts(
     {
       F1: () => canEditBill && newBill(),
-      F2: () => (canEditBill ? dispatch({ type: 'dialog', dialog: 'member' }) : flash('error', 'Members are not tagged during peak')),
+      F2: () => (canEditBill ? apply({ type: 'dialog', dialog: 'member' }) : flash('error', 'Members are not tagged during peak')),
+      F3: openTab,
       F4: () => {
         if (!canEditBill) flash('error', 'Waiters are not tagged during peak')
-        else if ((billRef.current?.tenderedPaise ?? 0n) > 0n) flash('error', 'Waiter is locked after the first payment')
-        else dispatch({ type: 'dialog', dialog: 'waiter' })
+        else if ((billOf(currentTabId())?.tenderedPaise ?? 0n) > 0n) flash('error', 'Waiter is locked after the first payment')
+        else apply({ type: 'dialog', dialog: 'waiter' })
       },
       F8: togglePeak,
       F9: () => (canEditBill ? openPayment() : flash('error', 'Peak bills take no payment — they reconcile at session end')),
@@ -333,9 +432,10 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
         flash('error', 'Quantity must be at least 1 — use − to remove the line')
         return
       }
-      const key = stateRef.current.selectedKey
+      const tabId = currentTabId()
+      const key = findTab(stateRef.current, tabId)?.selectedKey
       void run(async () => {
-        const detail = billRef.current
+        const detail = billOf(tabId)
         const row = groupItems(detail?.items ?? []).find((r) => r.key === key)
         if (!detail || !row) return
         if (quantity !== row.quantity) {
@@ -343,13 +443,14 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
           else {
             for (const c of cancelPlan(detail.items, row.key, row.quantity - quantity)) await api.cancelItem(detail.bill.id, c.itemId, c.quantity)
           }
-          setBill(await api.getBill(detail.bill.id), row.skuId)
+          setBill(tabId, await api.getBill(detail.bill.id), row.skuId)
           flash('ok', `${row.displayName} × ${quantity}`)
         }
-        openPayment()
-      })
+        // Payment opens on the current tab; skip it if the cashier has moved to another bill meanwhile.
+        if (currentTabId() === tabId) openPayment()
+      }, tabId)
     },
-    [run, setBill, flash, openPayment],
+    [run, billOf, setBill, flash, openPayment],
   )
 
   const onScanEffect = useCallback(
@@ -363,14 +464,15 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
         return
       }
       if (!canEditBill) return
-      if (effect.command === 'up') dispatch({ type: 'move', delta: -1 })
-      else if (effect.command === 'down') dispatch({ type: 'move', delta: 1 })
+      if (effect.command === 'up') apply({ type: 'move', delta: -1 })
+      else if (effect.command === 'down') apply({ type: 'move', delta: 1 })
       else adjustSelected(effect.command === 'increment' ? 1 : -1)
     },
-    [scan, adjustSelected, setQuantity, canEditBill],
+    [scan, adjustSelected, setQuantity, canEditBill, apply],
   )
-  const selectedRow = canEditBill ? rows.find((r) => r.key === state.selectedKey) : undefined
-  const qtyTarget: QtyTarget | null = selectedRow ? { key: selectedRow.key, quantity: selectedRow.quantity } : null
+  const selectedRow = canEditBill ? rows.find((r) => r.key === tab.selectedKey) : undefined
+  // Keyed by tab too, so a quantity edit never carries over to the same SKU on another bill.
+  const qtyTarget: QtyTarget | null = selectedRow ? { key: `${tab.id}:${selectedRow.key}`, quantity: selectedRow.quantity } : null
   const scanState = useScanBuffer(keysLive, onScanEffect, qtyTarget)
 
   // The scan buffer listens in the capture phase, so a non-empty buffer consumes Esc before this.
@@ -378,22 +480,36 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
     if (state.dialog !== null) return
     function onKeyDown(event: KeyboardEvent) {
       if (event.defaultPrevented) return
+      const ctrl = event.ctrlKey || event.metaKey
       if (event.key === 'Escape') {
         event.preventDefault()
         onExit()
-      } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && mode === 'PEAK') {
+      } else if (ctrl && event.key.toLowerCase() === 'z' && mode === 'PEAK') {
         event.preventDefault()
         if (!event.repeat) undoPeak() // a held key voids one scan, not a run of them
+      } else if (!keysLive) {
+        return
+      } else if (event.key === 'PageDown' || event.key === 'PageUp' || (ctrl && event.key === 'Tab')) {
+        // Ctrl+T / Ctrl+Tab only reach the page when Chrome runs in kiosk / --app mode.
+        event.preventDefault()
+        if (!event.repeat) cycleTab(event.key === 'PageUp' || event.shiftKey ? -1 : 1)
+      } else if (ctrl && event.key.toLowerCase() === 't') {
+        event.preventDefault()
+        if (!event.repeat) openTab()
+      } else if (event.altKey && !ctrl && /^Digit[1-9]$/.test(event.code)) {
+        event.preventDefault()
+        const target = stateRef.current.tabs[Number(event.code.slice(5)) - 1]
+        if (target) switchTab(target.id)
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [state.dialog, mode, onExit, undoPeak])
+  }, [state.dialog, mode, keysLive, onExit, undoPeak, cycleTab, openTab, switchTab])
 
   // ── Layout ─────────────────────────────────────────────────────────────────
 
-  const closeDialog = () => dispatch({ type: 'dialog', dialog: null })
-  const billNo = state.bill?.bill.billNo
+  const billNo = tab.bill?.bill.billNo
+  const showTabs = mode === 'NORMAL' || state.tabs.length > 1
 
   return (
     <div className="flex h-full min-h-screen flex-col">
@@ -411,7 +527,9 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
         <h1 className="text-lg font-bold tracking-wide uppercase">Billing</h1>
         <ModeBadge mode={mode} sessionNo={state.context?.peakSession?.sessionNo} />
         {mode === 'NORMAL' && (
-          <span className="font-mono text-lg text-zinc-300">{billNo !== undefined ? `Bill #${billNo}` : 'New bill'}</span>
+          <span className="font-mono text-lg text-zinc-300">
+            Bill {tab.label} · {billNo !== undefined ? `#${billNo}` : 'new'}
+          </span>
         )}
         <div className="ml-auto flex items-center gap-4 text-sm">
           {state.context && <span className="text-zinc-400">Cashier: {state.context.cashier.displayName}</span>}
@@ -450,16 +568,26 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
       {(mode === 'NORMAL' || mode === 'PEAK') && (
         <div className="flex min-h-0 flex-1">
           <main className="flex min-w-0 flex-1 flex-col" aria-label={mode === 'PEAK' ? 'Peak scans' : 'Bill items'}>
+            {showTabs && (
+              <BillTabs
+                tabs={state.tabs}
+                activeTabId={tab.id}
+                newBlock={newTabBlock(state)}
+                onSwitch={switchTab}
+                onClose={closeTab}
+                onNew={openTab}
+              />
+            )}
             <ScanBar scan={scanState} flash={state.flash} enabled={keysLive} qtyLabel={selectedRow?.displayName} />
             {mode === 'PEAK' ? (
-              <PeakTicker ticker={state.ticker} pending={state.pending} />
+              <PeakTicker ticker={state.ticker} pending={pendingHere} />
             ) : (
               <ItemsGrid
                 rows={rows}
-                pending={state.pending}
-                selectedKey={state.selectedKey}
-                onSelect={(key) => dispatch({ type: 'select', key })}
-                receipt={state.receipt}
+                pending={pendingHere}
+                selectedKey={tab.selectedKey}
+                onSelect={(key) => apply({ type: 'select', key })}
+                receipt={tab.receipt}
                 qtyEdit={scanState.qtyEdit}
               />
             )}
@@ -474,13 +602,13 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
             />
           ) : (
             <SidePanel
-              detail={state.bill}
-              pendingMember={state.pendingMember}
-              pendingWaiter={state.pendingWaiter}
+              detail={tab.bill}
+              pendingMember={tab.pendingMember}
+              pendingWaiter={tab.pendingWaiter}
               lines={lines}
               bottles={bottles}
-              onMember={() => dispatch({ type: 'dialog', dialog: 'member' })}
-              onWaiter={() => dispatch({ type: 'dialog', dialog: 'waiter' })}
+              onMember={() => apply({ type: 'dialog', dialog: 'member' })}
+              onWaiter={() => apply({ type: 'dialog', dialog: 'waiter' })}
               onPay={openPayment}
               onStartPeak={peakSession ? undefined : togglePeak}
             />
@@ -488,8 +616,8 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
         </div>
       )}
 
-      {state.dialog === 'payment' && state.bill && (
-        <PaymentDialog detail={state.bill} busy={state.pending.length > 0} onConfirm={pay} onClose={closeDialog} />
+      {state.dialog === 'payment' && tab.bill && (
+        <PaymentDialog detail={tab.bill} busy={pendingHere.length > 0} onConfirm={pay} onClose={closeDialog} />
       )}
       {state.dialog === 'member' && <MemberDialog onPick={pickMember} onClose={closeDialog} />}
       {peakDialog?.kind === 'start' && (
@@ -497,7 +625,7 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
           businessDayId={peakDialog.businessDayId}
           onStarted={(session) => {
             setPeakDialog(null)
-            flash('ok', `Peak #${session.sessionNo} started${billRef.current ? ' — finish this bill, then scans go to peak' : ''}`)
+            flash('ok', `Peak #${session.sessionNo} started${billOf(currentTabId()) ? ' — finish this bill, then scans go to peak' : ''}`)
             void refreshContext()
           }}
           onClose={() => setPeakDialog(null)}
@@ -513,10 +641,12 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
           onClose={() => setPeakDialog(null)}
         />
       )}
-      {state.dialog === 'waiter' && <WaiterDialog onPick={pickWaiter} onClose={closeDialog} />}
-      {state.dialog === 'abandon' && state.bill && (
+      {state.dialog === 'waiter' && (
+        <WaiterSidebar currentWaiterId={tab.bill?.waiter?.id ?? tab.pendingWaiter?.id ?? null} onPick={pickWaiter} onClose={closeDialog} />
+      )}
+      {state.dialog === 'abandon' && tab.bill && (
         <Modal
-          title={`Cancel bill #${state.bill.bill.billNo}?`}
+          title={`Cancel Bill ${tab.label} (#${tab.bill.bill.billNo})?`}
           onClose={closeDialog}
           onKey={(e) => {
             if (e.key !== 'Enter') return false
@@ -535,8 +665,8 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
           }
         >
           <p>
-            All {bottles} bottle(s) go back into stock as cancellation lines, then the ₹0 bill is closed. Nothing is deleted — the
-            audit trail keeps every line.
+            All {bottles} bottle(s) go back into stock as cancellation lines, then the ₹0 bill is closed
+            {abandonClosesTab ? ' and its tab with it' : ''}. Nothing is deleted — the audit trail keeps every line.
           </p>
         </Modal>
       )}

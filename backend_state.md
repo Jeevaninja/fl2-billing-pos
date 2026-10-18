@@ -1,6 +1,6 @@
 # FL2 POS — Backend State Reference
 
-Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`), Phase 10 master catalog and case-based inwarding (`0009_catalog_case_size`, `CatalogService`; plan `docs/ui/phase10-catalog-case-grn-plan.md`), Phase 11 peak start baseline and Day End sales breakdown (no migration; plan `docs/ui/phase11-peak-day-end-visibility-plan.md`), Phase 12 server-side peak undo (no migration; plan `docs/ui/phase12-billing-speed-plan.md`), Phase 13 Day End tally adjustments and running peak analytics (`0010_tender_adjustments`; plan `docs/ui/phase13-peak-close-tally-plan.md`), and Phase 14 bank deposits / cash drops (`0011_bank_deposits`; plan `docs/ui/phase14-bank-deposits-plan.md`). Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
+Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`), Phase 10 master catalog and case-based inwarding (`0009_catalog_case_size`, `CatalogService`; plan `docs/ui/phase10-catalog-case-grn-plan.md`), Phase 11 peak start baseline and Day End sales breakdown (no migration; plan `docs/ui/phase11-peak-day-end-visibility-plan.md`), Phase 12 server-side peak undo (no migration; plan `docs/ui/phase12-billing-speed-plan.md`), Phase 13 Day End tally adjustments and running peak analytics (`0010_tender_adjustments`; plan `docs/ui/phase13-peak-close-tally-plan.md`), Phase 14 bank deposits / cash drops (`0011_bank_deposits`; plan `docs/ui/phase14-bank-deposits-plan.md`), and Phase 15 held bills in `/api/context` and per-waiter day stats (no migration; plan `docs/ui/phase15-billing-tabs-waiter-sidebar-plan.md`). Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
 
 - **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`, `0006_expense_category`, `0007_peak_drawer_cash`, `0008_stock_receipts`, `0009_catalog_case_size`, `0010_tender_adjustments`, `0011_bank_deposits`.
 - **Money:** `BIGINT` whole paise in SQL, `bigint` in TypeScript (`type Paise = bigint`). No floats anywhere.
@@ -332,6 +332,7 @@ class CounterQueries {
                                                                    // inactive last, then product name and size FULL→QUARTER, 650→330; default 20
   searchMembers(query: string, limit?: number): Promise<MemberSummary[]>; // active; number prefix or name substring; default limit 20
   listWaiters(): Promise<WaiterSummary[]>;                         // active, by waiter_code
+  getWaiterStats(): Promise<WaiterStatsReport>;                    // Phase 15: open day's figures per active waiter
   getBillDetail(billId: string): Promise<BillDetail>;              // NotFoundError for a missing bill
   listCaptainOrders(): Promise<BillDetail[]>;                      // OPEN WAITER_APP sale bills, oldest first (any day)
 }
@@ -341,7 +342,14 @@ interface CounterContext {
   businessDay: BusinessDaySummary | null;   // null = no open day; billing is blocked
   peakSession: PeakSessionView | null;      // running session → counter bills in PEAK mode
   openBill: BillDetail | null;              // this cashier's newest OPEN NORMAL counter bill (resume)
+  openBills: BillDetail[];                  // Phase 15: all of them, oldest first (held billing tabs)
 }
+interface WaiterDayTotals {
+  openBills: number; openDuePaise: Paise;   // OPEN sale bills of the day; Σ due (total − tendered)
+  closedBills: number; settledPaise: Paise; // SETTLED and not reversed; Σ total, any tender (waiter credit included)
+}
+type WaiterStats = WaiterSummary & WaiterDayTotals;
+interface WaiterStatsReport { businessDayId: string | null; waiters: WaiterStats[]; totals: WaiterDayTotals }
 interface StaffSummary { id: string; displayName: string; role: 'CASHIER' | 'MANAGER' | 'ADMIN'; }
 interface BusinessDaySummary { id: string; businessDate: string /* 'YYYY-MM-DD' */; openedAt: Date; }
 interface PeakSessionView extends PeakSession { runningExpectedPaise: Paise; expectedDrawerCashPaise: Paise; }  // drawer total: see 0007
@@ -542,6 +550,7 @@ Migrations run on every boot (already-applied ones are skipped).
 | `GET /api/skus` | `?q=&limit=` (1–50) | `searchSkus` (empty `q` → `[]`) | 200 `SkuLookup[]` |
 | `GET /api/members` | `?q=&limit=` (1–100) | `searchMembers` | 200 |
 | `GET /api/waiters` | | `listWaiters` | 200 |
+| `GET /api/waiters/stats` | | `getWaiterStats` (Phase 15) | 200 |
 | `GET /api/captain-orders` | | `listCaptainOrders` (cashier's settle queue; not on the Wi-Fi server) | 200 `BillDetail[]` |
 | `GET /api/bills/:billId` | | `getBillDetail` | 200 |
 | `POST /api/bills` | `{ mode, memberId? }` | `createBill(mode, cashier, memberId)` | 201 |

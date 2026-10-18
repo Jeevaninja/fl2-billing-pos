@@ -98,6 +98,26 @@ export interface CounterContext {
   businessDay: { id: string; businessDate: string; openedAt: string } | null
   peakSession: PeakSessionView | null
   openBill: BillDetail | null
+  /** Every open NORMAL counter bill of this cashier, oldest first: the held billing tabs to restore. */
+  openBills: BillDetail[]
+}
+
+/** Today's figures for one waiter (GET /api/waiters/stats). */
+export interface WaiterDayTotals {
+  openBills: number
+  /** Σ due (total − tendered) on today's open bills. */
+  openDuePaise: Paise
+  /** Settled, not reversed. */
+  closedBills: number
+  settledPaise: Paise
+}
+
+export type WaiterStats = WaiterSummary & WaiterDayTotals
+
+export interface WaiterStatsReport {
+  businessDayId: string | null
+  waiters: WaiterStats[]
+  totals: WaiterDayTotals
 }
 
 export interface SkuLookup {

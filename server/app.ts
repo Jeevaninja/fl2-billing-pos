@@ -110,6 +110,7 @@ function buildRoutes({ db, cashierId }: ApiConfig): Route[] {
       return ok(await queries.searchMembers(query.get('q') ?? '', limit));
     }),
     route('GET', '/api/waiters', async () => ok(await queries.listWaiters())),
+    route('GET', '/api/waiters/stats', async () => ok(await queries.getWaiterStats())),
     route('GET', '/api/captain-orders', async () => ok(await queries.listCaptainOrders())),
 
     // ── Bills ──

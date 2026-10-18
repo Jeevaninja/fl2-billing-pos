@@ -23,6 +23,9 @@ export type {
   SkuLookup,
   StaffRole,
   StaffSummary,
+  WaiterDayTotals,
+  WaiterStats,
+  WaiterStatsReport,
   WaiterSummary,
 } from './counter-queries.js';
 export { DayEndService, EXPENSE_CATEGORIES } from './day-end.service.js';

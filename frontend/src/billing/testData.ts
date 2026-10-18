@@ -65,6 +65,7 @@ export function context(over: Partial<CounterContext> = {}): CounterContext {
     businessDay: { id: 'day-1', businessDate: '2026-10-14', openedAt: '2026-10-14T04:00:00.000Z' },
     peakSession: null,
     openBill: null,
+    openBills: [],
     ...over,
   }
 }

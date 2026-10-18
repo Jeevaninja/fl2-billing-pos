@@ -115,6 +115,29 @@ export interface CounterContext {
   peakSession: PeakSessionView | null;
   /** This cashier's newest OPEN NORMAL counter bill on the open day, for resume after a reload. */
   openBill: BillDetail | null;
+  /** Every OPEN NORMAL counter bill of this cashier on the open day, oldest first: held billing tabs. */
+  openBills: BillDetail[];
+}
+
+export interface WaiterDayTotals {
+  /** OPEN sale bills tagged to the waiter on the day. */
+  openBills: number;
+  /** Σ due (total − tendered) on those open bills: what is still to be settled. */
+  openDuePaise: Paise;
+  /** SETTLED sale bills of the day that have not been reversed, whatever the tender (waiter credit included). */
+  closedBills: number;
+  settledPaise: Paise;
+}
+
+export type WaiterStats = WaiterSummary & WaiterDayTotals;
+
+export interface WaiterStatsReport {
+  /** The open business day; null when none is open (every waiter then reports zeros). */
+  businessDayId: string | null;
+  /** Active waiters by code, including those with no bills today. */
+  waiters: WaiterStats[];
+  /** Σ of the rows. */
+  totals: WaiterDayTotals;
 }
 
 const DEFAULT_MEMBER_LIMIT = 20;
@@ -191,28 +214,29 @@ export class CounterQueries {
       this.db,
       `SELECT id, business_date::text AS business_date, opened_at FROM business_days WHERE status = 'OPEN'`,
     );
-    if (!day) return { cashier, businessDay: null, peakSession: null, openBill: null };
+    if (!day) return { cashier, businessDay: null, peakSession: null, openBill: null, openBills: [] };
 
     const session = await maybeOne<PeakSessionViewRow>(
       this.db,
       `SELECT * FROM v_peak_sessions WHERE business_day_id = $1 AND ended_at IS NULL`,
       [day.id],
     );
-    const openBill = await maybeOne<{ id: string }>(
-      this.db,
+    const { rows: openRows } = await this.db.query<{ id: string }>(
       `SELECT id FROM bills
         WHERE business_day_id = $1 AND created_by_staff_id = $2
           AND status = 'OPEN' AND billing_mode = 'NORMAL' AND bill_kind = 'SALE' AND source = 'COUNTER'
-        ORDER BY bill_no DESC
-        LIMIT 1`,
+        ORDER BY bill_no`,
       [day.id, cashierId],
     );
+    const openBills: BillDetail[] = [];
+    for (const { id } of openRows) openBills.push(await this.getBillDetail(id));
 
     return {
       cashier,
       businessDay: { id: day.id, businessDate: day.business_date, openedAt: day.opened_at },
       peakSession: session ? mapPeakSessionView(session) : null,
-      openBill: openBill ? await this.getBillDetail(openBill.id) : null,
+      openBill: openBills.at(-1) ?? null,
+      openBills,
     };
   }
 
@@ -276,6 +300,46 @@ export class CounterQueries {
       `SELECT ${WAITER_COLUMNS} FROM waiters WHERE is_active ORDER BY waiter_code`,
     );
     return rows.map(mapWaiter);
+  }
+
+  /**
+   * Per-waiter figures for the waiter sidebar: today's open bills (count, Σ due) and closed bills
+   * (count, Σ total) across counter and Captain-app bills, on the open business day. Reversed bills
+   * are not counted as closed.
+   */
+  async getWaiterStats(): Promise<WaiterStatsReport> {
+    const day = await maybeOne<{ id: string }>(this.db, `SELECT id FROM business_days WHERE status = 'OPEN'`);
+    const businessDayId = day?.id ?? null;
+    const { rows } = await this.db.query<WaiterRow & { open_bills: number; open_due: DbInt; closed_bills: number; settled_total: DbInt }>(
+      `SELECT ${WAITER_COLUMNS.split(', ').map((c) => `w.${c}`).join(', ')},
+              (count(b.id) FILTER (WHERE b.status = 'OPEN'))::int                                           AS open_bills,
+              coalesce(sum(b.total_paise - coalesce(t.tendered, 0)) FILTER (WHERE b.status = 'OPEN'), 0)::bigint AS open_due,
+              (count(b.id) FILTER (WHERE b.status = 'SETTLED' AND r.id IS NULL))::int                         AS closed_bills,
+              coalesce(sum(b.total_paise) FILTER (WHERE b.status = 'SETTLED' AND r.id IS NULL), 0)::bigint    AS settled_total
+         FROM waiters w
+         LEFT JOIN bills b ON b.waiter_id = w.id AND b.business_day_id = $1 AND b.bill_kind = 'SALE'
+         LEFT JOIN LATERAL (SELECT sum(p.amount_paise) AS tendered FROM bill_payments p WHERE p.bill_id = b.id) t ON true
+         LEFT JOIN bills r ON r.reverses_bill_id = b.id
+        WHERE w.is_active
+        GROUP BY w.id
+        ORDER BY w.waiter_code`,
+      [businessDayId],
+    );
+    const waiters: WaiterStats[] = rows.map((r) => ({
+      ...mapWaiter(r),
+      openBills: r.open_bills,
+      openDuePaise: toPaise(r.open_due),
+      closedBills: r.closed_bills,
+      settledPaise: toPaise(r.settled_total),
+    }));
+    const totals: WaiterDayTotals = { openBills: 0, openDuePaise: 0n, closedBills: 0, settledPaise: 0n };
+    for (const w of waiters) {
+      totals.openBills += w.openBills;
+      totals.openDuePaise += w.openDuePaise;
+      totals.closedBills += w.closedBills;
+      totals.settledPaise += w.settledPaise;
+    }
+    return { businessDayId, waiters, totals };
   }
 
   /** Every OPEN sale bill placed from the Captain app, oldest first: the cashier's settle queue. */

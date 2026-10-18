@@ -24,6 +24,8 @@ export interface ItemRow {
 
 export interface PendingScan {
   id: number
+  /** The tab the scan was made on: its bottles go to that tab's bill even after a switch. */
+  tabId: number
   code: string
   quantity: number
 }
@@ -52,34 +54,49 @@ export interface Flash {
   seq: number
 }
 
-export interface BillingState {
-  load: 'loading' | 'ready' | 'offline'
-  offlineMessage: string | null
-  context: Omit<CounterContext, 'openBill'> | null
-  /** The open NORMAL bill; null until the first scan creates one. */
+/** One billing tab: a held or current customer. Its bill lives on the server once the first bottle is scanned. */
+export interface BillTab {
+  id: number
+  /** "Bill n": the lowest number free when the tab opened. */
+  label: number
+  /** The tab's open NORMAL bill; null until its first scan creates one. */
   bill: BillDetail | null
   /** Chosen before the first scan; applied when the bill is created. */
   pendingMember: MemberSummary | null
   pendingWaiter: WaiterSummary | null
   selectedKey: string | null
+  /** The last bill settled in this tab. */
+  receipt: Receipt | null
+}
+
+export interface BillingState {
+  load: 'loading' | 'ready' | 'offline'
+  offlineMessage: string | null
+  context: Omit<CounterContext, 'openBill' | 'openBills'> | null
+  tabs: BillTab[]
+  activeTabId: number
+  nextTabId: number
   pending: PendingScan[]
   ticker: PeakEntry[]
-  receipt: Receipt | null
   dialog: DialogKind | null
   flash: Flash | null
+}
+
+export const MAX_TABS = 9
+
+function emptyTab(id: number, label: number): BillTab {
+  return { id, label, bill: null, pendingMember: null, pendingWaiter: null, selectedKey: null, receipt: null }
 }
 
 export const initialBillingState: BillingState = {
   load: 'loading',
   offlineMessage: null,
   context: null,
-  bill: null,
-  pendingMember: null,
-  pendingWaiter: null,
-  selectedKey: null,
+  tabs: [emptyTab(1, 1)],
+  activeTabId: 1,
+  nextTabId: 2,
   pending: [],
   ticker: [],
-  receipt: null,
   dialog: null,
   flash: null,
 }
@@ -87,16 +104,20 @@ export const initialBillingState: BillingState = {
 export type BillingAction =
   | { type: 'contextLoaded'; context: CounterContext; resume: boolean }
   | { type: 'contextFailed'; message: string }
-  | { type: 'billLoaded'; detail: BillDetail; focusSkuId?: string }
-  | { type: 'billFinished'; receipt: Receipt | null }
-  | { type: 'pendingMember'; member: MemberSummary | null }
-  | { type: 'pendingWaiter'; waiter: WaiterSummary | null }
+  | { type: 'billLoaded'; tabId: number; detail: BillDetail; focusSkuId?: string }
+  | { type: 'billFinished'; tabId: number; receipt: Receipt | null }
+  | { type: 'pendingMember'; tabId: number; member: MemberSummary | null }
+  | { type: 'pendingWaiter'; tabId: number; waiter: WaiterSummary | null }
   | { type: 'scanQueued'; scan: PendingScan }
   | { type: 'scanDone'; id: number }
   | { type: 'peakSale'; entry: PeakEntry }
   | { type: 'peakUndone'; billId: string }
   | { type: 'select'; key: string }
   | { type: 'move'; delta: 1 | -1 }
+  | { type: 'tabOpened' }
+  | { type: 'tabSwitched'; tabId: number }
+  | { type: 'tabCycled'; delta: 1 | -1 }
+  | { type: 'tabClosed'; tabId: number }
   | { type: 'dialog'; dialog: DialogKind | null }
   | { type: 'flash'; kind: Flash['kind']; text: string }
 
@@ -135,65 +156,162 @@ export function totals(detail: BillDetail | null): { lines: number; bottles: num
   return { lines: rows.length, bottles: rows.reduce((n, r) => n + r.quantity, 0) }
 }
 
+export function activeTab(state: BillingState): BillTab {
+  return state.tabs.find((t) => t.id === state.activeTabId) ?? state.tabs[0] ?? emptyTab(state.activeTabId, 1)
+}
+
+export function findTab(state: BillingState, tabId: number): BillTab | undefined {
+  return state.tabs.find((t) => t.id === tabId)
+}
+
+/** A tab with nothing on it: no bill, no member or waiter picked, no scan on its way. */
+export function isEmptyTab(state: BillingState, tab: BillTab): boolean {
+  return tab.bill === null && tab.pendingMember === null && tab.pendingWaiter === null && !state.pending.some((p) => p.tabId === tab.id)
+}
+
+/**
+ * Why a new tab can't open right now (null = it can). During a peak a new tab is simply an empty one,
+ * which scans to peak: that is how the cashier leaves a held NORMAL bill to keep peak billing.
+ */
+export function newTabBlock(state: BillingState): string | null {
+  if (state.tabs.length >= MAX_TABS) return `At most ${MAX_TABS} bills can be held — settle one first`
+  if (isEmptyTab(state, activeTab(state))) return 'Already on a new bill — scan the first bottle'
+  return null
+}
+
+function lowestFreeLabel(tabs: readonly BillTab[]): number {
+  const used = new Set(tabs.map((t) => t.label))
+  let label = 1
+  while (used.has(label)) label += 1
+  return label
+}
+
+function updateTab(state: BillingState, tabId: number, patch: (tab: BillTab) => BillTab): BillingState {
+  return { ...state, tabs: state.tabs.map((t) => (t.id === tabId ? patch(t) : t)) }
+}
+
+/** Activates `tabId`, dropping the tab being left if it is empty: abandoned new tabs don't pile up. */
+function switchTo(state: BillingState, tabId: number): BillingState {
+  if (tabId === state.activeTabId || !findTab(state, tabId)) return state
+  const leaving = activeTab(state)
+  const tabs = isEmptyTab(state, leaving) ? state.tabs.filter((t) => t.id !== leaving.id) : state.tabs
+  return { ...state, tabs, activeTabId: tabId }
+}
+
+/** Puts every server-side open bill not already in a tab into one: empty tabs first, then new tabs. */
+function adoptOpenBills(state: BillingState, bills: readonly BillDetail[]): BillingState {
+  const known = new Set(state.tabs.flatMap((t) => (t.bill ? [t.bill.bill.id] : [])))
+  const fresh = bills.filter((b) => !known.has(b.bill.id))
+  if (fresh.length === 0) return state
+  let tabs = [...state.tabs]
+  let nextTabId = state.nextTabId
+  let newestTabId: number | null = null
+  for (const detail of fresh) {
+    const slot = tabs.find((t) => t.bill === null && t.pendingMember === null && t.pendingWaiter === null && !state.pending.some((p) => p.tabId === t.id))
+    const rows = groupItems(detail.items)
+    const filled = { bill: detail, selectedKey: rows.at(-1)?.key ?? null, receipt: null }
+    if (slot) {
+      tabs = tabs.map((t) => (t.id === slot.id ? { ...t, ...filled } : t))
+      newestTabId = slot.id
+    } else {
+      const tab = { ...emptyTab(nextTabId, lowestFreeLabel(tabs)), ...filled }
+      tabs = [...tabs, tab]
+      newestTabId = nextTabId
+      nextTabId += 1
+    }
+  }
+  // Land on the newest resumed bill unless the cashier is already busy on a tab.
+  const current = tabs.find((t) => t.id === state.activeTabId)
+  const stay = current !== undefined && current.bill !== null && !fresh.some((b) => b.bill.id === current.bill?.bill.id)
+  return { ...state, tabs, nextTabId, activeTabId: stay || newestTabId === null ? state.activeTabId : newestTabId }
+}
+
 export function screenMode(state: BillingState): ScreenMode {
   if (state.load === 'offline') return 'OFFLINE'
   if (!state.context) return 'LOADING'
   if (!state.context.businessDay) return 'BLOCKED'
   // A NORMAL bill opened before a peak started is finished in NORMAL mode.
-  return state.context.peakSession && !state.bill ? 'PEAK' : 'NORMAL'
+  return state.context.peakSession && !activeTab(state).bill ? 'PEAK' : 'NORMAL'
 }
 
 export function billingReducer(state: BillingState, action: BillingAction): BillingState {
   switch (action.type) {
     case 'contextLoaded': {
-      const { openBill, ...context } = action.context
-      const resumed = action.resume && !state.bill && openBill ? openBill : state.bill
-      return {
-        ...state,
-        load: 'ready',
-        offlineMessage: null,
-        context,
-        bill: resumed,
-        selectedKey: resumed === state.bill ? state.selectedKey : (groupItems(resumed?.items ?? []).at(-1)?.key ?? null),
-      }
+      const { openBill, openBills, ...context } = action.context
+      const next: BillingState = { ...state, load: 'ready', offlineMessage: null, context }
+      if (!action.resume) return next
+      return adoptOpenBills(next, openBills ?? (openBill ? [openBill] : []))
     }
     case 'contextFailed':
       return { ...state, load: 'offline', offlineMessage: action.message }
     case 'billLoaded': {
       const rows = groupItems(action.detail.items)
       const focused = action.focusSkuId ? rows.findLast((r) => r.skuId === action.focusSkuId) : undefined
-      const kept = rows.some((r) => r.key === state.selectedKey) ? state.selectedKey : null
-      return {
-        ...state,
-        bill: action.detail,
-        pendingMember: null,
-        pendingWaiter: null,
-        receipt: null,
-        selectedKey: focused?.key ?? kept ?? rows.at(-1)?.key ?? null,
+      const load = (tab: BillTab): BillTab => {
+        const kept = rows.some((r) => r.key === tab.selectedKey) ? tab.selectedKey : null
+        return {
+          ...tab,
+          bill: action.detail,
+          pendingMember: null,
+          pendingWaiter: null,
+          receipt: null,
+          selectedKey: focused?.key ?? kept ?? rows.at(-1)?.key ?? null,
+        }
       }
+      if (findTab(state, action.tabId)) return updateTab(state, action.tabId, load)
+      // The tab went away while its write was in flight: never lose a server bill, give it a tab back.
+      const tab = load(emptyTab(state.nextTabId, lowestFreeLabel(state.tabs)))
+      return { ...state, tabs: [...state.tabs, tab], nextTabId: state.nextTabId + 1 }
     }
     case 'billFinished':
-      return { ...state, bill: null, receipt: action.receipt, dialog: null, selectedKey: null, pendingMember: null, pendingWaiter: null }
+      return {
+        ...updateTab(state, action.tabId, (t) => ({ ...t, bill: null, receipt: action.receipt, selectedKey: null, pendingMember: null, pendingWaiter: null })),
+        dialog: null,
+      }
     case 'pendingMember':
-      return { ...state, pendingMember: action.member }
+      return updateTab(state, action.tabId, (t) => ({ ...t, pendingMember: action.member }))
     case 'pendingWaiter':
-      return { ...state, pendingWaiter: action.waiter }
+      return updateTab(state, action.tabId, (t) => ({ ...t, pendingWaiter: action.waiter }))
     case 'scanQueued':
       return { ...state, pending: [...state.pending, action.scan] }
     case 'scanDone':
       return { ...state, pending: state.pending.filter((p) => p.id !== action.id) }
     case 'peakSale':
-      return { ...state, receipt: null, ticker: [action.entry, ...state.ticker].slice(0, TICKER_LIMIT) }
+      return { ...updateTab(state, state.activeTabId, (t) => ({ ...t, receipt: null })), ticker: [action.entry, ...state.ticker].slice(0, TICKER_LIMIT) }
     case 'peakUndone':
       return { ...state, ticker: state.ticker.map((e) => (e.billId === action.billId ? { ...e, undone: true } : e)) }
     case 'select':
-      return { ...state, selectedKey: action.key }
+      return updateTab(state, state.activeTabId, (t) => ({ ...t, selectedKey: action.key }))
     case 'move': {
-      const rows = groupItems(state.bill?.items ?? [])
+      const tab = activeTab(state)
+      const rows = groupItems(tab.bill?.items ?? [])
       if (rows.length === 0) return state
-      const at = rows.findIndex((r) => r.key === state.selectedKey)
+      const at = rows.findIndex((r) => r.key === tab.selectedKey)
       const next = at === -1 ? rows.length - 1 : Math.min(rows.length - 1, Math.max(0, at + action.delta))
-      return { ...state, selectedKey: rows[next]?.key ?? null }
+      return updateTab(state, tab.id, (t) => ({ ...t, selectedKey: rows[next]?.key ?? null }))
+    }
+    case 'tabOpened': {
+      if (newTabBlock(state) !== null) return state
+      const tab = emptyTab(state.nextTabId, lowestFreeLabel(state.tabs))
+      return { ...state, tabs: [...state.tabs, tab], activeTabId: tab.id, nextTabId: state.nextTabId + 1 }
+    }
+    case 'tabSwitched':
+      return switchTo(state, action.tabId)
+    case 'tabCycled': {
+      if (state.tabs.length < 2) return state
+      const at = Math.max(0, state.tabs.findIndex((t) => t.id === state.activeTabId))
+      const target = state.tabs[(at + action.delta + state.tabs.length) % state.tabs.length]
+      return target ? switchTo(state, target.id) : state
+    }
+    case 'tabClosed': {
+      const tab = findTab(state, action.tabId)
+      // Only an empty tab closes here; a bill is cancelled (or settled) first.
+      if (!tab || tab.bill !== null || state.pending.some((p) => p.tabId === tab.id)) return state
+      if (state.tabs.length === 1) return { ...state, tabs: [emptyTab(tab.id, 1)] }
+      const at = state.tabs.indexOf(tab)
+      const tabs = state.tabs.filter((t) => t.id !== tab.id)
+      const activeTabId = tab.id === state.activeTabId ? (tabs[Math.max(0, at - 1)]?.id ?? state.activeTabId) : state.activeTabId
+      return { ...state, tabs, activeTabId }
     }
     case 'dialog':
       return { ...state, dialog: action.dialog }

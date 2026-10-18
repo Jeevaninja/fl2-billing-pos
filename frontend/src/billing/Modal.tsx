@@ -8,6 +8,8 @@ interface ModalProps {
   children: ReactNode
   footer?: ReactNode
   width?: string
+  /** 'right': a full-height panel that slides in from the right edge (the waiter sidebar). */
+  placement?: 'center' | 'right'
 }
 
 /**
@@ -15,7 +17,7 @@ interface ModalProps {
  * work wherever focus is — even after the focused field unmounts. The page's scan buffer and F-keys
  * are disabled meanwhile; closing hands keys back with nothing to refocus.
  */
-export function Modal({ title, onClose, onKey, children, footer, width = 'max-w-lg' }: ModalProps) {
+export function Modal({ title, onClose, onKey, children, footer, width = 'max-w-lg', placement = 'center' }: ModalProps) {
   const ref = useRef<HTMLDivElement>(null)
   const handlers = useRef({ onClose, onKey })
   useEffect(() => {
@@ -40,7 +42,10 @@ export function Modal({ title, onClose, onKey, children, footer, width = 'max-w-
   }, [])
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onMouseDown={onClose}>
+    <div
+      className={`fixed inset-0 z-50 flex bg-black/70 ${placement === 'right' ? 'justify-end' : 'items-center justify-center p-4'}`}
+      onMouseDown={onClose}
+    >
       <div
         ref={ref}
         role="dialog"
@@ -48,7 +53,11 @@ export function Modal({ title, onClose, onKey, children, footer, width = 'max-w-
         aria-label={title}
         tabIndex={-1}
         onMouseDown={(e) => e.stopPropagation()}
-        className={`flex max-h-full w-full ${width} flex-col rounded-lg border-2 border-zinc-600 bg-zinc-900 shadow-2xl outline-none`}
+        className={`flex w-full ${width} flex-col bg-zinc-900 shadow-2xl outline-none ${
+          placement === 'right'
+            ? 'h-full border-l-2 border-zinc-600 motion-safe:animate-slide-in-right'
+            : 'max-h-full rounded-lg border-2 border-zinc-600'
+        }`}
       >
         <div className="flex items-center justify-between border-b border-zinc-700 px-5 py-3">
           <h2 className="text-lg font-bold">{title}</h2>
