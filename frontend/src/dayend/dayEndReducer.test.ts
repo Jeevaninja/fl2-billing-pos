@@ -37,6 +37,7 @@ function summary(over: { id?: string; status?: 'OPEN' | 'CLOSED'; expected?: big
       waiterCashPaise: 0n,
       cashExpensesPaise: 0n,
       tenderAdjustmentPaise: 0n,
+      bankDepositsPaise: 0n,
       expectedCashPaise: over.expected ?? 30550_00n,
       upiTotalPaise: 0n,
     },

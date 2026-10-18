@@ -1,8 +1,8 @@
 # FL2 POS — Backend State Reference
 
-Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`), Phase 10 master catalog and case-based inwarding (`0009_catalog_case_size`, `CatalogService`; plan `docs/ui/phase10-catalog-case-grn-plan.md`), Phase 11 peak start baseline and Day End sales breakdown (no migration; plan `docs/ui/phase11-peak-day-end-visibility-plan.md`), Phase 12 server-side peak undo (no migration; plan `docs/ui/phase12-billing-speed-plan.md`), and Phase 13 Day End tally adjustments and running peak analytics (`0010_tender_adjustments`; plan `docs/ui/phase13-peak-close-tally-plan.md`). Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
+Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`), Phase 10 master catalog and case-based inwarding (`0009_catalog_case_size`, `CatalogService`; plan `docs/ui/phase10-catalog-case-grn-plan.md`), Phase 11 peak start baseline and Day End sales breakdown (no migration; plan `docs/ui/phase11-peak-day-end-visibility-plan.md`), Phase 12 server-side peak undo (no migration; plan `docs/ui/phase12-billing-speed-plan.md`), Phase 13 Day End tally adjustments and running peak analytics (`0010_tender_adjustments`; plan `docs/ui/phase13-peak-close-tally-plan.md`), and Phase 14 bank deposits / cash drops (`0011_bank_deposits`; plan `docs/ui/phase14-bank-deposits-plan.md`). Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
 
-- **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`, `0006_expense_category`, `0007_peak_drawer_cash`, `0008_stock_receipts`, `0009_catalog_case_size`, `0010_tender_adjustments`.
+- **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`, `0006_expense_category`, `0007_peak_drawer_cash`, `0008_stock_receipts`, `0009_catalog_case_size`, `0010_tender_adjustments`, `0011_bank_deposits`.
 - **Money:** `BIGINT` whole paise in SQL, `bigint` in TypeScript (`type Paise = bigint`). No floats anywhere.
 - **Quantities:** `INTEGER` whole sealed bottles. No ml / peg columns.
 - **Append-only:** DELETE and TRUNCATE are blocked on every domain table. Ledger tables also block UPDATE. Corrections are made with reversing records.
@@ -31,6 +31,7 @@ Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local 
 | `bill_payments` | Tenders: CASH, UPI, WAITER_CREDIT; negative amounts are refunds | `bill_id → bills`, `business_day_id → business_days`, `peak_session_id → peak_sessions`, `reverses_payment_id → bill_payments` (unique), `received_by_staff_id → staff` |
 | `cash_expenses` | Petty-cash payments from the drawer (append-only; a negative row with `reverses_expense_id` voids one); tagged to the open day and running peak by trigger (0005). `category` ∈ ICE, STAFF_FOOD, TRANSPORT, CLEANING, REPAIRS, OTHER; `description` optional except for OTHER (0006) | `business_day_id → business_days`, `peak_session_id → peak_sessions`, `reverses_expense_id → cash_expenses` (unique), `created_by_staff_id → staff` |
 | `tender_adjustments` | Day-level Cash ⇄ UPI reclassification of normal-bill revenue (append-only; a negating row with `reverses_adjustment_id` voids one). `cash_delta_paise + upi_delta_paise = 0`; `system_cash_paise` / `system_upi_paise` are the normal-bill tenders when the row was written (trigger-set); `reason` required (0010) | `business_day_id → business_days`, `reverses_adjustment_id → tender_adjustments` (unique), `created_by_staff_id → staff` |
+| `bank_deposits` | Cash taken out of the drawer to be banked, e.g. RTGS (append-only; a negative row with `reverses_deposit_id` voids one). Not an expense, not revenue. `reference` optional (0011) | `business_day_id → business_days`, `reverses_deposit_id → bank_deposits` (unique), `created_by_staff_id → staff` |
 | `sync_outbox` | Transactional outbox for cloud sync (written by trigger) | — |
 | `schema_migrations` | Applied migration versions | — |
 
@@ -54,6 +55,7 @@ UPI is excluded. A peak sale actually paid by UPI makes the drawer lower by that
 - Close (`status → CLOSED`) is refused with `PS007` while a peak session runs, any bill of the day is `OPEN` / `PEAK_UNSETTLED`, or **any waiter** has `outstanding_balance > 0` (active or not, whichever day the credit is from). It needs `counted_cash_paise` (`PS002`); expected cash and variance are computed by the trigger, overwriting client values, then frozen with the day (`PS001`).
 - **Expense voids (0006):** a void copies the original's category and note, must exactly negate it (`PS006`), can happen only once (`PS006`), and must be posted on the original's business day (`PS007`: a closed day's cash has already been counted).
 - **Tally adjustments (0010):** `pos_day_expected_cash` adds Σ `tender_adjustments.cash_delta_paise`, so the frozen expected cash and the close variance use the adjusted figures. The insert trigger needs an open day (`PS007`), locks the day row, and refuses a row that would take the day's adjusted normal cash or UPI below ₹0 (`PS002`). A void must exactly negate an adjustment of the same day, once, and never a void (`PS006`). Waiter repayments and peak readings are never adjusted.
+- **Bank deposits (0011):** `pos_day_expected_cash` subtracts Σ `bank_deposits.amount_paise`, so the frozen expected cash and the close variance include them. A deposit needs an open day (`PS007`), and is refused while a peak session runs (`PS007`): no deposit ever falls inside a peak window, so the peak math is untouched. A void must exactly negate its original on the same day, once, and never a void (`PS006`; same day `PS007`); it may be posted during a peak (no cash moves).
 - The opening float is immutable; the close columns can't be written while the day is open (`PS002`). The `business_days_cash_count_on_close` CHECK is `NOT VALID`, so days closed before 0005 keep NULL counts.
 
 **Stock receipts / GRN (0008):**
@@ -254,6 +256,9 @@ class DayEndService {
   voidCashExpense(expenseId: string, staffId: string): Promise<CashExpense>; // appends the negating row
   adjustTenderSplit(businessDayId: string, cashDelta: Paise /* ≠ 0; + = UPI → Cash */, reason: string, staffId: string): Promise<TenderAdjustment>;
   voidTenderAdjustment(adjustmentId: string, staffId: string): Promise<TenderAdjustment>; // appends the negating row
+  recordBankDeposit(amount: Paise, reference: string | null, staffId: string): Promise<BankDeposit>;   // Phase 14
+  listBankDeposits(businessDayId: string): Promise<BankDepositEntry[]>;     // originals only, newest first, with voidedAt
+  voidBankDeposit(depositId: string, staffId: string): Promise<BankDeposit>; // appends the negating row
 }
 
 type ExpenseCategory = 'ICE' | 'STAFF_FOOD' | 'TRANSPORT' | 'CLEANING' | 'REPAIRS' | 'OTHER';  // EXPENSE_CATEGORIES
@@ -271,7 +276,7 @@ interface DayEndSummary {
     waitersOwing: OwingWaiter[];              // WaiterSummary & { isActive }, any balance > 0
   };
   canClose: boolean;
-  breakdown: CashBreakdown;                   // openingFloat, normalCash, peakCash, waiterCash, cashExpenses, tenderAdjustment (13), expectedCash, upiTotal (info)
+  breakdown: CashBreakdown;                   // openingFloat, normalCash, peakCash, waiterCash, cashExpenses, tenderAdjustment (13), bankDeposits (14), expectedCash, upiTotal (info)
   sales: SalesBreakdown;                      // Phase 11
   peakSessions: PeakSessionCash[];            // ended sessions: cash / UPI deltas, frozen variance, salesPaise, inWindowUpiPaise, peakUpiPaise, peakCashPaise
   tenderAdjustments: TenderAdjustmentEntry[]; // Phase 13: originals, newest first, with voidedAt
@@ -282,6 +287,7 @@ interface SalesBreakdown {                    // ended peak sessions only; a run
   waiterRepayments: { cashPaise; upiPaise };                     // credit collected, not sales
   total: { cashPaise; upiPaise; creditPaise; salesPaise };
 }
+interface BankDeposit { id; businessDayId; amountPaise /* negative on a void */; reference: string | null; reversesDepositId: string | null; createdByStaffId; createdAt; }
 interface CashExpense { id; businessDayId; peakSessionId: string | null; amountPaise; reversesExpenseId: string | null; category: ExpenseCategory; description: string | null; createdByStaffId; createdAt; }
 ```
 
@@ -290,6 +296,7 @@ interface CashExpense { id; businessDayId; peakSessionId: string | null; amountP
 - **`openBusinessDay`:** refuses a second open day and a date that has already traded (`PS007`). A business date trades once, so closing and reopening on the same calendar day is refused.
 - **`recordCashExpense`:** amount > 0; the note is trimmed (blank → null), at most 200 characters, and required for OTHER (`RangeError`, also a CHECK). Unknown categories are a `RangeError`.
 - **`voidCashExpense`:** `NotFoundError` for an unknown id; double void or voiding a void row is `PS006`; an expense from a closed day is `PS007`.
+- **`recordBankDeposit` (Phase 14):** amount > 0; the reference is trimmed (blank → null), at most 200 characters (`RangeError`). `CashBreakdown.bankDepositsPaise` is subtracted from expected cash (asserted against `pos_day_expected_cash`); `SalesBreakdown` and `cashExpensesPaise` never include deposits. `PeakStartBaseline` gains `tenderAdjustmentPaise` and `bankDepositsPaise`, so its cash terms add up to `expectedCashPaise`. **`voidBankDeposit`:** `NotFoundError` for an unknown id, otherwise the trigger's void rules.
 - **`adjustTenderSplit` (Phase 13):** `upiDelta` is always `−cashDelta`, so total revenue can't change; `normal.totalPaise` and `total.salesPaise` are asserted unchanged. Reason trimmed, 1–200 characters (`RangeError`). **`voidTenderAdjustment`:** `NotFoundError` for an unknown id, otherwise the trigger's void rules.
 
 ### `WaiterService` (`src/services/waiter.service.ts`)
@@ -560,6 +567,9 @@ Migrations run on every boot (already-applied ones are skipped).
 | `POST /api/expenses/:expenseId/void` | | `voidCashExpense(…, cashier)` | 201 |
 | `POST /api/days/:dayId/tender-adjustments` | `{ cashDelta, reason }` (`cashDelta` signed paise string, ≠ 0) | `adjustTenderSplit(…, cashier)` | 201 |
 | `POST /api/tender-adjustments/:adjustmentId/void` | | `voidTenderAdjustment(…, cashier)` | 201 |
+| `GET /api/bank-deposits` | | `listBankDeposits(open day)`; 404 when no day is open | 200 |
+| `POST /api/bank-deposits` | `{ amount, reference? }` | `recordBankDeposit(…, cashier)`; PS007 while a peak runs | 201 |
+| `POST /api/bank-deposits/:depositId/void` | | `voidBankDeposit(…, cashier)` | 201 |
 | `GET /api/purchases` | | `listReceipts(open day)`; 404 when no day is open | 200 `StockReceipt[]` |
 | `GET /api/purchases/:receiptId` | | `getReceipt` | 200 `StockReceiptDetail` |
 | `POST /api/purchases` | `{ invoiceNo, vendorName?, lines: [{ skuId, cases, looseBottles?, caseSize, unitCost }] }` or the loose-only `{ skuId, quantity, unitCost }` (`unitCost` in paise, `"0"` allowed) | `recordReceipt(…, cashier)` | 201 `StockReceiptDetail` |

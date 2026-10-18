@@ -3,6 +3,7 @@ import {
   CalendarCheck,
   ChartColumn,
   CreditCard,
+  Landmark,
   PackagePlus,
   ReceiptText,
   Smartphone,
@@ -19,6 +20,7 @@ export type PosActionId =
   | 'billing'
   | 'captain-orders'
   | 'expense'
+  | 'bank-deposit'
   | 'purchase'
   | 'catalog'
   | 'day-end'
@@ -39,6 +41,7 @@ export const ACTIONS: Record<PosActionId, PosAction> = {
   billing: { id: 'billing', label: 'Billing Screen', hint: 'Scan bottles, take Cash / UPI', icon: ReceiptText },
   'captain-orders': { id: 'captain-orders', label: 'Captain Orders', hint: 'Edit and settle waiter handset orders', icon: Smartphone },
   expense: { id: 'expense', label: 'Expense', hint: 'Petty cash and daily spends', icon: Wallet },
+  'bank-deposit': { id: 'bank-deposit', label: 'Bank Deposit', hint: 'Cash drops for bank / RTGS', icon: Landmark },
   purchase: { id: 'purchase', label: 'Purchase', hint: 'Stock inwarding (GRN)', icon: PackagePlus },
   catalog: { id: 'catalog', label: 'Inventory Catalog', hint: 'Liquors, prices and case sizes', icon: Boxes },
   'day-end': { id: 'day-end', label: 'Day End', hint: 'Peak reconciliation and close', icon: CalendarCheck },
@@ -46,7 +49,7 @@ export const ACTIONS: Record<PosActionId, PosAction> = {
 }
 
 /** Dashboard tiles, in grid order. */
-export const MODULE_TILES: readonly PosActionId[] = ['billing', 'captain-orders', 'expense', 'purchase', 'catalog', 'day-end', 'reports']
+export const MODULE_TILES: readonly PosActionId[] = ['billing', 'captain-orders', 'expense', 'bank-deposit', 'purchase', 'catalog', 'day-end', 'reports']
 
 /** Rail contents before the operator has used anything this session. */
 export const DEFAULT_RECENT: readonly PosActionId[] = ['new-bill', 'member', 'pay', 'captain-orders', 'day-end']

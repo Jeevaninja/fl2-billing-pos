@@ -167,6 +167,8 @@ export interface CashBreakdown {
   cashExpensesPaise: Paise
   /** Σ tally adjustments' cash deltas (positive = UPI revenue reclassified as cash). */
   tenderAdjustmentPaise: Paise
+  /** Cash taken out of the drawer to be banked (subtracted). Not an expense, not revenue. */
+  bankDepositsPaise: Paise
   expectedCashPaise: Paise
   upiTotalPaise: Paise
 }
@@ -241,6 +243,9 @@ export interface PeakStartBaseline {
   /** Earlier ended peaks' counted cash delta. */
   peakCashPaise: Paise
   cashExpensesPaise: Paise
+  /** Σ Day End tally adjustments' cash deltas. */
+  tenderAdjustmentPaise: Paise
+  bankDepositsPaise: Paise
   expectedCashPaise: Paise
   billUpiPaise: Paise
   waiterUpiPaise: Paise
@@ -289,6 +294,23 @@ export interface CashExpense {
 }
 
 export interface ExpenseEntry extends CashExpense {
+  voidedAt: string | null
+}
+
+// ── Bank deposits (cash drops) ──────────────────────────────────────────────
+
+export interface BankDeposit {
+  id: string
+  businessDayId: string
+  /** Negative on a void row. */
+  amountPaise: Paise
+  /** Optional, e.g. "RTGS to Sri Balaji". */
+  reference: string | null
+  reversesDepositId: string | null
+  createdAt: string
+}
+
+export interface BankDepositEntry extends BankDeposit {
   voidedAt: string | null
 }
 

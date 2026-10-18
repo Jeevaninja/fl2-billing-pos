@@ -40,6 +40,8 @@ describe('peak start baseline and sales breakdown', () => {
       waiterCashPaise: 200_00n,
       peakCashPaise: 0n,
       cashExpensesPaise: 150_00n,
+      tenderAdjustmentPaise: 0n,
+      bankDepositsPaise: 0n,
       expectedCashPaise: 2250_00n,
       billUpiPaise: 1200_00n,
       waiterUpiPaise: 100_00n,

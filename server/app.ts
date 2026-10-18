@@ -240,6 +240,23 @@ function buildRoutes({ db, cashierId }: ApiConfig): Route[] {
     route('POST', '/api/expenses/:expenseId/void', async ({ params }) =>
       created(await dayEnd.voidCashExpense(id(params.expenseId, 'expenseId'), cashierId)),
     ),
+    route('GET', '/api/bank-deposits', async () => {
+      const day = await queries.getCounterContext(cashierId);
+      if (!day.businessDay) throw new NotFoundError('business day', 'open');
+      return ok(await dayEnd.listBankDeposits(day.businessDay.id));
+    }),
+    route('POST', '/api/bank-deposits', async ({ body }) =>
+      created(
+        await dayEnd.recordBankDeposit(
+          paise(body.amount, 'amount'),
+          body.reference === undefined || body.reference === null ? null : str(body.reference, 'reference'),
+          cashierId,
+        ),
+      ),
+    ),
+    route('POST', '/api/bank-deposits/:depositId/void', async ({ params }) =>
+      created(await dayEnd.voidBankDeposit(id(params.depositId, 'depositId'), cashierId)),
+    ),
 
     // ── Purchase (GRN) ──
     route('GET', '/api/purchases', async () => {

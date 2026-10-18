@@ -45,6 +45,8 @@ describe('describeBaseline', () => {
     waiterCashPaise: 1000_00n,
     peakCashPaise: 0n,
     cashExpensesPaise: 350_00n,
+    tenderAdjustmentPaise: 0n,
+    bankDepositsPaise: 0n,
     expectedCashPaise: 12450_00n,
     billUpiPaise: 5700_00n,
     waiterUpiPaise: 500_00n,
@@ -63,6 +65,12 @@ describe('describeBaseline', () => {
     const quiet = { ...base, openingFloatPaise: 0n, normalCashPaise: 0n, waiterCashPaise: 0n, cashExpensesPaise: 0n, billUpiPaise: 0n, waiterUpiPaise: 0n }
     expect(describeBaseline(quiet)).toEqual({ cash: 'float ₹0.00', upi: 'no UPI recorded today yet' })
     expect(describeBaseline({ ...quiet, billUpiPaise: -200_00n, peakUpiPaise: 900_00n }).upi).toBe('bills −₹200.00 + earlier peaks ₹900.00')
+  })
+
+  it('subtracts bank deposits and carries tally adjustments in the cash terms', () => {
+    expect(describeBaseline({ ...base, tenderAdjustmentPaise: -500_00n, bankDepositsPaise: 10000_00n }).cash).toBe(
+      'float ₹2,000.00 + cash sales ₹9,800.00 + waiter cash ₹1,000.00 − expenses ₹350.00 − tally ₹500.00 − bank deposits ₹10,000.00',
+    )
   })
 })
 

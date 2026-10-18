@@ -17,6 +17,7 @@ const TILE_ACCENT: Record<PosActionId, string> = {
   billing: 'bg-zinc-950 text-amber-400',
   'captain-orders': 'bg-sky-500 text-zinc-950',
   expense: 'bg-rose-500 text-zinc-950',
+  'bank-deposit': 'bg-indigo-400 text-zinc-950',
   purchase: 'bg-violet-400 text-zinc-950',
   catalog: 'bg-teal-400 text-zinc-950',
   'day-end': 'bg-orange-500 text-zinc-950',
@@ -36,6 +37,7 @@ interface DashboardProps {
   onOpenCaptainOrders: () => void
   onOpenDayEnd: () => void
   onOpenExpenses: () => void
+  onOpenBankDeposits: () => void
   onOpenPurchase: () => void
   onOpenCatalog: () => void
 }
@@ -87,7 +89,7 @@ function useCounterContext(): { context: CounterContext | null; reload: () => vo
 /** Start dialog, or the end dialog with its own session snapshot (it outlives the session to show the result). */
 type PeakDialog = { kind: 'start'; businessDayId: string } | { kind: 'end'; session: PeakSessionView } | null
 
-export default function Dashboard({ recent, onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd, onOpenExpenses, onOpenPurchase, onOpenCatalog }: DashboardProps) {
+export default function Dashboard({ recent, onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd, onOpenExpenses, onOpenBankDeposits, onOpenPurchase, onOpenCatalog }: DashboardProps) {
   const [lastAction, setLastAction] = useState<LastAction | null>(null)
   const [status, setStatus] = useState<string | null>(null)
   const [peakDialog, setPeakDialog] = useState<PeakDialog>(null)
@@ -122,6 +124,10 @@ export default function Dashboard({ recent, onUse, onOpenBilling, onOpenCaptainO
         onOpenExpenses()
         return
       }
+      if (id === 'bank-deposit') {
+        onOpenBankDeposits()
+        return
+      }
       if (id === 'purchase') {
         onOpenPurchase()
         return
@@ -133,7 +139,7 @@ export default function Dashboard({ recent, onUse, onOpenBilling, onOpenCaptainO
       runStub(id)
       setLastAction({ id, at: new Date() })
     },
-    [onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd, onOpenExpenses, onOpenPurchase, onOpenCatalog],
+    [onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd, onOpenExpenses, onOpenBankDeposits, onOpenPurchase, onOpenCatalog],
   )
 
   useGlobalShortcuts(
@@ -185,7 +191,6 @@ export default function Dashboard({ recent, onUse, onOpenBilling, onOpenCaptainO
               key={id}
               id={id}
               primary={dayClosed ? id === 'day-end' : id === 'billing'}
-              tall={id === 'billing'}
               badge={id === 'captain-orders' ? captainCount : null}
               override={id === 'day-end' && dayClosed ? { label: 'Open Day', hint: 'Start the next day with an opening float' } : undefined}
               onSelect={trigger}
@@ -252,8 +257,6 @@ export default function Dashboard({ recent, onUse, onOpenBilling, onOpenCaptainO
 interface ModuleTileProps {
   id: PosActionId
   primary: boolean
-  /** Spans two grid rows (Billing), so seven tiles fill the 4 × 2 grid. */
-  tall: boolean
   /** Live count shown on the tile (e.g. open Captain orders); null hides it. */
   badge: number | null
   /** Replaces the tile's label and hint (Day End reads "Open Day" when no day is open). */
@@ -261,7 +264,7 @@ interface ModuleTileProps {
   onSelect: (id: PosActionId) => void
 }
 
-function ModuleTile({ id, primary, tall, badge, override, onSelect }: ModuleTileProps) {
+function ModuleTile({ id, primary, badge, override, onSelect }: ModuleTileProps) {
   const { icon: Icon } = ACTIONS[id]
   const { label, hint } = override ?? ACTIONS[id]
   const surface = primary
@@ -272,7 +275,7 @@ function ModuleTile({ id, primary, tall, badge, override, onSelect }: ModuleTile
     <button
       type="button"
       onClick={() => onSelect(id)}
-      className={`group flex flex-col justify-between rounded-lg border-2 p-5 text-left transition-colors ${tall ? 'row-span-2' : ''} ${surface} ${FOCUS_RING}`}
+      className={`group flex flex-col justify-between rounded-lg border-2 p-5 text-left transition-colors ${surface} ${FOCUS_RING}`}
     >
       <span className="flex items-start justify-between gap-3">
         <span className={`flex size-14 items-center justify-center rounded-md ${TILE_ACCENT[id]}`}>

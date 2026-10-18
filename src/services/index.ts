@@ -27,6 +27,8 @@ export type {
 } from './counter-queries.js';
 export { DayEndService, EXPENSE_CATEGORIES } from './day-end.service.js';
 export type {
+  BankDeposit,
+  BankDepositEntry,
   CashBreakdown,
   CashExpense,
   DayEndBlockers,

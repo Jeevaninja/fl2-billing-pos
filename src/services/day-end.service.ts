@@ -1,6 +1,6 @@
 /**
  * Day End: the pre-closure checklist, the expected-cash breakdown, locking the day, opening the
- * next one with a float, and the petty-cash expense ledger. The database enforces every rule
+ * next one with a float, the petty-cash expense ledger and the bank deposit (cash drop) ledger. The database enforces every rule
  * (blockers, frozen expected cash and variance, the locked day); this service reads and reports.
  */
 import type { SqlClient, SqlDatabase } from '../db/client.js';
@@ -67,6 +67,8 @@ export interface CashBreakdown {
   cashExpensesPaise: Paise;
   /** Σ tally adjustments' cash deltas (Phase 13): positive when UPI revenue was reclassified as cash. */
   tenderAdjustmentPaise: Paise;
+  /** Cash taken out of the drawer to be banked (Phase 14; subtracted). Not an expense, not revenue. */
+  bankDepositsPaise: Paise;
   expectedCashPaise: Paise;
   /** Information only: UPI collected the same way (bill and waiter UPI outside peaks + peak UPI deltas). */
   upiTotalPaise: Paise;
@@ -169,8 +171,49 @@ export interface ExpenseEntry extends CashExpense {
   voidedAt: Date | null;
 }
 
+/** Cash taken out of the drawer to be banked, e.g. for an RTGS vendor payment (Phase 14). */
+export interface BankDeposit {
+  id: string;
+  businessDayId: string;
+  /** Negative on a void row. */
+  amountPaise: Paise;
+  /** Optional, e.g. "RTGS to Sri Balaji". */
+  reference: string | null;
+  reversesDepositId: string | null;
+  createdByStaffId: string;
+  createdAt: Date;
+}
+
+/** A deposit as listed for the day: originals only, with when (if ever) it was voided. */
+export interface BankDepositEntry extends BankDeposit {
+  voidedAt: Date | null;
+}
+
 const MAX_DESCRIPTION = 200;
 const MAX_REASON = 200;
+const MAX_REFERENCE = 200;
+
+interface DepositRow {
+  id: string;
+  business_day_id: string;
+  amount_paise: DbInt;
+  reference: string | null;
+  reverses_deposit_id: string | null;
+  created_by_staff_id: string;
+  created_at: Date;
+}
+
+function mapDeposit(r: DepositRow): BankDeposit {
+  return {
+    id: r.id,
+    businessDayId: r.business_day_id,
+    amountPaise: toPaise(r.amount_paise),
+    reference: r.reference,
+    reversesDepositId: r.reverses_deposit_id,
+    createdByStaffId: r.created_by_staff_id,
+    createdAt: r.created_at,
+  };
+}
 
 interface AdjustmentRow {
   id: string;
@@ -363,6 +406,59 @@ export class DayEndService {
   }
 
   /**
+   * Cash taken out of the drawer to be banked, on the open day. Refused while a peak session runs
+   * (PS007): the peak's counted drawer would otherwise have to account for it.
+   */
+  async recordBankDeposit(amount: Paise, reference: string | null, staffId: string): Promise<BankDeposit> {
+    assertPaise(amount, 'amount');
+    const text = reference?.trim() || null;
+    if (text !== null && text.length > MAX_REFERENCE) throw new RangeError(`reference must be at most ${MAX_REFERENCE} characters`);
+    return withPosErrors(async () =>
+      mapDeposit(
+        await one<DepositRow>(
+          this.db,
+          `INSERT INTO bank_deposits (amount_paise, reference, created_by_staff_id) VALUES ($1, $2, $3) RETURNING *`,
+          [paiseParam(amount), text, staffId],
+        ),
+      ),
+    );
+  }
+
+  /** The day's bank deposits, newest first: originals only, each with the time it was voided (if it was). */
+  async listBankDeposits(businessDayId: string): Promise<BankDepositEntry[]> {
+    const { rows } = await this.db.query<DepositRow & { voided_at: Date | null }>(
+      `SELECT k.*, v.created_at AS voided_at
+         FROM bank_deposits k
+         LEFT JOIN bank_deposits v ON v.reverses_deposit_id = k.id
+        WHERE k.business_day_id = $1 AND k.amount_paise > 0
+        ORDER BY k.created_at DESC, k.id DESC`,
+      [businessDayId],
+    );
+    return rows.map((r) => ({ ...mapDeposit(r), voidedAt: r.voided_at }));
+  }
+
+  /**
+   * Voids a deposit by appending its negating row. Refused for a second void or a void row (PS006)
+   * and for a deposit from a closed day (PS007).
+   */
+  async voidBankDeposit(depositId: string, staffId: string): Promise<BankDeposit> {
+    return withPosErrors(() =>
+      this.db.transaction(async (tx) => {
+        const original = await maybeOne<DepositRow>(tx, `SELECT * FROM bank_deposits WHERE id = $1`, [depositId]);
+        if (!original) throw new NotFoundError('bank deposit', depositId);
+        return mapDeposit(
+          await one<DepositRow>(
+            tx,
+            `INSERT INTO bank_deposits (amount_paise, reverses_deposit_id, reference, created_by_staff_id)
+             VALUES (-$1::bigint, $2, $3, $4) RETURNING *`,
+            [paiseParam(toPaise(original.amount_paise)), depositId, original.reference, staffId],
+          ),
+        );
+      }),
+    );
+  }
+
+  /**
    * Tally tool: reclassifies `cashDelta` of the day's normal-bill revenue between Cash and UPI
    * (positive = UPI → Cash). The UPI side is always −cashDelta, so total revenue cannot change; the
    * database records the system figures and refuses to take either tender below ₹0 (PS002).
@@ -547,9 +643,10 @@ export async function getDayFigures(db: SqlClient, day: DaySummary): Promise<Day
     [day.id],
   );
 
-  const adjusted = await one<{ cash: DbInt }>(
+  const adjusted = await one<{ cash: DbInt; deposits: DbInt }>(
     db,
-    `SELECT coalesce(sum(cash_delta_paise), 0)::text AS cash FROM tender_adjustments WHERE business_day_id = $1`,
+    `SELECT coalesce((SELECT sum(cash_delta_paise) FROM tender_adjustments WHERE business_day_id = $1), 0)::text AS cash,
+            coalesce((SELECT sum(amount_paise) FROM bank_deposits WHERE business_day_id = $1), 0)::text AS deposits`,
     [day.id],
   );
   const tenderAdjustmentPaise = toPaise(adjusted.cash);
@@ -609,6 +706,7 @@ export async function getDayFigures(db: SqlClient, day: DaySummary): Promise<Day
     waiterCashPaise: toPaise(sums.waiter_cash),
     cashExpensesPaise: toPaise(sums.expenses),
     tenderAdjustmentPaise,
+    bankDepositsPaise: toPaise(adjusted.deposits),
     expectedCashPaise: 0n,
     upiTotalPaise: toPaise(sums.normal_upi) + toPaise(sums.waiter_upi) + sumOf((s) => s.upiDeltaPaise) - tenderAdjustmentPaise,
   };
@@ -618,7 +716,8 @@ export async function getDayFigures(db: SqlClient, day: DaySummary): Promise<Day
     breakdown.peakCashPaise +
     breakdown.waiterCashPaise -
     breakdown.cashExpensesPaise +
-    breakdown.tenderAdjustmentPaise;
+    breakdown.tenderAdjustmentPaise -
+    breakdown.bankDepositsPaise;
   if (breakdown.expectedCashPaise !== toPaise(sums.expected)) {
     throw new Error(`day ${day.businessDate}: breakdown ${breakdown.expectedCashPaise} disagrees with pos_day_expected_cash ${sums.expected}`);
   }

@@ -1,4 +1,6 @@
 import type {
+  BankDeposit,
+  BankDepositEntry,
   Bill,
   BillDetail,
   BillingMode,
@@ -139,6 +141,9 @@ export const api = {
   addExpense: (amount: Paise, category: ExpenseCategory, description: string | null) =>
     call<CashExpense>('POST', '/api/expenses', { amount, category, description }),
   voidExpense: (expenseId: string) => call<CashExpense>('POST', `/api/expenses/${encodeURIComponent(expenseId)}/void`),
+  listBankDeposits: () => call<BankDepositEntry[]>('GET', '/api/bank-deposits'),
+  addBankDeposit: (amount: Paise, reference: string | null) => call<BankDeposit>('POST', '/api/bank-deposits', { amount, reference }),
+  voidBankDeposit: (depositId: string) => call<BankDeposit>('POST', `/api/bank-deposits/${encodeURIComponent(depositId)}/void`),
 
   /** The open day's stock receipts, newest first (404 when no day is open). */
   listPurchases: () => call<StockReceipt[]>('GET', '/api/purchases'),

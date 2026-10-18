@@ -1,6 +1,6 @@
 # FL2 POS — Frontend State Reference
 
-As of Phase 11 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders, Phase 7 Day End, Phase 8 Expenses and peak controls, Phase 9 Purchase / GRN, Phase 10 Inventory Catalog and case-based GRN, Phase 11 peak start baseline and Day End sales breakdown, Phase 12 Enter → qty → pay, payment arrow keys and server-side peak undo; plan `docs/ui/phase12-billing-speed-plan.md`, Phase 13 peak end live split, Day End tally adjustments and Day End ⇄ Expenses; plan `docs/ui/phase13-peak-close-tally-plan.md`). Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
+As of Phase 11 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders, Phase 7 Day End, Phase 8 Expenses and peak controls, Phase 9 Purchase / GRN, Phase 10 Inventory Catalog and case-based GRN, Phase 11 peak start baseline and Day End sales breakdown, Phase 12 Enter → qty → pay, payment arrow keys and server-side peak undo; plan `docs/ui/phase12-billing-speed-plan.md`, Phase 13 peak end live split, Day End tally adjustments and Day End ⇄ Expenses; plan `docs/ui/phase13-peak-close-tally-plan.md`, Phase 14 bank deposits; plan `docs/ui/phase14-bank-deposits-plan.md`). Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
 
 - **Stack:** Vite 8, React 19, TypeScript, Tailwind CSS 4 (`@tailwindcss/vite`), Lucide icons, Vitest. No router, no state library.
 - **Run:** `npm run api:dev` at the repo root (API on `127.0.0.1:4310`), then `npm run dev` in `frontend/` (http://localhost:5173). Vite proxies `/api` to the API.
@@ -14,13 +14,13 @@ As of Phase 11 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Cap
 
 ```
 main.tsx                      StrictMode → <App/>, imports index.css (Tailwind)
-└─ App                        view: 'dashboard' | 'billing' | 'captain-orders' | 'day-end' | 'expenses' | 'purchase' | 'catalog'; holds the Recently Used list
+└─ App                        view: 'dashboard' | 'billing' | 'captain-orders' | 'day-end' | 'expenses' | 'bank-deposits' | 'purchase' | 'catalog'; holds the Recently Used list
    ├─ Dashboard               module tiles + Recently Used rail + key legend footer
    │  ├─ header               Start peak (F8) button when a day is open and no peak runs
    │  ├─ PeakBanner           amber "PEAK #n running · since · expected drawer total" strip with End peak session (F8)
    │  ├─ day banner           "No business day is open" strip → Day End (context polled 15 s)
-   │  ├─ ModuleTile ×7        4 × 2 grid (2 × 4 narrow); Billing Screen spans two rows. Billing, Captain Orders (live "n open" badge,
-   │  │                       polled 15 s), Expense (live), Purchase (→ PurchaseScreen), Inventory Catalog (→ CatalogScreen),
+   │  ├─ ModuleTile ×8        4 × 2 grid (2 × 4 narrow), equal tiles (Phase 14). Billing, Captain Orders (live "n open" badge,
+   │  │                       polled 15 s), Expense (live), Bank Deposit (→ BankDepositScreen), Purchase (→ PurchaseScreen), Inventory Catalog (→ CatalogScreen),
    │  │                       Day End (reads "Open Day" and becomes the primary tile when no day is open), Reports
    │  ├─ RailButton ×≤6       most-recently-used actions
    │  └─ LiveClock, Kbd       (components/ui.tsx)
@@ -52,8 +52,9 @@ main.tsx                      StrictMode → <App/>, imports index.css (Tailwind
       ├─ header               day + opened time, BLOCKED (n) / READY TO CLOSE / LOCKED / NO DAY OPEN badge
       ├─ Checklist (left)     open bills (→ Billing / Captain Orders), running peak (End peak…), waiters owing
       │                       (Repayment…); ended peak sessions with their variance
-      ├─ CashCount (right)    breakdown (float, normal cash, peak cash, waiter cash, −expenses, ±tally adjustments, EXPECTED,
-      │                       UPI info), "Add expense" (F6 → Expenses, Esc returns with the count kept), counted-cash
+      ├─ CashCount (right)    breakdown (float, normal cash, peak cash, waiter cash, −expenses, −bank deposits, ±tally adjustments,
+      │                       EXPECTED, UPI info), "Add expense" (F6 → Expenses) and "Add bank deposit" (→ Bank deposits); Esc on
+      │                       either returns with the count kept, counted-cash
       │                       RupeeField, live variance (short / over / exact), Confirm & Lock Day (F9)
       ├─ ClosedDayCard        frozen figures once locked
       ├─ OpenDayPanel         opening float + Enter → POST /api/days (after a lock, or when no day exists)
@@ -64,6 +65,11 @@ main.tsx                      StrictMode → <App/>, imports index.css (Tailwind
       │                       Record expense (Enter); keeps the category for the next entry
       ├─ list (right)         today's expenses newest first: time, category, note, ⚡ = during a peak, amount, Void /
       │                       VOIDED (struck through); header shows today's live total and count
+      └─ void confirm         Modal: Enter appends the negating row
+   └─ BankDepositScreen       useReducer(bankDepositReducer); GET /api/context + /api/bank-deposits + /api/day-end polled 15 s
+      ├─ form (left)          amount RupeeField (lg, focused), "Expected in the drawer now", amber over-drawer warning (not a block),
+      │                       reference (optional), "Taken by <till cashier>", Record deposit (Enter); replaced by a notice while a peak runs
+      ├─ list (right)         today's deposits newest first: time, reference, amount, Void / VOIDED (struck through); header total and count
       └─ void confirm         Modal: Enter appends the negating row
    └─ PurchaseScreen          useReducer(purchaseReducer); GET /api/context + /api/purchases polled 15 s
       ├─ header               day, "Received by <till cashier>", "Today n receipts · m btl"
@@ -117,11 +123,13 @@ Shared: components/peak/PeakControls.tsx: PeakBanner, StartPeakButton, PeakStart
 | `captain/captainOrdersReducer.ts` | `captainOrdersReducer`, `initialCaptainOrdersState`, `selectedOrder`, `editBlock`, `formatAge` |
 | `components/DayEndScreen.tsx` | `DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrders })` |
 | `components/ExpenseScreen.tsx` | `ExpenseScreen({ onExit, onOpenDayEnd })` |
+| `components/BankDepositScreen.tsx` | `BankDepositScreen({ onExit, onOpenDayEnd, exitLabel? })` |
 | `components/PurchaseScreen.tsx` | `PurchaseScreen({ onExit, onOpenDayEnd })` |
 | `components/CatalogScreen.tsx` | `CatalogScreen({ onExit })` |
 | `components/peak/PeakControls.tsx` | `PeakBanner`, `StartPeakButton`, `PeakStartDialog`, `PeakEndDialog` |
 | `components/RupeeField.tsx` | `RupeeField` |
 | `components/dayend/SalesBreakdownCard.tsx` | `SalesBreakdownCard({ sales })` |
+| `deposit/bankDepositReducer.ts` | `bankDepositReducer`, `initialBankDepositState`, `MAX_REFERENCE`, `formError`, `formPayload`, `overDrawerWarning`, `todayTotals` |
 | `expense/expenseReducer.ts` | `expenseReducer`, `initialExpenseState`, `CATEGORIES`, `CATEGORY_LABEL`, `formError`, `formPayload`, `todayTotals` |
 | `purchase/purchaseReducer.ts` | `purchaseReducer`, `initialPurchaseState`, `MAX_LINE_QTY`, `lineError`, `submitError`, `submitPayload`, `lineTotal`, `stagedTotals`, `pickFromSearch`, `entryCount`, `bottlesFor`, `mergeCounts`, `countLabel` |
 | `catalog/catalogReducer.ts` | `catalogReducer`, `initialCatalogState`, `catalogRows`, `suggestPrefix`, `skuCodePreview`, `formError`, `newProductPayload`, `productPatch`, `addSkuPayload`, `skuPatch`, `deactivates`, `conflictField`, `DEFAULT_CASE_SIZE` |
@@ -250,7 +258,7 @@ No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDow
 
 | File | Contents |
 |---|---|
-| `api/client.ts` | `api.*` (`context`, `lookupSku`, `searchMembers`, `listWaiters`, `getBill`, `captainOrders`, `createBill`, `addItem`, `cancelItem` (optional `restock`), `setMember`, `tagWaiter`, `settle`, `settleWaiter`, `closeEmpty`, `reverse`, `peakSale`, `searchSkus`, `listPurchases`, `postPurchase`, `listCatalog`, `createProduct`, `updateProduct`, `addSku`, `updateSku`, `peakBaseline`, `undoLastPeak`), `ApiError` (`status`, `code`, `constraint` on a 409; `NETWORK` when unreachable or the proxy answers non-JSON 5xx), `reviveJson`, `encodeJson` |
+| `api/client.ts` | `api.*` (`context`, `lookupSku`, `searchMembers`, `listWaiters`, `getBill`, `captainOrders`, `createBill`, `addItem`, `cancelItem` (optional `restock`), `setMember`, `tagWaiter`, `settle`, `settleWaiter`, `closeEmpty`, `reverse`, `peakSale`, `searchSkus`, `listPurchases`, `postPurchase`, `listCatalog`, `createProduct`, `updateProduct`, `addSku`, `updateSku`, `peakBaseline`, `undoLastPeak`, `listBankDeposits`, `addBankDeposit`, `voidBankDeposit`), `ApiError` (`status`, `code`, `constraint` on a 409; `NETWORK` when unreachable or the proxy answers non-JSON 5xx), `reviveJson`, `encodeJson` |
 | `api/types.ts` | Frontend mirrors of the API DTOs (`Bill`, `BillDetail`, `CounterContext`, `SkuLookup`, …) with `Paise = bigint`; dates stay ISO strings |
 | `billing/payment.ts` | `payOptions(detail)`, `planPayment(detail, input)` → counter tenders or waiter settle steps plus change, credit-limit pre-check, `describePlan` |
 | `billing/errors.ts` | `CounterError` (screen-raised), `counterErrorMessage(err)` (PS code → cashier wording) |

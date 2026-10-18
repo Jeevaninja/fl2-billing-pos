@@ -42,6 +42,10 @@ export interface PeakStartBaseline {
   peakCashPaise: Paise;
   /** Cash expenses outside peak windows (subtracted). */
   cashExpensesPaise: Paise;
+  /** Σ Day End tally adjustments' cash deltas (Phase 13). */
+  tenderAdjustmentPaise: Paise;
+  /** Bank deposits taken out of the drawer today (Phase 14; subtracted). */
+  bankDepositsPaise: Paise;
   expectedCashPaise: Paise;
   /** UPI tenders on normal bills, refunds included. */
   billUpiPaise: Paise;
@@ -71,6 +75,8 @@ export class PeakSessionService {
       waiterCashPaise: breakdown.waiterCashPaise,
       peakCashPaise: breakdown.peakCashPaise,
       cashExpensesPaise: breakdown.cashExpensesPaise,
+      tenderAdjustmentPaise: breakdown.tenderAdjustmentPaise,
+      bankDepositsPaise: breakdown.bankDepositsPaise,
       expectedCashPaise: breakdown.expectedCashPaise,
       billUpiPaise: sales.normal.upiPaise,
       waiterUpiPaise: sales.waiterRepayments.upiPaise,

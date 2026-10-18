@@ -36,6 +36,8 @@ interface DayEndScreenProps {
   onOpenCaptainOrders: () => void
   /** F6: add a late expense; the Expense screen's Esc comes back here. */
   onOpenExpenses: () => void
+  /** Add a bank deposit (cash drop); its Esc comes back here too. */
+  onOpenBankDeposits: () => void
   /** The count typed before the screen was left, and where to keep it as it changes. */
   countDraft: CountDraft | null
   onCountDraft: (draft: CountDraft | null) => void
@@ -46,7 +48,7 @@ interface DayEndScreenProps {
  * balances) with actions to clear them, the expected-cash breakdown, the drawer count and the lock.
  * Once locked — or when no day is open — the screen offers Day Open with an opening float.
  */
-export default function DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrders, onOpenExpenses, countDraft, onCountDraft }: DayEndScreenProps) {
+export default function DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrders, onOpenExpenses, onOpenBankDeposits, countDraft, onCountDraft }: DayEndScreenProps) {
   const [state, dispatch] = useReducer(dayEndReducer, countDraft, initialDayEndStateFrom)
   const [busy, setBusy] = useState(false)
   const view = dayEndView(state)
@@ -273,6 +275,7 @@ export default function DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrder
                     onCounted={(text) => dispatch({ type: 'counted', text })}
                     onLock={askLock}
                     onAddExpense={onOpenExpenses}
+                    onAddDeposit={onOpenBankDeposits}
                   />
                 </>
               ) : (
@@ -481,9 +484,10 @@ interface CashCountProps {
   onCounted: (text: string) => void
   onLock: () => void
   onAddExpense: () => void
+  onAddDeposit: () => void
 }
 
-function CashCount({ summary, counted, variance, block, busy, onCounted, onLock, onAddExpense }: CashCountProps) {
+function CashCount({ summary, counted, variance, block, busy, onCounted, onLock, onAddExpense, onAddDeposit }: CashCountProps) {
   const b = summary.breakdown
   return (
     <div className="mx-auto flex max-w-xl flex-col gap-4">
@@ -493,6 +497,7 @@ function CashCount({ summary, counted, variance, block, busy, onCounted, onLock,
         <Row label="Peak cash (counted)" value={b.peakCashPaise} />
         <Row label="Waiter cash repayments" value={b.waiterCashPaise} />
         <Row label="Cash expenses" value={-b.cashExpensesPaise} />
+        <Row label="Bank deposits" value={-b.bankDepositsPaise} />
         {b.tenderAdjustmentPaise !== 0n && <Row label="Tally adjustments (Cash ⇄ UPI)" value={b.tenderAdjustmentPaise} />}
         <div className="mt-2 flex items-baseline justify-between border-t-2 border-zinc-700 pt-2">
           <dt className="font-sans text-sm font-bold tracking-widest text-zinc-400 uppercase">Expected cash</dt>
@@ -514,6 +519,15 @@ function CashCount({ summary, counted, variance, block, busy, onCounted, onLock,
         <span className="flex items-center gap-1 font-bold">
           Add expense <Kbd>F6</Kbd>
         </span>
+      </button>
+      <button
+        type="button"
+        {...keepFocus}
+        onClick={onAddDeposit}
+        className={`-mt-2 flex items-center justify-between rounded-md border-2 border-dashed border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:border-zinc-400 ${FOCUS_RING}`}
+      >
+        Cash taken to the bank? Record it here, not as an expense
+        <span className="font-bold">Add bank deposit</span>
       </button>
 
       <RupeeField
@@ -580,6 +594,7 @@ function ClosedDayCard({ summary }: { summary: DayEndSummary }) {
         <Row label="Peak cash (counted)" value={breakdown.peakCashPaise} />
         <Row label="Waiter cash repayments" value={breakdown.waiterCashPaise} />
         <Row label="Cash expenses" value={-breakdown.cashExpensesPaise} />
+        <Row label="Bank deposits" value={-breakdown.bankDepositsPaise} />
         {breakdown.tenderAdjustmentPaise !== 0n && <Row label="Tally adjustments (Cash ⇄ UPI)" value={breakdown.tenderAdjustmentPaise} />}
         <div className="mt-2 border-t-2 border-zinc-700 pt-2">
           <Row label="Expected cash" value={day.expectedCashPaise ?? breakdown.expectedCashPaise} />
@@ -592,7 +607,7 @@ function ClosedDayCard({ summary }: { summary: DayEndSummary }) {
           <VarianceText variance={day.cashVariancePaise} />
         </div>
       )}
-      <p className="mt-3 text-sm text-zinc-500">The day is frozen: no further bills, payments, repayments or expenses can be added to it.</p>
+      <p className="mt-3 text-sm text-zinc-500">The day is frozen: no further bills, payments, repayments, expenses or bank deposits can be added to it.</p>
     </div>
   )
 }

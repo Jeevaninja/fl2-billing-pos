@@ -201,6 +201,37 @@ describe('local HTTP API', () => {
     expect((await call('GET', '/api/day-end')).body.breakdown.tenderAdjustmentPaise).toBe('0');
   });
 
+  it('records, lists and voids a bank deposit; it lowers expected cash, not sales', async () => {
+    const { fx, call } = await start();
+    const bill = (await call('POST', '/api/bills', { mode: 'NORMAL' })).body;
+    await call('POST', `/api/bills/${bill.id}/items`, { skuId: fx.sku.full, quantity: 1 });
+    await call('POST', `/api/bills/${bill.id}/settle`, { payments: [{ mode: 'CASH', amount: String(PRICE.full) }] });
+    const before = (await call('GET', '/api/day-end')).body;
+
+    expect(await call('POST', '/api/bank-deposits', { amount: '0' })).toMatchObject({ status: 400 });
+    expect(await call('POST', '/api/bank-deposits', { amount: 1000 })).toMatchObject({ status: 400 });
+    const deposit = await call('POST', '/api/bank-deposits', { amount: '100000', reference: 'RTGS to Sri Balaji' });
+    expect(deposit).toMatchObject({ status: 201, body: { amountPaise: '100000', reference: 'RTGS to Sri Balaji', reversesDepositId: null } });
+    expect(await call('POST', '/api/bank-deposits', { amount: '500' })).toMatchObject({ status: 201, body: { reference: null } });
+
+    const listed = await call('GET', '/api/bank-deposits');
+    expect(listed.body).toHaveLength(2);
+    const after = (await call('GET', '/api/day-end')).body;
+    expect(after.breakdown).toMatchObject({
+      bankDepositsPaise: '100500',
+      expectedCashPaise: String(BigInt(before.breakdown.expectedCashPaise) - 100500n),
+    });
+    expect(after.sales).toEqual(before.sales);
+
+    expect(await call('POST', `/api/bank-deposits/${deposit.body.id}/void`, {})).toMatchObject({ status: 201, body: { amountPaise: '-100000' } });
+    expect(await call('POST', `/api/bank-deposits/${deposit.body.id}/void`, {})).toMatchObject({ status: 409, body: { error: { code: 'PS006' } } });
+    expect((await call('GET', '/api/day-end')).body.breakdown.bankDepositsPaise).toBe('500');
+
+    await call('POST', `/api/days/${fx.dayId}/close`, { countedCash: String(BigInt(after.breakdown.expectedCashPaise) + 100000n) });
+    expect(await call('GET', '/api/bank-deposits')).toMatchObject({ status: 404 });
+    expect(await call('POST', '/api/bank-deposits', { amount: '100' })).toMatchObject({ status: 409, body: { error: { code: 'PS007' } } });
+  });
+
   it('serves the peak start baseline for the open day and the sales breakdown on Day End', async () => {
     const { fx, call } = await start();
     const bill = (await call('POST', '/api/bills', { mode: 'NORMAL' })).body;
