@@ -77,4 +77,6 @@ export const PEAK = {
   startUpiPaise: 0n,
   runningExpectedPaise: 0n,
   expectedDrawerCashPaise: 0n,
+  runningSalesPaise: 0n,
+  runningInWindowUpiPaise: 0n,
 }

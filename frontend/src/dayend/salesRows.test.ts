@@ -3,7 +3,7 @@ import type { SalesBreakdown } from '../api/types'
 import { salesCard } from './salesRows'
 
 const sales = (over: Partial<SalesBreakdown['peak']> = {}): SalesBreakdown => ({
-  normal: { cashPaise: 9800_00n, upiPaise: 5700_00n, creditPaise: 1500_00n, totalPaise: 17000_00n },
+  normal: { cashPaise: 9800_00n, upiPaise: 5700_00n, creditPaise: 1500_00n, totalPaise: 17000_00n, systemCashPaise: 9800_00n, systemUpiPaise: 5700_00n },
   peak: { salesPaise: 11400_00n, cashPaise: 7300_00n, upiPaise: 4100_00n, sessionCount: 2, runningSessionNo: null, ...over },
   waiterRepayments: { cashPaise: 1000_00n, upiPaise: 500_00n },
   total: { cashPaise: 17100_00n, upiPaise: 9800_00n, creditPaise: 1500_00n, salesPaise: 28400_00n },

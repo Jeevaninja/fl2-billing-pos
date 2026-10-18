@@ -75,7 +75,7 @@ describe('peak start baseline and sales breakdown', () => {
 
     const summary = await dayEnd.getDayEndSummary(fx.dayId);
     expect(summary.sales).toEqual({
-      normal: { cashPaise: 2200_00n, upiPaise: 1350_00n, creditPaise: 600_00n, totalPaise: 4150_00n },
+      normal: { cashPaise: 2200_00n, upiPaise: 1350_00n, creditPaise: 600_00n, totalPaise: 4150_00n, systemCashPaise: 2200_00n, systemUpiPaise: 1350_00n },
       peak: { salesPaise: 3050_00n, cashPaise: 1650_00n, upiPaise: 1400_00n, sessionCount: 2, runningSessionNo: null },
       waiterRepayments: { cashPaise: 300_00n, upiPaise: 100_00n },
       total: { cashPaise: 3850_00n, upiPaise: 2750_00n, creditPaise: 600_00n, salesPaise: 7200_00n },
@@ -116,7 +116,7 @@ describe('peak start baseline and sales breakdown', () => {
 
     const running = await dayEnd.getDayEndSummary(fx.dayId);
     expect(running.sales).toEqual({
-      normal: { cashPaise: 0n, upiPaise: 0n, creditPaise: 0n, totalPaise: 0n },
+      normal: { cashPaise: 0n, upiPaise: 0n, creditPaise: 0n, totalPaise: 0n, systemCashPaise: 0n, systemUpiPaise: 0n },
       peak: { salesPaise: 0n, cashPaise: 0n, upiPaise: 0n, sessionCount: 0, runningSessionNo: 1 },
       waiterRepayments: { cashPaise: 0n, upiPaise: 0n },
       total: { cashPaise: 0n, upiPaise: 0n, creditPaise: 0n, salesPaise: 0n },

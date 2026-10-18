@@ -65,6 +65,8 @@ export interface CashBreakdown {
   waiterCashPaise: Paise;
   /** Cash expenses outside peak windows (subtracted). */
   cashExpensesPaise: Paise;
+  /** Σ tally adjustments' cash deltas (Phase 13): positive when UPI revenue was reclassified as cash. */
+  tenderAdjustmentPaise: Paise;
   expectedCashPaise: Paise;
   /** Information only: UPI collected the same way (bill and waiter UPI outside peaks + peak UPI deltas). */
   upiTotalPaise: Paise;
@@ -93,8 +95,12 @@ export interface PeakSessionCash {
  * still-running session appear once it ends.
  */
 export interface SalesBreakdown {
-  /** Every tender on normal bills (inside or outside peak windows), refunds included. */
-  normal: { cashPaise: Paise; upiPaise: Paise; creditPaise: Paise; totalPaise: Paise };
+  /**
+   * Every tender on normal bills (inside or outside peak windows), refunds included. cash / upi
+   * include the day's tally adjustments; systemCash / systemUpi are as recorded on the bills. The
+   * total is the same either way.
+   */
+  normal: { cashPaise: Paise; upiPaise: Paise; creditPaise: Paise; totalPaise: Paise; systemCashPaise: Paise; systemUpiPaise: Paise };
   /** Peak bills carry no tender: UPI comes from the readings, cash = sales − UPI. */
   peak: { salesPaise: Paise; cashPaise: Paise; upiPaise: Paise; sessionCount: number; runningSessionNo: number | null };
   /** Waiter credit collected today: money in, not sales. */
@@ -110,6 +116,28 @@ export interface DayEndSummary {
   breakdown: CashBreakdown;
   sales: SalesBreakdown;
   peakSessions: PeakSessionCash[];
+  /** Tally adjustments of the day, newest first: originals only, each with when (if ever) it was voided. */
+  tenderAdjustments: TenderAdjustmentEntry[];
+}
+
+/** A Cash ⇄ UPI reclassification of normal-bill revenue (cashDelta + upiDelta = 0). */
+export interface TenderAdjustment {
+  id: string;
+  businessDayId: string;
+  /** Positive: UPI revenue reclassified as cash. Negated on a void row. */
+  cashDeltaPaise: Paise;
+  upiDeltaPaise: Paise;
+  /** Normal-bill cash / UPI as recorded on bills when the row was written. */
+  systemCashPaise: Paise;
+  systemUpiPaise: Paise;
+  reason: string;
+  reversesAdjustmentId: string | null;
+  createdByStaffId: string;
+  createdAt: Date;
+}
+
+export interface TenderAdjustmentEntry extends TenderAdjustment {
+  voidedAt: Date | null;
 }
 
 /** The cash, sales and per-peak figures of a day, shared by Day End and the peak start baseline. */
@@ -142,6 +170,35 @@ export interface ExpenseEntry extends CashExpense {
 }
 
 const MAX_DESCRIPTION = 200;
+const MAX_REASON = 200;
+
+interface AdjustmentRow {
+  id: string;
+  business_day_id: string;
+  cash_delta_paise: DbInt;
+  upi_delta_paise: DbInt;
+  system_cash_paise: DbInt;
+  system_upi_paise: DbInt;
+  reason: string;
+  reverses_adjustment_id: string | null;
+  created_by_staff_id: string;
+  created_at: Date;
+}
+
+function mapAdjustment(r: AdjustmentRow): TenderAdjustment {
+  return {
+    id: r.id,
+    businessDayId: r.business_day_id,
+    cashDeltaPaise: toPaise(r.cash_delta_paise),
+    upiDeltaPaise: toPaise(r.upi_delta_paise),
+    systemCashPaise: toPaise(r.system_cash_paise),
+    systemUpiPaise: toPaise(r.system_upi_paise),
+    reason: r.reason,
+    reversesAdjustmentId: r.reverses_adjustment_id,
+    createdByStaffId: r.created_by_staff_id,
+    createdAt: r.created_at,
+  };
+}
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 interface DayRow {
@@ -305,6 +362,47 @@ export class DayEndService {
     );
   }
 
+  /**
+   * Tally tool: reclassifies `cashDelta` of the day's normal-bill revenue between Cash and UPI
+   * (positive = UPI → Cash). The UPI side is always −cashDelta, so total revenue cannot change; the
+   * database records the system figures and refuses to take either tender below ₹0 (PS002).
+   */
+  async adjustTenderSplit(businessDayId: string, cashDelta: Paise, reason: string, staffId: string): Promise<TenderAdjustment> {
+    if (typeof cashDelta !== 'bigint') throw new TypeError('cashDelta must be a bigint of paise');
+    if (cashDelta === 0n) throw new RangeError('cashDelta must not be zero');
+    const text = reason.trim();
+    if (text === '') throw new RangeError('a reason is required');
+    if (text.length > MAX_REASON) throw new RangeError(`reason must be at most ${MAX_REASON} characters`);
+    return withPosErrors(async () =>
+      mapAdjustment(
+        await one<AdjustmentRow>(
+          this.db,
+          `INSERT INTO tender_adjustments (business_day_id, cash_delta_paise, upi_delta_paise, system_cash_paise, system_upi_paise, reason, created_by_staff_id)
+           VALUES ($1, $2, -$2::bigint, 0, 0, $3, $4) RETURNING *`,
+          [businessDayId, paiseParam(cashDelta), text, staffId],
+        ),
+      ),
+    );
+  }
+
+  /** Voids a tally adjustment by appending its negating row (once; open day only). */
+  async voidTenderAdjustment(adjustmentId: string, staffId: string): Promise<TenderAdjustment> {
+    return withPosErrors(() =>
+      this.db.transaction(async (tx) => {
+        const original = await maybeOne<AdjustmentRow>(tx, `SELECT * FROM tender_adjustments WHERE id = $1`, [adjustmentId]);
+        if (!original) throw new NotFoundError('tender adjustment', adjustmentId);
+        return mapAdjustment(
+          await one<AdjustmentRow>(
+            tx,
+            `INSERT INTO tender_adjustments (business_day_id, cash_delta_paise, upi_delta_paise, system_cash_paise, system_upi_paise, reason, reverses_adjustment_id, created_by_staff_id)
+             VALUES ($1, -$2::bigint, $2::bigint, 0, 0, $3, $4, $5) RETURNING *`,
+            [original.business_day_id, paiseParam(toPaise(original.cash_delta_paise)), original.reason, adjustmentId, staffId],
+          ),
+        );
+      }),
+    );
+  }
+
   /** The day's expenses, newest first: originals only, each with the time it was voided (if it was). */
   async listCashExpenses(businessDayId: string): Promise<ExpenseEntry[]> {
     const { rows } = await this.db.query<ExpenseRow & { voided_at: Date | null }>(
@@ -387,7 +485,21 @@ async function summarise(db: SqlClient, day: DaySummary): Promise<DayEndSummary>
   const canClose =
     day.status === 'OPEN' && blockers.openBills.length === 0 && blockers.runningPeakSession === null && blockers.waitersOwing.length === 0;
 
-  return { day, blockers, canClose, ...(await getDayFigures(db, day)) };
+  const { rows: adjustments } = await db.query<AdjustmentRow & { voided_at: Date | null }>(
+    `SELECT a.*, v.created_at AS voided_at
+       FROM tender_adjustments a
+       LEFT JOIN tender_adjustments v ON v.reverses_adjustment_id = a.id
+      WHERE a.business_day_id = $1 AND a.reverses_adjustment_id IS NULL
+      ORDER BY a.created_at DESC, a.id DESC`,
+    [day.id],
+  );
+  return {
+    day,
+    blockers,
+    canClose,
+    ...(await getDayFigures(db, day)),
+    tenderAdjustments: adjustments.map((r) => ({ ...mapAdjustment(r), voidedAt: r.voided_at })),
+  };
 }
 
 type SessionSumRow = PeakSessionRow & Record<'sales' | 'bill_cash' | 'bill_upi' | 'waiter_cash' | 'waiter_upi' | 'expenses', DbInt>;
@@ -434,6 +546,13 @@ export async function getDayFigures(db: SqlClient, day: DaySummary): Promise<Day
        pos_day_expected_cash($1)::text AS expected`,
     [day.id],
   );
+
+  const adjusted = await one<{ cash: DbInt }>(
+    db,
+    `SELECT coalesce(sum(cash_delta_paise), 0)::text AS cash FROM tender_adjustments WHERE business_day_id = $1`,
+    [day.id],
+  );
+  const tenderAdjustmentPaise = toPaise(adjusted.cash);
 
   // Every tender of the day outside a still-running window, by tender type.
   const { rows: tenderRows } = await db.query<TenderSumRow>(
@@ -489,17 +608,36 @@ export async function getDayFigures(db: SqlClient, day: DaySummary): Promise<Day
     peakCashPaise: sumOf((s) => s.cashDeltaPaise),
     waiterCashPaise: toPaise(sums.waiter_cash),
     cashExpensesPaise: toPaise(sums.expenses),
+    tenderAdjustmentPaise,
     expectedCashPaise: 0n,
-    upiTotalPaise: toPaise(sums.normal_upi) + toPaise(sums.waiter_upi) + sumOf((s) => s.upiDeltaPaise),
+    upiTotalPaise: toPaise(sums.normal_upi) + toPaise(sums.waiter_upi) + sumOf((s) => s.upiDeltaPaise) - tenderAdjustmentPaise,
   };
   breakdown.expectedCashPaise =
-    breakdown.openingFloatPaise + breakdown.normalCashPaise + breakdown.peakCashPaise + breakdown.waiterCashPaise - breakdown.cashExpensesPaise;
+    breakdown.openingFloatPaise +
+    breakdown.normalCashPaise +
+    breakdown.peakCashPaise +
+    breakdown.waiterCashPaise -
+    breakdown.cashExpensesPaise +
+    breakdown.tenderAdjustmentPaise;
   if (breakdown.expectedCashPaise !== toPaise(sums.expected)) {
     throw new Error(`day ${day.businessDate}: breakdown ${breakdown.expectedCashPaise} disagrees with pos_day_expected_cash ${sums.expected}`);
   }
 
-  const normal = { cashPaise: tender('BILL', 'CASH'), upiPaise: tender('BILL', 'UPI'), creditPaise: tender('BILL', 'WAITER_CREDIT'), totalPaise: 0n };
-  normal.totalPaise = normal.cashPaise + normal.upiPaise + normal.creditPaise;
+  const systemCashPaise = tender('BILL', 'CASH');
+  const systemUpiPaise = tender('BILL', 'UPI');
+  const creditPaise = tender('BILL', 'WAITER_CREDIT');
+  const normal = {
+    cashPaise: systemCashPaise + tenderAdjustmentPaise,
+    upiPaise: systemUpiPaise - tenderAdjustmentPaise,
+    creditPaise,
+    // Adjustments only move revenue between tenders, so the total is the recorded one.
+    totalPaise: systemCashPaise + systemUpiPaise + creditPaise,
+    systemCashPaise,
+    systemUpiPaise,
+  };
+  if (normal.cashPaise + normal.upiPaise + normal.creditPaise !== normal.totalPaise) {
+    throw new Error(`day ${day.businessDate}: adjusted normal tenders no longer add up to ${normal.totalPaise}`);
+  }
   const peak = {
     salesPaise: sumOf((s) => s.salesPaise),
     cashPaise: sumOf((s) => s.peakCashPaise),

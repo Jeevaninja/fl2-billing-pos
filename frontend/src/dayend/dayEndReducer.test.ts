@@ -6,6 +6,7 @@ import {
   dayEndReducer,
   dayEndView,
   initialDayEndState,
+  initialDayEndStateFrom,
   lockBlock,
   variancePreview,
   type DayEndAction,
@@ -35,16 +36,18 @@ function summary(over: { id?: string; status?: 'OPEN' | 'CLOSED'; expected?: big
       peakCashPaise: 0n,
       waiterCashPaise: 0n,
       cashExpensesPaise: 0n,
+      tenderAdjustmentPaise: 0n,
       expectedCashPaise: over.expected ?? 30550_00n,
       upiTotalPaise: 0n,
     },
     sales: {
-      normal: { cashPaise: 0n, upiPaise: 0n, creditPaise: 0n, totalPaise: 0n },
+      normal: { cashPaise: 0n, upiPaise: 0n, creditPaise: 0n, totalPaise: 0n, systemCashPaise: 0n, systemUpiPaise: 0n },
       peak: { salesPaise: 0n, cashPaise: 0n, upiPaise: 0n, sessionCount: 0, runningSessionNo: null },
       waiterRepayments: { cashPaise: 0n, upiPaise: 0n },
       total: { cashPaise: 0n, upiPaise: 0n, creditPaise: 0n, salesPaise: 0n },
     },
     peakSessions: [],
+    tenderAdjustments: [],
   }
 }
 
@@ -58,6 +61,18 @@ describe('dayEndReducer', () => {
     expect(dayEndView(run(initialDayEndState, { type: 'noDay' }))).toBe('NO_DAY')
     expect(dayEndView(run(initialDayEndState, { type: 'loaded', summary: summary() }))).toBe('OPEN')
     expect(dayEndView(run(initialDayEndState, { type: 'loaded', summary: summary({ status: 'CLOSED' }) }))).toBe('CLOSED')
+  })
+
+  it('restores a draft count after a trip to another screen, only for the same open day', () => {
+    const fresh = (draft: { dayId: string; counted: string } | null, s = summary()) =>
+      run(initialDayEndStateFrom(draft), { type: 'loaded', summary: s })
+    expect(fresh({ dayId: 'day-1', counted: '30,500' }).counted).toBe('30,500')
+    expect(fresh({ dayId: 'day-0', counted: '30,500' }).counted).toBe('')
+    expect(fresh({ dayId: 'day-1', counted: '30,500' }, summary({ status: 'CLOSED' })).counted).toBe('')
+    expect(fresh(null).counted).toBe('')
+    // A changed expected figure (a late expense) leaves the count alone; the variance follows.
+    const s1 = fresh({ dayId: 'day-1', counted: '30,500' })
+    expect(variancePreview(run(s1, { type: 'loaded', summary: summary({ expected: 30450_00n }) }))).toBe(50_00n)
   })
 
   it('keeps the typed count across polls of the same day, and clears it for another day', () => {
@@ -87,7 +102,7 @@ describe('dayEndReducer', () => {
   })
 
   it('counts every open bill, a running peak and each owing waiter as blockers', () => {
-    const peak = { id: 'p', sessionNo: 1, startedAt: '', startCashPaise: 0n, startUpiPaise: 0n, runningExpectedPaise: 0n, expectedDrawerCashPaise: 0n }
+    const peak = { id: 'p', sessionNo: 1, startedAt: '', startCashPaise: 0n, startUpiPaise: 0n, runningExpectedPaise: 0n, expectedDrawerCashPaise: 0n, runningSalesPaise: 0n, runningInWindowUpiPaise: 0n }
     const bill = { billId: 'b', billNo: 3, source: 'COUNTER' as const, status: 'OPEN' as const, waiter: null, duePaise: 1n, createdAt: '' }
     expect(blockerCount(summary({ blockers: { openBills: [bill, { ...bill, billId: 'c' }], runningPeakSession: peak, waitersOwing: [owing] } }))).toBe(4)
     // Peak bills clear together when the session ends: one item, however many scans.

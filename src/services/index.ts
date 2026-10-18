@@ -39,6 +39,8 @@ export type {
   OwingWaiter,
   PeakSessionCash,
   SalesBreakdown,
+  TenderAdjustment,
+  TenderAdjustmentEntry,
 } from './day-end.service.js';
 export { PeakSessionService } from './peak-session.service.js';
 export { MAX_RECEIPT_LINES, MAX_RECEIPT_QTY, PurchaseService } from './purchase.service.js';

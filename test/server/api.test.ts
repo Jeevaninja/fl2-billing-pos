@@ -177,6 +177,30 @@ describe('local HTTP API', () => {
     expect(await call('POST', '/api/peak/undo-last', {})).toMatchObject({ status: 404 });
   });
 
+  it('records and voids a Cash ⇄ UPI tally adjustment; only the cash delta is accepted', async () => {
+    const { fx, call } = await start();
+    const bill = (await call('POST', '/api/bills', { mode: 'NORMAL' })).body;
+    await call('POST', `/api/bills/${bill.id}/items`, { skuId: fx.sku.half, quantity: 1 });
+    await call('POST', `/api/bills/${bill.id}/settle`, { payments: [{ mode: 'UPI', amount: String(PRICE.half) }] });
+
+    const path = `/api/days/${fx.dayId}/tender-adjustments`;
+    expect(await call('POST', path, { cashDelta: '0', reason: 'x' })).toMatchObject({ status: 400 });
+    expect(await call('POST', path, { cashDelta: '100' })).toMatchObject({ status: 400 });
+    expect(await call('POST', path, { cashDelta: 100, reason: 'x' })).toMatchObject({ status: 400 });
+    expect(await call('POST', path, { cashDelta: String(PRICE.half + 1), reason: 'x' })).toMatchObject({ status: 409, body: { error: { code: 'PS002' } } });
+
+    const adj = await call('POST', path, { cashDelta: '50000', upiDelta: '-1', reason: 'paid cash' });
+    expect(adj).toMatchObject({ status: 201, body: { cashDeltaPaise: '50000', upiDeltaPaise: '-50000', systemUpiPaise: String(PRICE.half) } });
+    const summary = (await call('GET', '/api/day-end')).body;
+    expect(summary.breakdown).toMatchObject({ tenderAdjustmentPaise: '50000', expectedCashPaise: '50000' });
+    expect(summary.sales.normal).toMatchObject({ cashPaise: '50000', upiPaise: String(PRICE.half - 50000), totalPaise: String(PRICE.half) });
+    expect(summary.tenderAdjustments).toEqual([expect.objectContaining({ id: adj.body.id, reason: 'paid cash', voidedAt: null })]);
+
+    expect(await call('POST', `/api/tender-adjustments/${adj.body.id}/void`, {})).toMatchObject({ status: 201, body: { cashDeltaPaise: '-50000' } });
+    expect(await call('POST', `/api/tender-adjustments/${adj.body.id}/void`, {})).toMatchObject({ status: 409, body: { error: { code: 'PS006' } } });
+    expect((await call('GET', '/api/day-end')).body.breakdown.tenderAdjustmentPaise).toBe('0');
+  });
+
   it('serves the peak start baseline for the open day and the sales breakdown on Day End', async () => {
     const { fx, call } = await start();
     const bill = (await call('POST', '/api/bills', { mode: 'NORMAL' })).body;
@@ -188,7 +212,7 @@ describe('local HTTP API', () => {
       body: { businessDayId: fx.dayId, expectedCashPaise: '0', billUpiPaise: String(PRICE.half), expectedUpiPaise: String(PRICE.half) },
     });
     expect((await call('GET', '/api/day-end')).body.sales).toEqual({
-      normal: { cashPaise: '0', upiPaise: String(PRICE.half), creditPaise: '0', totalPaise: String(PRICE.half) },
+      normal: { cashPaise: '0', upiPaise: String(PRICE.half), creditPaise: '0', totalPaise: String(PRICE.half), systemCashPaise: '0', systemUpiPaise: String(PRICE.half) },
       peak: { salesPaise: '0', cashPaise: '0', upiPaise: '0', sessionCount: 0, runningSessionNo: null },
       waiterRepayments: { cashPaise: '0', upiPaise: '0' },
       total: { cashPaise: '0', upiPaise: String(PRICE.half), creditPaise: '0', salesPaise: String(PRICE.half) },

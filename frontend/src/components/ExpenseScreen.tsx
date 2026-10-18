@@ -25,6 +25,8 @@ const POLL_MS = 15_000
 interface ExpenseScreenProps {
   onExit: () => void
   onOpenDayEnd: () => void
+  /** Where Esc goes: the Dashboard, or back to Day End when opened from there (F6). */
+  exitLabel?: string
 }
 
 /**
@@ -32,7 +34,7 @@ interface ExpenseScreenProps {
  * day's list with Void. Every entry is stamped by the server with the till's cashier; a void
  * appends a negating row, so nothing is ever edited or deleted.
  */
-export default function ExpenseScreen({ onExit, onOpenDayEnd }: ExpenseScreenProps) {
+export default function ExpenseScreen({ onExit, onOpenDayEnd, exitLabel = 'Dashboard' }: ExpenseScreenProps) {
   const [state, dispatch] = useReducer(expenseReducer, initialExpenseState)
   const amountRef = useRef<HTMLInputElement>(null)
   const stateRef = useRef(state)
@@ -137,7 +139,7 @@ export default function ExpenseScreen({ onExit, onOpenDayEnd }: ExpenseScreenPro
           {...keepFocus}
           onClick={onExit}
           className="flex items-center gap-2 rounded px-1 text-zinc-300 hover:text-zinc-50"
-          aria-label="Back to dashboard (Esc)"
+          aria-label={`Back to ${exitLabel} (Esc)`}
         >
           <ArrowLeft className="size-5" aria-hidden />
           <span className="rounded bg-amber-400 px-2 py-0.5 text-lg font-black tracking-tight text-zinc-950">FL2</span>
@@ -156,7 +158,7 @@ export default function ExpenseScreen({ onExit, onOpenDayEnd }: ExpenseScreenPro
         <div className="ml-auto flex items-center gap-4 text-sm">
           <LiveClock />
           <span className="flex items-center gap-1 text-zinc-400">
-            <Kbd>Esc</Kbd> Dashboard
+            <Kbd>Esc</Kbd> {exitLabel}
           </span>
         </div>
       </header>

@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { Zap } from 'lucide-react'
 import { api } from '../../api/client'
-import type { PeakReconciliation, PeakSession, PeakSessionView, PeakStartBaseline } from '../../api/types'
+import type { Paise, PeakReconciliation, PeakSession, PeakSessionView, PeakStartBaseline } from '../../api/types'
 import { counterErrorMessage } from '../../billing/errors'
 import { Modal } from '../../billing/Modal'
 import { formatPaise } from '../../lib/money'
 import { FOCUS_RING, keepFocus } from '../../lib/ui'
-import { compareReading, describeBaseline, describeVariance, parseReadings, type ReadingComparison } from '../../peak/peakMath'
+import { compareReading, describeBaseline, describeVariance, parseReadings, peakSplit, type ReadingComparison } from '../../peak/peakMath'
 import { RupeeField } from '../RupeeField'
 import { Kbd } from '../ui'
 
@@ -202,12 +202,26 @@ interface EndProps {
 }
 
 /** Takes the closing readings, ends the session, then shows the reconciliation and its variance. */
-export function PeakEndDialog({ session, onEnded, onClose }: EndProps) {
+export function PeakEndDialog({ session: snapshot, onEnded, onClose }: EndProps) {
   const [cash, setCash] = useState('')
   const [upi, setUpi] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [result, setResult] = useState<PeakReconciliation | null>(null)
+  // The snapshot can be a poll old: re-read the running session's sales and expected on open.
+  const [fresh, setFresh] = useState<PeakSessionView | null>(null)
+  useEffect(() => {
+    let live = true
+    api
+      .context()
+      .then((c) => live && c.peakSession?.id === snapshot.id && setFresh(c.peakSession))
+      .catch(() => undefined)
+    return () => {
+      live = false
+    }
+  }, [snapshot.id])
+  const session = fresh ?? snapshot
+  const split = peakSplit(session, cash, upi)
 
   const submit = () => {
     if (saving || result) return
@@ -232,6 +246,7 @@ export function PeakEndDialog({ session, onEnded, onClose }: EndProps) {
   if (result) {
     const b = result.breakdown
     const v = describeVariance(b.variancePaise)
+    const derivedUpi = b.upiDeltaPaise - b.billUpiPaise - b.waiterUpiPaise
     const tone = v.kind === 'short' ? 'text-rose-400' : v.kind === 'over' ? 'text-amber-300' : 'text-emerald-400'
     return (
       <Modal
@@ -260,6 +275,7 @@ export function PeakEndDialog({ session, onEnded, onClose }: EndProps) {
           <dt className="font-sans text-zinc-300">Actual</dt>
           <dd className="text-right tabular-nums">{formatPaise(b.actualPaise)}</dd>
         </dl>
+        <SplitLines salesPaise={b.peakBillsPaise} upiPaise={derivedUpi} cashPaise={b.peakBillsPaise - derivedUpi} />
         <div className="mt-4 flex items-baseline justify-between border-t-2 border-zinc-700 pt-3">
           <span className="text-sm font-bold tracking-widest text-zinc-400 uppercase">Variance</span>
           <span className={`font-mono text-3xl font-black ${tone}`}>{v.label}</span>
@@ -294,9 +310,67 @@ export function PeakEndDialog({ session, onEnded, onClose }: EndProps) {
         <dt className="text-zinc-400">Expected drawer total</dt>
         <dd className="text-right">{formatPaise(session.expectedDrawerCashPaise)}</dd>
       </dl>
+      <div className="mb-4 flex items-baseline justify-between rounded-lg border-2 border-zinc-700 bg-zinc-950 px-4 py-2">
+        <span className="font-semibold text-zinc-300">Total peak sales</span>
+        <span className="font-mono text-2xl font-black tabular-nums">{formatPaise(session.runningSalesPaise)}</span>
+      </div>
       <Readings cash={cash} upi={upi} onCash={setCash} onUpi={setUpi} onSubmit={submit} />
+      <SplitLines
+        salesPaise={split.salesPaise}
+        upiPaise={split.upiPaise}
+        cashPaise={split.cashPaise}
+        variancePaise={split.variancePaise}
+        inWindowUpiPaise={session.runningInWindowUpiPaise}
+      />
       <p className="mt-3 text-sm text-zinc-400">Enter the full drawer and UPI readings, not the difference.</p>
       {error && <p className="mt-3 text-sm font-semibold text-rose-400">{error}</p>}
     </Modal>
+  )
+}
+
+/**
+ * Peak sales split by tender: UPI from the reading (less UPI recorded in the window), cash = sales −
+ * UPI, so the two always add up to the sales. Shown live while ending, and on the result.
+ */
+function SplitLines({
+  salesPaise,
+  upiPaise,
+  cashPaise,
+  variancePaise,
+  inWindowUpiPaise,
+}: {
+  salesPaise: Paise
+  upiPaise: Paise | null
+  cashPaise: Paise | null
+  variancePaise?: Paise | null
+  inWindowUpiPaise?: Paise
+}) {
+  const v = variancePaise === undefined || variancePaise === null ? null : describeVariance(variancePaise)
+  const tone = v?.kind === 'short' ? 'text-rose-400' : v?.kind === 'over' ? 'text-amber-300' : 'text-emerald-400'
+  return (
+    <dl className="mt-3 grid grid-cols-2 gap-y-1 rounded-lg bg-zinc-950 px-4 py-2 font-mono text-sm" aria-label="Derived peak split">
+      <dt className="font-sans text-zinc-300">Derived peak UPI</dt>
+      <dd className="text-right tabular-nums">{upiPaise === null ? <span className="text-zinc-600">type the UPI reading</span> : formatPaise(upiPaise)}</dd>
+      <dt className="font-sans text-zinc-300">Derived peak cash</dt>
+      <dd className={`text-right tabular-nums ${cashPaise !== null && cashPaise < 0n ? 'text-amber-300' : ''}`}>
+        {cashPaise === null ? <span className="text-zinc-600">—</span> : formatPaise(cashPaise)}
+      </dd>
+      <dt className="font-sans text-xs text-zinc-500">Cash + UPI = peak sales</dt>
+      <dd className="text-right text-xs text-zinc-500 tabular-nums">{formatPaise(salesPaise)}</dd>
+      {inWindowUpiPaise !== undefined && inWindowUpiPaise !== 0n && (
+        <dd className="col-span-2 font-sans text-xs text-zinc-500">
+          UPI reading less {formatPaise(inWindowUpiPaise)} taken on bills / repayments during the peak
+        </dd>
+      )}
+      {cashPaise !== null && cashPaise < 0n && (
+        <dd className="col-span-2 font-sans text-xs font-semibold text-amber-300">UPI reading is above the peak sales — check it</dd>
+      )}
+      {v && (
+        <>
+          <dt className="font-sans text-zinc-300">Variance preview</dt>
+          <dd className={`text-right font-bold tabular-nums ${tone}`}>{v.label}</dd>
+        </>
+      )}
+    </dl>
   )
 }

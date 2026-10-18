@@ -2,12 +2,17 @@
  * DayEndScreen state machine. Pure and unit-tested. The server computes every figure (expected
  * cash, the frozen variance); the screen only previews counted − expected while the cashier types.
  */
-import type { DayEndSummary, Paise, PeakSessionView } from '../api/types'
+import type { DayEndSummary, Paise, PeakSessionView, TenderAdjustmentEntry } from '../api/types'
 import type { Flash } from '../billing/billingReducer'
 import { parseRupeesToPaise } from '../lib/money'
 
 /** endPeak keeps its own snapshot: the dialog outlives the session it ends (it shows the result). */
-export type DayEndDialog = { kind: 'confirm' } | { kind: 'repay'; waiterId: string } | { kind: 'endPeak'; session: PeakSessionView }
+export type DayEndDialog =
+  | { kind: 'confirm' }
+  | { kind: 'repay'; waiterId: string }
+  | { kind: 'endPeak'; session: PeakSessionView }
+  | { kind: 'tally' }
+  | { kind: 'voidAdjustment'; adjustment: TenderAdjustmentEntry }
 export type DayEndView = 'LOADING' | 'OFFLINE' | 'NO_DAY' | 'OPEN' | 'CLOSED'
 
 export interface DayEndState {
@@ -17,6 +22,8 @@ export interface DayEndState {
   summary: DayEndSummary | null
   /** Counted drawer cash as typed (rupees). */
   counted: string
+  /** The day `counted` was typed for; it is kept only while that day loads, open. */
+  countedDayId: string | null
   dialog: DayEndDialog | null
   flash: Flash | null
 }
@@ -26,8 +33,20 @@ export const initialDayEndState: DayEndState = {
   offlineMessage: null,
   summary: null,
   counted: '',
+  countedDayId: null,
   dialog: null,
   flash: null,
+}
+
+/** The count typed before leaving the screen (e.g. to add a late expense), kept by the App. */
+export interface CountDraft {
+  dayId: string
+  counted: string
+}
+
+/** Starts the screen with a draft count; it survives only if the same day loads, still open. */
+export function initialDayEndStateFrom(draft: CountDraft | null): DayEndState {
+  return draft ? { ...initialDayEndState, counted: draft.counted, countedDayId: draft.dayId } : initialDayEndState
 }
 
 export type DayEndAction =
@@ -83,18 +102,21 @@ export function lockBlock(state: DayEndState): string | null {
 export function dayEndReducer(state: DayEndState, action: DayEndAction): DayEndState {
   switch (action.type) {
     case 'loaded': {
-      const sameOpenDay = state.summary?.day.id === action.summary.day.id && action.summary.day.status === 'OPEN'
+      const open = action.summary.day.status === 'OPEN'
+      const sameOpenDay = state.summary?.day.id === action.summary.day.id && open
+      const keepCount = open && state.countedDayId === action.summary.day.id
       return {
         ...state,
         load: 'ready',
         offlineMessage: null,
         summary: action.summary,
-        counted: sameOpenDay ? state.counted : '',
+        counted: keepCount ? state.counted : '',
+        countedDayId: keepCount ? state.countedDayId : null,
         dialog: sameOpenDay ? state.dialog : null,
       }
     }
     case 'noDay':
-      return { ...state, load: 'none', offlineMessage: null, summary: null, counted: '', dialog: null }
+      return { ...state, load: 'none', offlineMessage: null, summary: null, counted: '', countedDayId: null, dialog: null }
     case 'failed':
       return {
         ...state,
@@ -103,7 +125,7 @@ export function dayEndReducer(state: DayEndState, action: DayEndAction): DayEndS
         flash: { kind: 'error', text: action.message, seq: (state.flash?.seq ?? 0) + 1 },
       }
     case 'counted':
-      return { ...state, counted: action.text }
+      return { ...state, counted: action.text, countedDayId: state.summary?.day.id ?? state.countedDayId }
     case 'dialog':
       return { ...state, dialog: action.dialog }
     case 'flash':

@@ -1,6 +1,6 @@
 # FL2 POS — Frontend State Reference
 
-As of Phase 11 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders, Phase 7 Day End, Phase 8 Expenses and peak controls, Phase 9 Purchase / GRN, Phase 10 Inventory Catalog and case-based GRN, Phase 11 peak start baseline and Day End sales breakdown, Phase 12 Enter → qty → pay, payment arrow keys and server-side peak undo; plan `docs/ui/phase12-billing-speed-plan.md`). Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
+As of Phase 11 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders, Phase 7 Day End, Phase 8 Expenses and peak controls, Phase 9 Purchase / GRN, Phase 10 Inventory Catalog and case-based GRN, Phase 11 peak start baseline and Day End sales breakdown, Phase 12 Enter → qty → pay, payment arrow keys and server-side peak undo; plan `docs/ui/phase12-billing-speed-plan.md`, Phase 13 peak end live split, Day End tally adjustments and Day End ⇄ Expenses; plan `docs/ui/phase13-peak-close-tally-plan.md`). Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
 
 - **Stack:** Vite 8, React 19, TypeScript, Tailwind CSS 4 (`@tailwindcss/vite`), Lucide icons, Vitest. No router, no state library.
 - **Run:** `npm run api:dev` at the repo root (API on `127.0.0.1:4310`), then `npm run dev` in `frontend/` (http://localhost:5173). Vite proxies `/api` to the API.
@@ -52,11 +52,13 @@ main.tsx                      StrictMode → <App/>, imports index.css (Tailwind
       ├─ header               day + opened time, BLOCKED (n) / READY TO CLOSE / LOCKED / NO DAY OPEN badge
       ├─ Checklist (left)     open bills (→ Billing / Captain Orders), running peak (End peak…), waiters owing
       │                       (Repayment…); ended peak sessions with their variance
-      ├─ CashCount (right)    breakdown (float, normal cash, peak cash, waiter cash, −expenses, EXPECTED, UPI info),
-      │                       counted-cash RupeeField, live variance (short / over / exact), Confirm & Lock Day (F9)
+      ├─ CashCount (right)    breakdown (float, normal cash, peak cash, waiter cash, −expenses, ±tally adjustments, EXPECTED,
+      │                       UPI info), "Add expense" (F6 → Expenses, Esc returns with the count kept), counted-cash
+      │                       RupeeField, live variance (short / over / exact), Confirm & Lock Day (F9)
       ├─ ClosedDayCard        frozen figures once locked
       ├─ OpenDayPanel         opening float + Enter → POST /api/days (after a lock, or when no day exists)
-      └─ dialogs (Modal)      ConfirmLock (Enter), RepayDialog (amount, C/U), PeakEndDialog (shared)
+      └─ dialogs (Modal)      ConfirmLock (Enter), RepayDialog (amount, C/U), PeakEndDialog (shared),
+                              TallyDialog (F7: UPI → Cash / Cash → UPI, amount, required reason, live after-figures), void-adjustment confirm
    └─ ExpenseScreen           useReducer(expenseReducer); GET /api/context + /api/expenses polled 15 s
       ├─ form (left)          category chips ×6 (keys 1–6), amount RupeeField (lg), note, "Paid by <till cashier>" (read-only),
       │                       Record expense (Enter); keeps the category for the next entry
@@ -90,11 +92,14 @@ main.tsx                      StrictMode → <App/>, imports index.css (Tailwind
 
 Shared: components/peak/PeakControls.tsx: PeakBanner, StartPeakButton, PeakStartDialog (expected cash / UPI from
         /api/peak/baseline with their terms, then cash + UPI readings with a live short / over / matches hint → start),
-        PeakEndDialog (closing readings → end → result view: expected, cash/UPI change, actual, variance; Enter closes).
+        PeakEndDialog (re-reads /api/context on open; closing readings with a live derived peak UPI / cash split and
+        variance preview (`peakSplit`, display only) → end → result view: expected, cash/UPI change, actual, variance; Enter closes).
         Each screen gives the end dialog a session snapshot, so it outlives the session to show the result.
         components/RupeeField.tsx: rupee input shared by Day End, Expenses and the peak dialogs.
         components/dayend/SalesBreakdownCard.tsx: Day End sales table (above the cash count on an open day, under the
-        closed-day card otherwise).
+        closed-day card otherwise). Phase 13: adjusted Normal cash / UPI with "system ₹X" notes, the day's tally
+        adjustments (void on an open day) and "Adjust Cash ⇄ UPI…" (F7).
+        components/dayend/TallyDialog.tsx: the tally modal (pure helpers in dayend/tallyForm.ts).
 ```
 
 | File | Exports |
@@ -122,9 +127,10 @@ Shared: components/peak/PeakControls.tsx: PeakBanner, StartPeakButton, PeakStart
 | `catalog/catalogReducer.ts` | `catalogReducer`, `initialCatalogState`, `catalogRows`, `suggestPrefix`, `skuCodePreview`, `formError`, `newProductPayload`, `productPatch`, `addSkuPayload`, `skuPatch`, `deactivates`, `conflictField`, `DEFAULT_CASE_SIZE` |
 | `billing/billingReducer.ts` (Phase 12) | adds `cancelPlan` |
 | `billing/payment.ts` (Phase 12) | adds `moveOption` |
-| `peak/peakMath.ts` | `parseReadings`, `describeVariance`, `compareReading`, `describeBaseline` |
+| `peak/peakMath.ts` | `parseReadings`, `describeVariance`, `compareReading`, `describeBaseline`, `peakSplit` (Phase 13) |
+| `dayend/tallyForm.ts` | `EMPTY_TALLY`, `MAX_REASON`, `tallyResult`, `describeShift` |
 | `dayend/salesRows.ts` | `salesCard` (rows, repayments, warnings) |
-| `dayend/dayEndReducer.ts` | `dayEndReducer`, `initialDayEndState`, `dayEndView`, `blockerCount`, `openCounterBills`, `countedPaise`, `variancePreview`, `lockBlock` |
+| `dayend/dayEndReducer.ts` | `dayEndReducer`, `initialDayEndState`, `initialDayEndStateFrom` (Phase 13 count draft kept by App), `dayEndView`, `blockerCount`, `openCounterBills`, `countedPaise`, `variancePreview`, `lockBlock` |
 
 Only the Reports tile still calls `runStub`; every other tile (and F1/F2/F9, which open billing) opens its screen.
 
@@ -139,7 +145,7 @@ Only the Reports tile still calls `runStub`; every other tile (and F1/F2/F9, whi
 - **Selectors:** `dayEndView` → `LOADING | OFFLINE | NO_DAY | OPEN | CLOSED`. `blockerCount` counts each open bill, the running peak (its `PEAK_UNSETTLED` bills count once, with it) and each owing waiter. `variancePreview` = counted − expected, display only; the server freezes its own figure. `lockBlock` gives the reason Confirm & Lock is disabled.
 - The typed count survives polls of the same open day and is cleared when another day loads. Every checklist action re-reads the summary afterwards. A failed poll keeps the last summary and flashes the error.
 - **Sales breakdown (Phase 11):** Cash / UPI / Credit / Total for Normal bills, Peak sales (UPI from the readings, cash = sales − UPI; credit "—") and Total sales, plus Waiter repayments kept apart as credit collected. Amber notes for a still-running peak and for a negative derived peak cash; each ended peak in the checklist also shows its sales, with the same warning.
-- **Keys:** type the count (the field is focused) · Enter or F9 asks to lock · Enter confirms in the modal · Esc dashboard. The repayment dialog takes C/U for the tender; Enter records it.
+- **Keys:** type the count (the field is focused) · Enter or F9 asks to lock · Enter confirms in the modal · F6 add expense (Esc on Expenses returns here) · F7 tally adjustment · Esc dashboard. The repayment dialog takes C/U for the tender; Enter records it.
 
 **Expense screen** (`expenseReducer`, pure and unit-tested):
 - **State:** `load` (`loading` / `ready` / `offline` / `noDay`), `till` (cashier name and day for the header), `entries`, the form (`category`, `amount` text, `note`), `submitting`, `confirmVoidId`, `flash`.

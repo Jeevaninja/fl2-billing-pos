@@ -40,9 +40,14 @@ export interface PeakSessionView extends PeakSession {
    * cash) + in-peak cash tenders and waiter cash − in-peak cash expenses. See pos_peak_expected_drawer_cash.
    */
   expectedDrawerCashPaise: Paise;
+  /** Σ the session's peak bill totals so far (Phase 13: the end dialog's live split). */
+  runningSalesPaise: Paise;
+  /** UPI recorded inside the window on normal bills and waiter repayments (it moves the UPI reading too). */
+  runningInWindowUpiPaise: Paise;
 }
 
-export type PeakSessionViewRow = PeakSessionRow & { running_expected_paise: DbInt; expected_drawer_cash_paise: DbInt };
+export type PeakSessionViewRow = PeakSessionRow &
+  Record<'running_expected_paise' | 'expected_drawer_cash_paise' | 'running_sales_paise' | 'running_in_window_upi_paise', DbInt>;
 
 /** Maps a running session from v_peak_sessions. */
 export function mapPeakSessionView(row: PeakSessionViewRow): PeakSessionView {
@@ -50,6 +55,8 @@ export function mapPeakSessionView(row: PeakSessionViewRow): PeakSessionView {
     ...mapPeakSession(row),
     runningExpectedPaise: toPaise(row.running_expected_paise),
     expectedDrawerCashPaise: toPaise(row.expected_drawer_cash_paise),
+    runningSalesPaise: toPaise(row.running_sales_paise),
+    runningInWindowUpiPaise: toPaise(row.running_in_window_upi_paise),
   };
 }
 

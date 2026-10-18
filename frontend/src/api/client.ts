@@ -20,6 +20,7 @@ import type {
   PeakSession,
   PeakStartBaseline,
   PeakUndoResult,
+  TenderAdjustment,
   ProductPatch,
   ReceiptLinePayload,
   SkuLookup,
@@ -125,6 +126,11 @@ export const api = {
 
   /** The open day's checklist and cash breakdown, else the last closed day's (404 before any day). */
   dayEnd: () => call<DayEndSummary>('GET', '/api/day-end'),
+  /** Tally tool: positive cashDelta moves revenue UPI → Cash; the UPI side is always −cashDelta. */
+  adjustTenderSplit: (dayId: string, cashDelta: Paise, reason: string) =>
+    call<TenderAdjustment>('POST', `/api/days/${encodeURIComponent(dayId)}/tender-adjustments`, { cashDelta, reason }),
+  voidTenderAdjustment: (adjustmentId: string) =>
+    call<TenderAdjustment>('POST', `/api/tender-adjustments/${encodeURIComponent(adjustmentId)}/void`),
   closeDay: (dayId: string, countedCash: Paise) => call<DayEndSummary>('POST', `/api/days/${encodeURIComponent(dayId)}/close`, { countedCash }),
   openDay: (openingFloat: Paise) => call<DaySummary>('POST', '/api/days', { openingFloat }),
 

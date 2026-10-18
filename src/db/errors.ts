@@ -41,6 +41,7 @@ const CONSTRAINT_CODES: Readonly<Record<string, PosErrorCode>> = {
   waiter_payments_reverses_unique: PosErrorCode.REVERSAL_RULE,
   waiter_payments_reversal_shape: PosErrorCode.REVERSAL_RULE,
   cash_expenses_reverses_unique: PosErrorCode.REVERSAL_RULE,
+  tender_adjustments_reverses_unique: PosErrorCode.REVERSAL_RULE,
   cash_expenses_reversal_shape: PosErrorCode.REVERSAL_RULE,
   business_days_cash_count_on_close: PosErrorCode.ILLEGAL_TRANSITION,
   bills_peak_counter_only: PosErrorCode.ILLEGAL_TRANSITION,

@@ -64,6 +64,16 @@ export function paise(value: unknown, name: string): bigint {
   return BigInt(value);
 }
 
+const SIGNED_PAISE = /^-?\d{1,18}$/;
+
+/** Signed whole paise as a decimal string, e.g. "-50000" (a movement that can go either way). */
+export function signedPaise(value: unknown, name: string): bigint {
+  if (typeof value !== 'string' || !SIGNED_PAISE.test(value)) {
+    throw new BadRequestError(`${name} must be a string of whole paise, e.g. "50000" or "-50000"`);
+  }
+  return BigInt(value);
+}
+
 export function optPaise(value: unknown, name: string): bigint | undefined {
   return value === undefined ? undefined : paise(value, name);
 }

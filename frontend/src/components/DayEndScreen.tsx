@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from 'react'
 import { ArrowLeft, CheckCircle2, CircleAlert, Lock, RefreshCw, Sunrise, WifiOff } from 'lucide-react'
 import { ApiError, api } from '../api/client'
-import type { CounterTender, DayEndSummary, OwingWaiter, Paise, PeakSessionView } from '../api/types'
+import type { CounterTender, DayEndSummary, OwingWaiter, Paise, PeakSessionView, TenderAdjustmentEntry } from '../api/types'
 import { FlashLine } from '../billing/BillingPanels'
 import { counterErrorMessage } from '../billing/errors'
 import { Modal } from '../billing/Modal'
@@ -11,15 +11,18 @@ import {
   countedPaise,
   dayEndReducer,
   dayEndView,
-  initialDayEndState,
+  initialDayEndStateFrom,
   lockBlock,
+  type CountDraft,
   openCounterBills,
   variancePreview,
 } from '../dayend/dayEndReducer'
 import { useGlobalShortcuts } from '../hooks/useGlobalShortcuts'
 import { beep } from '../lib/beep'
 import { formatPaise, parseRupeesToPaise } from '../lib/money'
+import { describeShift } from '../dayend/tallyForm'
 import { SalesBreakdownCard } from './dayend/SalesBreakdownCard'
+import { TallyDialog } from './dayend/TallyDialog'
 import { PeakEndDialog } from './peak/PeakControls'
 import { RupeeField } from './RupeeField'
 import { FOCUS_RING, keepFocus } from '../lib/ui'
@@ -31,6 +34,11 @@ interface DayEndScreenProps {
   onExit: () => void
   onOpenBilling: () => void
   onOpenCaptainOrders: () => void
+  /** F6: add a late expense; the Expense screen's Esc comes back here. */
+  onOpenExpenses: () => void
+  /** The count typed before the screen was left, and where to keep it as it changes. */
+  countDraft: CountDraft | null
+  onCountDraft: (draft: CountDraft | null) => void
 }
 
 /**
@@ -38,8 +46,8 @@ interface DayEndScreenProps {
  * balances) with actions to clear them, the expected-cash breakdown, the drawer count and the lock.
  * Once locked — or when no day is open — the screen offers Day Open with an opening float.
  */
-export default function DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrders }: DayEndScreenProps) {
-  const [state, dispatch] = useReducer(dayEndReducer, initialDayEndState)
+export default function DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrders, onOpenExpenses, countDraft, onCountDraft }: DayEndScreenProps) {
+  const [state, dispatch] = useReducer(dayEndReducer, countDraft, initialDayEndStateFrom)
   const [busy, setBusy] = useState(false)
   const view = dayEndView(state)
   const summary = state.summary
@@ -47,6 +55,11 @@ export default function DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrder
   useEffect(() => {
     stateRef.current = state
   })
+
+  // Keep the typed count with the App, so a trip to Expenses (F6) and back doesn't lose it.
+  useEffect(() => {
+    onCountDraft(state.countedDayId && state.counted !== '' ? { dayId: state.countedDayId, counted: state.counted } : null)
+  }, [state.counted, state.countedDayId, onCountDraft])
 
   const flash = useCallback((kind: 'ok' | 'error', text: string) => {
     beep(kind)
@@ -115,6 +128,24 @@ export default function DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrder
       return `Day ${day.businessDate} opened with a ${formatPaise(day.openingFloatPaise)} float`
     })
 
+  const adjustTender = (cashDelta: Paise, reason: string) => {
+    const dayId = stateRef.current.summary?.day.id
+    if (!dayId) return
+    dispatch({ type: 'dialog', dialog: null })
+    void write(async () => {
+      await api.adjustTenderSplit(dayId, cashDelta, reason)
+      return `Tally adjusted: ${describeShift(cashDelta)} · total sales unchanged`
+    })
+  }
+
+  const voidAdjustment = (adjustment: TenderAdjustmentEntry) => {
+    dispatch({ type: 'dialog', dialog: null })
+    void write(async () => {
+      await api.voidTenderAdjustment(adjustment.id)
+      return `Voided: ${describeShift(adjustment.cashDeltaPaise)}`
+    })
+  }
+
   const askLock = useCallback(() => {
     const reason = lockBlock(stateRef.current)
     if (reason) flash('error', reason)
@@ -124,7 +155,14 @@ export default function DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrder
   // ── Keyboard ───────────────────────────────────────────────────────────────
 
   const keysLive = state.dialog === null
-  useGlobalShortcuts({ F9: () => view === 'OPEN' && askLock() }, keysLive)
+  useGlobalShortcuts(
+    {
+      F6: () => view === 'OPEN' && onOpenExpenses(),
+      F7: () => view === 'OPEN' && dispatch({ type: 'dialog', dialog: { kind: 'tally' } }),
+      F9: () => view === 'OPEN' && askLock(),
+    },
+    keysLive,
+  )
   useEffect(() => {
     if (!keysLive) return
     function onKeyDown(event: KeyboardEvent) {
@@ -205,7 +243,7 @@ export default function DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrder
             ) : (
               <>
                 <ClosedDayCard summary={summary} />
-                <SalesBreakdownCard sales={summary.sales} />
+                <SalesBreakdownCard sales={summary.sales} adjustments={summary.tenderAdjustments} />
               </>
             )}
           </aside>
@@ -219,7 +257,12 @@ export default function DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrder
               {view === 'OPEN' ? (
                 <>
                   <div className="mx-auto mb-4 max-w-2xl">
-                    <SalesBreakdownCard sales={summary.sales} />
+                    <SalesBreakdownCard
+                      sales={summary.sales}
+                      adjustments={summary.tenderAdjustments}
+                      onAdjust={() => dispatch({ type: 'dialog', dialog: { kind: 'tally' } })}
+                      onVoid={(adjustment) => dispatch({ type: 'dialog', dialog: { kind: 'voidAdjustment', adjustment } })}
+                    />
                   </div>
                   <CashCount
                     summary={summary}
@@ -229,6 +272,7 @@ export default function DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrder
                     busy={busy}
                     onCounted={(text) => dispatch({ type: 'counted', text })}
                     onLock={askLock}
+                    onAddExpense={onOpenExpenses}
                   />
                 </>
               ) : (
@@ -241,6 +285,35 @@ export default function DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrder
 
       {dialog?.kind === 'confirm' && summary && (
         <ConfirmLock summary={summary} counted={countedPaise(state) ?? 0n} variance={variancePreview(state) ?? 0n} onConfirm={lockDay} onClose={closeDialog} />
+      )}
+      {dialog?.kind === 'tally' && summary && (
+        <TallyDialog normal={summary.sales.normal} busy={busy} onConfirm={adjustTender} onClose={closeDialog} />
+      )}
+      {dialog?.kind === 'voidAdjustment' && (
+        <Modal
+          title="Void this adjustment?"
+          onClose={closeDialog}
+          onKey={(e) => {
+            if (e.key !== 'Enter') return false
+            voidAdjustment(dialog.adjustment)
+            return true
+          }}
+          footer={
+            <div className="flex justify-end gap-3">
+              <button type="button" onClick={closeDialog} className="rounded-md border-2 border-zinc-600 px-4 py-2 font-bold">
+                Keep (Esc)
+              </button>
+              <button type="button" onClick={() => voidAdjustment(dialog.adjustment)} className="rounded-md bg-rose-500 px-4 py-2 font-bold text-zinc-950">
+                Void (Enter)
+              </button>
+            </div>
+          }
+        >
+          <p>
+            <span className="font-mono font-bold">{describeShift(dialog.adjustment.cashDeltaPaise)}</span> — {dialog.adjustment.reason}
+          </p>
+          <p className="mt-2 text-sm text-zinc-400">A reversing entry is added; the original stays in the audit log.</p>
+        </Modal>
       )}
       {repayWaiter && <RepayDialog waiter={repayWaiter} onConfirm={repay} onClose={closeDialog} />}
       {dialog?.kind === 'endPeak' && (
@@ -407,9 +480,10 @@ interface CashCountProps {
   busy: boolean
   onCounted: (text: string) => void
   onLock: () => void
+  onAddExpense: () => void
 }
 
-function CashCount({ summary, counted, variance, block, busy, onCounted, onLock }: CashCountProps) {
+function CashCount({ summary, counted, variance, block, busy, onCounted, onLock, onAddExpense }: CashCountProps) {
   const b = summary.breakdown
   return (
     <div className="mx-auto flex max-w-xl flex-col gap-4">
@@ -419,6 +493,7 @@ function CashCount({ summary, counted, variance, block, busy, onCounted, onLock 
         <Row label="Peak cash (counted)" value={b.peakCashPaise} />
         <Row label="Waiter cash repayments" value={b.waiterCashPaise} />
         <Row label="Cash expenses" value={-b.cashExpensesPaise} />
+        {b.tenderAdjustmentPaise !== 0n && <Row label="Tally adjustments (Cash ⇄ UPI)" value={b.tenderAdjustmentPaise} />}
         <div className="mt-2 flex items-baseline justify-between border-t-2 border-zinc-700 pt-2">
           <dt className="font-sans text-sm font-bold tracking-widest text-zinc-400 uppercase">Expected cash</dt>
           <dd className="text-3xl font-black tabular-nums">{formatPaise(b.expectedCashPaise)}</dd>
@@ -428,6 +503,18 @@ function CashCount({ summary, counted, variance, block, busy, onCounted, onLock 
           <dd className="tabular-nums">{formatPaise(b.upiTotalPaise)}</dd>
         </div>
       </dl>
+
+      <button
+        type="button"
+        {...keepFocus}
+        onClick={onAddExpense}
+        className={`-mt-2 flex items-center justify-between rounded-md border-2 border-dashed border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:border-zinc-400 ${FOCUS_RING}`}
+      >
+        Forgot an expense? Add it — you&rsquo;ll come straight back with your count kept
+        <span className="flex items-center gap-1 font-bold">
+          Add expense <Kbd>F6</Kbd>
+        </span>
+      </button>
 
       <RupeeField
         label="Counted cash in the drawer"
@@ -493,6 +580,7 @@ function ClosedDayCard({ summary }: { summary: DayEndSummary }) {
         <Row label="Peak cash (counted)" value={breakdown.peakCashPaise} />
         <Row label="Waiter cash repayments" value={breakdown.waiterCashPaise} />
         <Row label="Cash expenses" value={-breakdown.cashExpensesPaise} />
+        {breakdown.tenderAdjustmentPaise !== 0n && <Row label="Tally adjustments (Cash ⇄ UPI)" value={breakdown.tenderAdjustmentPaise} />}
         <div className="mt-2 border-t-2 border-zinc-700 pt-2">
           <Row label="Expected cash" value={day.expectedCashPaise ?? breakdown.expectedCashPaise} />
           {day.countedCashPaise !== null && <Row label="Counted cash" value={day.countedCashPaise} />}

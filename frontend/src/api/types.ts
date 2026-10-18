@@ -87,6 +87,10 @@ export interface PeakSessionView {
   runningExpectedPaise: Paise
   /** Cash that should be in the drawer now (peak sales counted as cash). */
   expectedDrawerCashPaise: Paise
+  /** Σ peak bill totals so far. */
+  runningSalesPaise: Paise
+  /** UPI recorded inside the window (normal bills, waiter repayments): it moves the UPI reading too. */
+  runningInWindowUpiPaise: Paise
 }
 
 export interface CounterContext {
@@ -161,6 +165,8 @@ export interface CashBreakdown {
   peakCashPaise: Paise
   waiterCashPaise: Paise
   cashExpensesPaise: Paise
+  /** Σ tally adjustments' cash deltas (positive = UPI revenue reclassified as cash). */
+  tenderAdjustmentPaise: Paise
   expectedCashPaise: Paise
   upiTotalPaise: Paise
 }
@@ -185,7 +191,8 @@ export interface PeakSessionCash {
 
 /** How the day's revenue was collected; ended peak sessions only. */
 export interface SalesBreakdown {
-  normal: { cashPaise: Paise; upiPaise: Paise; creditPaise: Paise; totalPaise: Paise }
+  /** cash / upi include tally adjustments; systemCash / systemUpi are as recorded on bills. */
+  normal: { cashPaise: Paise; upiPaise: Paise; creditPaise: Paise; totalPaise: Paise; systemCashPaise: Paise; systemUpiPaise: Paise }
   peak: { salesPaise: Paise; cashPaise: Paise; upiPaise: Paise; sessionCount: number; runningSessionNo: number | null }
   waiterRepayments: { cashPaise: Paise; upiPaise: Paise }
   total: { cashPaise: Paise; upiPaise: Paise; creditPaise: Paise; salesPaise: Paise }
@@ -198,6 +205,25 @@ export interface DayEndSummary {
   breakdown: CashBreakdown
   sales: SalesBreakdown
   peakSessions: PeakSessionCash[]
+  /** Tally adjustments, newest first (originals, with voidedAt). */
+  tenderAdjustments: TenderAdjustmentEntry[]
+}
+
+/** A Cash ⇄ UPI reclassification of normal-bill revenue: cashDelta + upiDelta = 0. */
+export interface TenderAdjustment {
+  id: string
+  businessDayId: string
+  cashDeltaPaise: Paise
+  upiDeltaPaise: Paise
+  systemCashPaise: Paise
+  systemUpiPaise: Paise
+  reason: string
+  reversesAdjustmentId: string | null
+  createdAt: string
+}
+
+export interface TenderAdjustmentEntry extends TenderAdjustment {
+  voidedAt: string | null
 }
 
 /** POST /api/peak/undo-last: the reversal and the scan it voided. */
@@ -224,7 +250,18 @@ export interface PeakStartBaseline {
 
 export interface PeakReconciliation {
   session: { id: string; sessionNo: number; variancePaise: Paise | null }
-  breakdown: { expectedPaise: Paise; actualPaise: Paise; cashDeltaPaise: Paise; upiDeltaPaise: Paise; variancePaise: Paise }
+  breakdown: {
+    expectedPaise: Paise
+    actualPaise: Paise
+    cashDeltaPaise: Paise
+    upiDeltaPaise: Paise
+    variancePaise: Paise
+    /** Σ the session's peak bills (its sales). */
+    peakBillsPaise: Paise
+    /** UPI taken inside the window on normal bills / waiter repayments. */
+    billUpiPaise: Paise
+    waiterUpiPaise: Paise
+  }
 }
 
 export interface PeakSession {

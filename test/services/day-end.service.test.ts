@@ -157,6 +157,7 @@ describe('DayEndService', () => {
         peakCashPaise: 700_00n,
         waiterCashPaise: 200_00n,
         cashExpensesPaise: 150_00n, // 150 + 40 − 40; the in-peak 50 is inside the counted delta
+        tenderAdjustmentPaise: 0n,
         expectedCashPaise: PAISE.full + 700_00n + 200_00n - 150_00n,
         upiTotalPaise: 100_00n + 200_00n, // 700 − 700 + waiter 100 + peak delta 200
       });

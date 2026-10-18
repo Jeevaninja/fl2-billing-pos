@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 
-export type ShortcutKey = 'F1' | 'F2' | 'F4' | 'F8' | 'F9'
+export type ShortcutKey = 'F1' | 'F2' | 'F4' | 'F6' | 'F7' | 'F8' | 'F9'
 export type ShortcutMap = Partial<Record<ShortcutKey, () => void>>
 
 /**

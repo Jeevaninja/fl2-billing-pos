@@ -1,5 +1,5 @@
 /** Pure helpers behind the peak start / end dialogs. Readings are whole paise; no floats. */
-import type { Paise, PeakStartBaseline } from '../api/types'
+import type { Paise, PeakSessionView, PeakStartBaseline } from '../api/types'
 import { formatPaise, parseRupeesToPaise } from '../lib/money'
 
 export type ReadingsResult = { ok: true; cash: Paise; upi: Paise } | { ok: false; error: string }
@@ -68,4 +68,28 @@ export function describeBaseline(b: PeakStartBaseline): { cash: string; upi: str
   ]
   const upi = upiTerms.every(([, v]) => v === 0n) ? 'no UPI recorded today yet' : join(upiTerms.filter(([, v]) => v !== 0n))
   return { cash, upi }
+}
+
+export interface PeakSplit {
+  salesPaise: Paise
+  /** UPI reading − start UPI − UPI recorded in the window; null until the UPI reading is typed. */
+  upiPaise: Paise | null
+  /** sales − derived UPI (so cash + UPI = sales); null with the UPI. */
+  cashPaise: Paise | null
+  /** (cash Δ + UPI Δ) − running expected; null until both readings are typed. Display only. */
+  variancePaise: Paise | null
+}
+
+type SplitSession = Pick<PeakSessionView, 'startCashPaise' | 'startUpiPaise' | 'runningExpectedPaise' | 'runningSalesPaise' | 'runningInWindowUpiPaise'>
+
+/** The End Peak dialog's live split, as the closing readings are typed. */
+export function peakSplit(session: SplitSession, cashText: string, upiText: string): PeakSplit {
+  const typed = (text: string) => (text.trim() === '' ? null : parseRupeesToPaise(text))
+  const cash = typed(cashText)
+  const upi = typed(upiText)
+  const salesPaise = session.runningSalesPaise
+  if (upi === null) return { salesPaise, upiPaise: null, cashPaise: null, variancePaise: null }
+  const upiPaise = upi - session.startUpiPaise - session.runningInWindowUpiPaise
+  const variancePaise = cash === null ? null : cash - session.startCashPaise + (upi - session.startUpiPaise) - session.runningExpectedPaise
+  return { salesPaise, upiPaise, cashPaise: salesPaise - upiPaise, variancePaise }
 }

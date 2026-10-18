@@ -34,6 +34,7 @@ import {
   optOneOf,
   optPaise,
   paise,
+  signedPaise,
   str,
 } from './json.js';
 import { created, createJsonHandler, HttpError, ok, type RequestContext, route, type Route } from './routing.js';
@@ -214,6 +215,12 @@ function buildRoutes({ db, cashierId }: ApiConfig): Route[] {
     route('POST', '/api/days', async ({ body }) => created(await dayEnd.openBusinessDay(paise(body.openingFloat, 'openingFloat'), cashierId))),
     route('POST', '/api/days/:dayId/close', async ({ params, body }) =>
       ok(await dayEnd.closeBusinessDay(id(params.dayId, 'dayId'), paise(body.countedCash, 'countedCash'), cashierId)),
+    ),
+    route('POST', '/api/days/:dayId/tender-adjustments', async ({ params, body }) =>
+      created(await dayEnd.adjustTenderSplit(id(params.dayId, 'dayId'), signedPaise(body.cashDelta, 'cashDelta'), str(body.reason, 'reason'), cashierId)),
+    ),
+    route('POST', '/api/tender-adjustments/:adjustmentId/void', async ({ params }) =>
+      created(await dayEnd.voidTenderAdjustment(id(params.adjustmentId, 'adjustmentId'), cashierId)),
     ),
     route('GET', '/api/expenses', async () => {
       const day = await queries.getCounterContext(cashierId);

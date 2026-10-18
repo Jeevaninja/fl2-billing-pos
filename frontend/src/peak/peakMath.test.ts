@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PeakStartBaseline } from '../api/types'
-import { compareReading, describeBaseline, describeVariance, parseReadings } from './peakMath'
+import { compareReading, describeBaseline, describeVariance, parseReadings, peakSplit } from './peakMath'
 
 describe('parseReadings', () => {
   it('needs both drawer readings as rupees; ₹0 is a valid reading', () => {
@@ -63,5 +63,42 @@ describe('describeBaseline', () => {
     const quiet = { ...base, openingFloatPaise: 0n, normalCashPaise: 0n, waiterCashPaise: 0n, cashExpensesPaise: 0n, billUpiPaise: 0n, waiterUpiPaise: 0n }
     expect(describeBaseline(quiet)).toEqual({ cash: 'float ₹0.00', upi: 'no UPI recorded today yet' })
     expect(describeBaseline({ ...quiet, billUpiPaise: -200_00n, peakUpiPaise: 900_00n }).upi).toBe('bills −₹200.00 + earlier peaks ₹900.00')
+  })
+})
+
+describe('peakSplit', () => {
+  // Started with ₹2,000 cash / ₹1,300 UPI; ₹11,400 of peak sales; ₹150 UPI taken on a normal bill
+  // inside the window; expected collection ₹11,550.
+  const session = {
+    startCashPaise: 2000_00n,
+    startUpiPaise: 1300_00n,
+    runningExpectedPaise: 11550_00n,
+    runningSalesPaise: 11400_00n,
+    runningInWindowUpiPaise: 150_00n,
+  }
+
+  it('shows only the sales until the UPI reading is typed', () => {
+    expect(peakSplit(session, '9300', '')).toEqual({ salesPaise: 11400_00n, upiPaise: null, cashPaise: null, variancePaise: null })
+    expect(peakSplit(session, '', 'abc')).toMatchObject({ upiPaise: null })
+  })
+
+  it('derives UPI from the reading less the in-window UPI, and cash as sales − UPI', () => {
+    const split = peakSplit(session, '', '5550')
+    expect(split).toEqual({ salesPaise: 11400_00n, upiPaise: 4100_00n, cashPaise: 7300_00n, variancePaise: null })
+    expect((split.cashPaise ?? 0n) + (split.upiPaise ?? 0n)).toBe(split.salesPaise)
+  })
+
+  it('previews the variance once both readings are typed', () => {
+    expect(peakSplit(session, '9300', '5550').variancePaise).toBe(0n)
+    expect(peakSplit(session, '9250', '5550').variancePaise).toBe(-50_00n)
+    expect(peakSplit(session, '9300', '5,560.50').variancePaise).toBe(10_50n)
+  })
+
+  it('balances for any UPI reading, even one above the sales (negative cash)', () => {
+    for (const upi of ['1300', '1450', '3000', '20000']) {
+      const s = peakSplit(session, '0', upi)
+      expect((s.cashPaise ?? 0n) + (s.upiPaise ?? 0n)).toBe(11400_00n)
+    }
+    expect(peakSplit(session, '0', '20000').cashPaise).toBeLessThan(0n)
   })
 })
