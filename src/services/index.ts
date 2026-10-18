@@ -55,8 +55,10 @@ export type {
 export { PeakSessionService } from './peak-session.service.js';
 export { MAX_RECEIPT_LINES, MAX_RECEIPT_QTY, PurchaseService } from './purchase.service.js';
 export type { ReceiptInput, ReceiptLineInput, StockReceipt, StockReceiptDetail, StockReceiptLine } from './purchase.service.js';
-export { formatKot, PrinterService } from './printer.service.js';
-export type { KotFormat, KotPrinter, KotPrintResult, KotStation, KotTicket } from './printer.service.js';
+export { asciiText, formatKot, formatReceipt, PrinterService, receiptMoney } from './printer.service.js';
+export type { KotFormat, KotPrinter, KotPrintResult, KotStation, KotTicket, ReceiptLine, ReceiptPrinter, ReceiptPrintResult, ReceiptTicket } from './printer.service.js';
+export { OrdersQueries, receiptFor } from './orders.queries.js';
+export type { OrderDetail, OrderPayment, OrderStatus, OrderSummary } from './orders.queries.js';
 export type { PeakBreakdown, PeakReconciliation, PeakStartBaseline } from './peak-session.service.js';
 export { WaiterService } from './waiter.service.js';
 export type { ReceiptAllocation, WaiterBillsSettlement, WaiterReceipt, WaiterRepayment, WaiterSettlement } from './waiter.service.js';

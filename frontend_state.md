@@ -1,10 +1,10 @@
 # FL2 POS — Frontend State Reference
 
-As of Phase 11 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders, Phase 7 Day End, Phase 8 Expenses and peak controls, Phase 9 Purchase / GRN, Phase 10 Inventory Catalog and case-based GRN, Phase 11 peak start baseline and Day End sales breakdown, Phase 12 Enter → qty → pay, payment arrow keys and server-side peak undo; plan `docs/ui/phase12-billing-speed-plan.md`, Phase 13 peak end live split, Day End tally adjustments and Day End ⇄ Expenses; plan `docs/ui/phase13-peak-close-tally-plan.md`, Phase 14 bank deposits; plan `docs/ui/phase14-bank-deposits-plan.md`, Phase 15 multi-tab billing and the waiter sidebar; plan `docs/ui/phase15-billing-tabs-waiter-sidebar-plan.md`, Phase 16 Waiter Ledger (replaces the Captain Orders queue) and the strict Day End waiter-balance blocker; plan `docs/ui/phase16-waiter-ledger-plan.md`). Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
+As of Phase 11 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders, Phase 7 Day End, Phase 8 Expenses and peak controls, Phase 9 Purchase / GRN, Phase 10 Inventory Catalog and case-based GRN, Phase 11 peak start baseline and Day End sales breakdown, Phase 12 Enter → qty → pay, payment arrow keys and server-side peak undo; plan `docs/ui/phase12-billing-speed-plan.md`, Phase 13 peak end live split, Day End tally adjustments and Day End ⇄ Expenses; plan `docs/ui/phase13-peak-close-tally-plan.md`, Phase 14 bank deposits; plan `docs/ui/phase14-bank-deposits-plan.md`, Phase 15 multi-tab billing and the waiter sidebar; plan `docs/ui/phase15-billing-tabs-waiter-sidebar-plan.md`, Phase 16 Waiter Ledger (replaces the Captain Orders queue) and the strict Day End waiter-balance blocker; plan `docs/ui/phase16-waiter-ledger-plan.md`, Phase 17 Orders screen, the header Settings menu and Jump to bill; plan `docs/ui/phase17-orders-plan.md`). Upcoming phases (not built): `docs/roadmap.md`. Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
 
 - **Stack:** Vite 8, React 19, TypeScript, Tailwind CSS 4 (`@tailwindcss/vite`), Lucide icons, Vitest. No router, no state library.
 - **Run:** `npm run api:dev` at the repo root (API on `127.0.0.1:4310`), then `npm run dev` in `frontend/` (http://localhost:5173). Vite proxies `/api` to the API.
-- **Check:** `npm test` (Vitest, 187 tests), `npx tsc -b`, `npx oxlint src`, `npm run build`.
+- **Check:** `npm test` (Vitest, 201 tests), `npx tsc -b`, `npx oxlint src`, `npm run build`.
 - **Money:** `bigint` paise end to end. The API client decodes every `…Paise` JSON string to `bigint` and encodes `bigint` back to strings. Display goes through `formatPaise`; cashier input goes through `parseRupeesToPaise`. No floats.
 - **Server is the source of truth:** bills enter screen state only as `BillDetail` responses, so the UI never adds up prices to get a total.
 
@@ -14,13 +14,13 @@ As of Phase 11 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Cap
 
 ```
 main.tsx                      StrictMode → <App/>, imports index.css (Tailwind)
-└─ App                        view: 'dashboard' | 'billing' | 'captain-orders' | 'day-end' | 'expenses' | 'bank-deposits' | 'purchase' | 'catalog'; holds the Recently Used list
+└─ App                        view: 'dashboard' | 'billing' | 'captain-orders' | 'day-end' | 'expenses' | 'bank-deposits' | 'purchase' | 'catalog' | 'orders'; holds the Recently Used list and the one-shot Jump-to-bill targets (billingFocus, ledgerFocus)
    ├─ Dashboard               module tiles + Recently Used rail + key legend footer
-   │  ├─ header               Start peak (F8) button when a day is open and no peak runs
+   │  ├─ header               Start peak (F8) button when a day is open and no peak runs; Settings gear menu (Phase 17): Inventory Catalog
    │  ├─ PeakBanner           amber "PEAK #n running · since · expected drawer total" strip with End peak session (F8)
    │  ├─ day banner           "No business day is open" strip → Day End (context polled 15 s)
    │  ├─ ModuleTile ×8        4 × 2 grid (2 × 4 narrow), equal tiles (Phase 14). Billing, Waiter Ledger (live "n open" Captain-order badge,
-   │  │                       polled 15 s), Expense (live), Bank Deposit (→ BankDepositScreen), Purchase (→ PurchaseScreen), Inventory Catalog (→ CatalogScreen),
+   │  │                       polled 15 s), Expense (live), Bank Deposit (→ BankDepositScreen), Purchase (→ PurchaseScreen), Orders (→ OrdersScreen; Phase 17, in Inventory Catalog's old slot — Catalog moved to the header Settings menu),
    │  │                       Day End (reads "Open Day" and becomes the primary tile when no day is open), Reports
    │  ├─ RailButton ×≤6       most-recently-used actions
    │  └─ LiveClock, Kbd       (components/ui.tsx)
@@ -56,6 +56,15 @@ main.tsx                      StrictMode → <App/>, imports index.css (Tailwind
       │  └─ aside             Settle selected / Settle bill (F9), Receive payment (F7, trusted) or bill-on-bill note, credit note,
       │                       Today's payments (receipts with their allocation lines)
       └─ dialogs              SettleDialog (C / U / L for trusted, Enter), ReceiveDialog (RupeeField, C / U, live allocation preview), MemberDialog
+   └─ OrdersScreen            Phase 17: GET /api/orders (+ /api/context for the till's cashier) polled 10 s; GET /api/orders/:id for the selected bill
+      ├─ filter bar           chips All (A) · Open (O) · Settled (S) · Peak (P) · Voided (V) with counts, waiter filter (W → WaiterMenu),
+      │                       typed bill number (#57 + Enter), FlashLine
+      ├─ OrderList (left)     newest first: bill no, time, who, bottles, total (due for part-paid open bills), status chip; in All / Settled
+      │                       each peak session is one row (⚡ Peak #n · bills · voided) that expands with Enter / → / click
+      ├─ BillPanel (right)    bill header + status, itemised lines (cancellation lines struck through, broken = not restocked), totals,
+      │                       Settlement sentences, Reprint (F8), Jump to bill / Open in Waiter Ledger (F9 / Enter, open bills only)
+      ├─ PeakGroupPanel       a selected session row: time span, bills, bottles, total, voided scans, show / hide its bills
+      └─ dialogs              WaiterMenu, reprint preview (Modal with the exact receipt text)
    └─ DayEndScreen            useReducer(dayEndReducer); GET /api/day-end polled 10 s (paused in dialogs / once locked)
       ├─ header               day + opened time, BLOCKED (n) / READY TO CLOSE / LOCKED / NO DAY OPEN badge
       ├─ Checklist (left)     Phase 16 first row: "Waiters owe ₹X — All waiter balances must be settled to ₹0 before closing."
@@ -121,7 +130,7 @@ Shared: components/peak/PeakControls.tsx: PeakBanner, StartPeakButton, PeakStart
 |---|---|
 | `App.tsx` | `App` (view switch) |
 | `components/Dashboard.tsx` | `Dashboard({ recent, onUse, onOpenBilling })` |
-| `components/dashboard/actions.ts` | `ACTIONS`, `MODULE_TILES`, `DEFAULT_RECENT`, `BILLING_ACTIONS`, `pushRecent`, `runStub`, `PosActionId` |
+| `components/dashboard/actions.ts` | `ACTIONS`, `MODULE_TILES`, `SETTINGS_ACTIONS` (Phase 17), `DEFAULT_RECENT`, `BILLING_ACTIONS`, `pushRecent`, `runStub`, `PosActionId` |
 | `components/ui.tsx` | `Kbd`, `LiveClock` |
 | `billing/BillingScreen.tsx` | `BillingScreen({ onExit })` |
 | `billing/BillingPanels.tsx` | `ScanBar`, `ItemsGrid`, `GridFooter`, `SidePanel`, `PeakTicker`, `PeakSide`, `SizeChip` |
@@ -131,6 +140,8 @@ Shared: components/peak/PeakControls.tsx: PeakBanner, StartPeakButton, PeakStart
 | `billing/BillTabs.tsx` | `BillTabs({ tabs, activeTabId, newBlock, onSwitch, onClose, onNew })` |
 | `billing/WaiterSidebar.tsx` | `WaiterSidebar({ currentWaiterId, onPick, onClose })` |
 | `billing/waiterStats.ts` | `filterWaiters`, `waiterNote`, `sumStats` |
+| `components/OrdersScreen.tsx` | `OrdersScreen({ onExit, onJump })` (Phase 17) |
+| `orders/ordersView.ts` | `FILTERS`, `filterOrders`, `chipCounts`, `waitersInOrders`, `orderRows`, `peakKey`, `moveKey`, `whoLabel`, `STATUS_LABEL`, `settlementLines`, `jumpTarget`, `findByNumber` |
 | `components/WaiterLedgerScreen.tsx` | `WaiterLedgerScreen({ onExit })` (Phase 16; replaces `CaptainOrdersScreen`) |
 | `captain/waiterLedgerReducer.ts` | `waiterLedgerReducer`, `initialWaiterLedgerState`, `selectedWaiter`, `openBills`, `cursorBill`, `billsToSettle`, `selectionTotal`, `allocate`, `receiveError`, `editBlock`, `formatAge` |
 | `components/DayEndScreen.tsx` | `DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrders })` |
@@ -153,6 +164,24 @@ Shared: components/peak/PeakControls.tsx: PeakBanner, StartPeakButton, PeakStart
 | `dayend/dayEndReducer.ts` | `dayEndReducer`, `initialDayEndState`, `initialDayEndStateFrom` (Phase 13 count draft kept by App), `dayEndView`, `blockerCount`, `openCounterBills`, `countedPaise`, `variancePreview`, `lockBlock`, `waiterBalanceBlock` (Phase 16) |
 
 Only the Reports tile still calls `runStub`; every other tile (and F1/F2/F9, which open billing) opens its screen.
+
+**Orders screen** (`orders/ordersView.ts` helpers, pure and unit-tested; Phase 17):
+- **Filters:**
+  - Settled = SETTLED + CANCELLED + PEAK_RECONCILED.
+  - Peak and Voided list every bill individually, so a voided peak scan is always findable.
+  - The waiter filter drops peak bills, which never carry a waiter.
+- **Rows:** `orderRows` folds peak bills into one row per session in All and Settled, placed where its newest bill
+  sits. Group totals skip voided scans.
+- **Selection:** derived during render; it falls back to the first row when the selected one isn't shown.
+- **`jumpTarget`:** applies to open bills only.
+  - This till's counter bills go to Billing with `focusBillId`. After resuming the held tabs, the billing reducer's
+    `focusBill` activates that tab and flashes "Bill n · #no — continue billing".
+  - Captain-app orders go to the Waiter Ledger with `focus { waiterId, billId }`. The reducer's `pendingFocus` selects
+    the waiter, then highlights the bill once its ledger loads.
+  - Another till's counter bill is disabled.
+- **Keys:** ↑/↓ moves · A / O / S / P / V filter · W waiter · digits + Enter bill number · Enter jumps (or expands a
+  peak row) · → / ← expand / collapse · F8 reprint · F9 jump · R refresh · Esc clears typed digits, else back to the
+  dashboard.
 
 **Waiter Ledger screen** (`waiterLedgerReducer`, pure and unit-tested; Phase 16):
 - **State:** `waiters` (server order), `selectedWaiterId`, `ledger` (that waiter's account), `checked` (ticked bill ids), `cursorBillId` (highlighted bill), `selectedKey` (its line), `focus: 'waiters' | 'bills' | 'lines'`, `seenNewest` / `freshWaiterIds` (new-order detection from `newestOpenAt`; nothing is new on the first load), `lastUpdated`, `dialog: 'settle' | 'receive' | 'member' | null`, `flash`.
@@ -293,7 +322,7 @@ No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDow
 
 | File | Contents |
 |---|---|
-| `api/client.ts` | `api.*` (`context`, `lookupSku`, `searchMembers`, `listWaiters`, `getBill`, `captainOrders`, `createBill`, `addItem`, `cancelItem` (optional `restock`), `setMember`, `tagWaiter`, `settle`, `settleWaiter`, `closeEmpty`, `reverse`, `peakSale`, `searchSkus`, `listPurchases`, `postPurchase`, `listCatalog`, `createProduct`, `updateProduct`, `addSku`, `updateSku`, `peakBaseline`, `undoLastPeak`, `listBankDeposits`, `addBankDeposit`, `voidBankDeposit`, `waiterStats` (Phase 15), `waiterLedger`, `waiterLedgerDetail`, `settleWaiterBills`, `receiveWaiterPayment` (Phase 16)), `ApiError` (`status`, `code`, `constraint` on a 409; `NETWORK` when unreachable or the proxy answers non-JSON 5xx), `reviveJson`, `encodeJson` |
+| `api/client.ts` | `api.*` (`context`, `lookupSku`, `searchMembers`, `listWaiters`, `getBill`, `captainOrders`, `createBill`, `addItem`, `cancelItem` (optional `restock`), `setMember`, `tagWaiter`, `settle`, `settleWaiter`, `closeEmpty`, `reverse`, `peakSale`, `searchSkus`, `listPurchases`, `postPurchase`, `listCatalog`, `createProduct`, `updateProduct`, `addSku`, `updateSku`, `peakBaseline`, `undoLastPeak`, `listBankDeposits`, `addBankDeposit`, `voidBankDeposit`, `waiterStats` (Phase 15), `waiterLedger`, `waiterLedgerDetail`, `settleWaiterBills`, `receiveWaiterPayment` (Phase 16), `orders`, `order`, `reprintOrder` (Phase 17)), `ApiError` (`status`, `code`, `constraint` on a 409; `NETWORK` when unreachable or the proxy answers non-JSON 5xx), `reviveJson`, `encodeJson` |
 | `api/types.ts` | Frontend mirrors of the API DTOs (`Bill`, `BillDetail`, `CounterContext`, `SkuLookup`, …) with `Paise = bigint`; dates stay ISO strings |
 | `billing/payment.ts` | `payOptions(detail)`, `planPayment(detail, input)` → counter tenders or waiter settle steps plus change, credit-limit pre-check, `describePlan` |
 | `billing/errors.ts` | `CounterError` (screen-raised), `counterErrorMessage(err)` (PS code → cashier wording) |
@@ -303,7 +332,8 @@ No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDow
 | `lib/beep.ts` | WebAudio scan feedback; silent if audio is unavailable |
 
 **Tests** (`*.test.ts`, Node environment, no DOM):
-- `captain/waiterLedgerReducer.test.ts` (Phase 16: selection, ticks across refreshes, panes, new-order flag, `allocate`, `receiveError`)
+- `orders/ordersView.test.ts` (Phase 17: filters and waiter filter, chip counts, peak grouping and expansion, moves, labels, jump targets, settlement wording)
+- `captain/waiterLedgerReducer.test.ts` (Phase 16: selection, ticks across refreshes, panes, new-order flag, `allocate`, `receiveError`; Phase 17 jump focus)
 - `billingReducer.test.ts` (Phase 15: tab isolation, replies to a non-current tab, drop / close / cycle / limit, resume into tabs, peak per tab), `payment.test.ts` and `waiterStats.test.ts`, with fixtures in `testData.ts`
 - `scanBuffer.test.ts`
 - `money.test.ts`, which also covers the JSON codec

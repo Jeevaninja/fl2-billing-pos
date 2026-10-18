@@ -314,6 +314,15 @@ describe('billing tabs', () => {
     expect(activeTab(again).bill?.bill.id).toBe('bill-1')
   })
 
+  it('focuses the tab holding a bill picked in Orders ("Jump to bill"), leaving others alone', () => {
+    const resumed = billingReducer(initialBillingState, { type: 'contextLoaded', context: context({ openBill: billB, openBills: [billA, billB] }), resume: true })
+    expect(activeTab(resumed).bill?.bill.id).toBe('bill-2')
+    const focused = billingReducer(resumed, { type: 'focusBill', billId: 'bill-1' })
+    expect(activeTab(focused).bill?.bill.id).toBe('bill-1')
+    expect(focused.tabs).toHaveLength(2)
+    expect(billingReducer(focused, { type: 'focusBill', billId: 'nope' })).toBe(focused)
+  })
+
   it('gives a server bill a tab back if its tab vanished while the write was in flight', () => {
     const s = billingReducer(ready(), { type: 'billLoaded', tabId: 99, detail: billB })
     expect(s.tabs.map((t) => t.bill?.bill.id ?? null)).toEqual([null, 'bill-2'])

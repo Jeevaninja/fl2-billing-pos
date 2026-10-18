@@ -6,6 +6,7 @@ import {
   billsToSettle,
   cursorBill,
   initialWaiterLedgerState,
+  initialWaiterLedgerStateFor,
   openBills,
   receiveError,
   selectedWaiter,
@@ -115,6 +116,25 @@ describe('waiterLedgerReducer', () => {
     expect(selectedWaiter(s)?.code).toBe('W02')
     s = waiterLedgerReducer(s, { type: 'listLoaded', waiters: [], at: 5 })
     expect(s.selectedWaiterId).toBeNull()
+  })
+})
+
+describe('jump from Orders', () => {
+  it('selects the waiter and highlights the bill once both load, then forgets the focus', () => {
+    let s = waiterLedgerReducer(initialWaiterLedgerStateFor({ waiterId: 'w-2', billId: 'bill-9' }), { type: 'listLoaded', waiters: [W1, W2], at: 1 })
+    expect(selectedWaiter(s)?.code).toBe('W02')
+    s = waiterLedgerReducer(s, { type: 'ledgerLoaded', ledger: ledgerOf(W2, [bill(8, 1000n), bill(9, 2000n)]) })
+    expect(cursorBill(s)?.bill.billNo).toBe(9)
+    expect(s.focus).toBe('bills')
+    expect(s.pendingFocus).toBeNull()
+    // Later refreshes behave normally.
+    s = waiterLedgerReducer(s, { type: 'listLoaded', waiters: [W1, W2], at: 2 })
+    expect(selectedWaiter(s)?.code).toBe('W02')
+  })
+
+  it('falls back to the normal first selection when the waiter is gone', () => {
+    const s = waiterLedgerReducer(initialWaiterLedgerStateFor({ waiterId: 'w-9', billId: 'x' }), { type: 'listLoaded', waiters: [W1, W2], at: 1 })
+    expect(selectedWaiter(s)?.code).toBe('W01')
   })
 })
 

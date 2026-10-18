@@ -13,14 +13,18 @@ import {
   DayEndService,
   EXPENSE_CATEGORIES,
   NotFoundError,
+  OrdersQueries,
   PeakSessionService,
+  PrinterService,
   PRODUCT_CATEGORIES,
   PurchaseService,
+  receiptFor,
   SIZE_CODES,
   WaiterService,
   type CounterPayment,
   type NewSkuInput,
   type ReceiptLineInput,
+  type ReceiptPrinter,
   type SkuPatch,
 } from '../src/services/index.js';
 import {
@@ -43,6 +47,8 @@ export interface ApiConfig {
   db: SqlDatabase;
   /** Staff row the counter acts as until staff login exists. */
   cashierId: string;
+  /** Receipt printer for Orders reprints; defaults to the console stub. */
+  printer?: ReceiptPrinter;
 }
 
 const COUNTER_TENDERS = ['CASH', 'UPI'] as const satisfies readonly CounterTender[];
@@ -80,7 +86,7 @@ function receiptLine(value: unknown, i: number): ReceiptLineInput {
   };
 }
 
-function buildRoutes({ db, cashierId }: ApiConfig): Route[] {
+function buildRoutes({ db, cashierId, printer = new PrinterService() }: ApiConfig): Route[] {
   const billing = new BillingService(db);
   const peak = new PeakSessionService(db);
   const waiters = new WaiterService(db);
@@ -88,6 +94,7 @@ function buildRoutes({ db, cashierId }: ApiConfig): Route[] {
   const dayEnd = new DayEndService(db);
   const purchases = new PurchaseService(db);
   const catalog = new CatalogService(db);
+  const orders = new OrdersQueries(db);
 
   return [
     route('GET', '/api/health', async () => ok({ ok: true })),
@@ -314,6 +321,14 @@ function buildRoutes({ db, cashierId }: ApiConfig): Route[] {
         isActive: optBool(body.isActive, 'isActive'),
       };
       return ok(await catalog.updateSku(id(params.skuId, 'skuId'), patch));
+    }),
+
+    // ── Orders (Phase 17) ──
+    route('GET', '/api/orders', async () => ok(await orders.listOrders())),
+    route('GET', '/api/orders/:billId', async ({ params }) => ok(await orders.getOrder(id(params.billId, 'billId')))),
+    route('POST', '/api/orders/:billId/reprint', async ({ params }) => {
+      const order = await orders.getOrder(id(params.billId, 'billId'));
+      return created(await printer.printReceipt(receiptFor(order, new Date())));
     }),
 
     // ── Waiter accounts ──

@@ -30,6 +30,8 @@ import type {
   StockReceipt,
   StockReceiptDetail,
   Tender,
+  OrderDetail,
+  OrderSummary,
   WaiterBillsSettlement,
   WaiterLedger,
   WaiterLedgerRow,
@@ -129,6 +131,10 @@ export const api = {
     call<PeakSession>('POST', '/api/peak/sessions', { businessDayId, declaredCash, declaredUpi }),
   endPeak: (sessionId: string, countedCash: Paise, countedUpi: Paise) =>
     call<PeakReconciliation>('POST', `/api/peak/sessions/${encodeURIComponent(sessionId)}/end`, { countedCash, countedUpi }),
+  orders: () => call<OrderSummary[]>('GET', '/api/orders'),
+  order: (billId: string) => call<OrderDetail>('GET', `/api/orders/${encodeURIComponent(billId)}`),
+  /** Prints a DUPLICATE receipt on the counter printer and returns its text. */
+  reprintOrder: (billId: string) => call<{ printedAt: string; text: string }>('POST', `/api/orders/${encodeURIComponent(billId)}/reprint`),
   waiterLedger: () => call<WaiterLedgerRow[]>('GET', '/api/waiter-ledger'),
   waiterLedgerDetail: (waiterId: string) => call<WaiterLedger>('GET', `/api/waiter-ledger/${encodeURIComponent(waiterId)}`),
   /** Mode A: the chosen bills, each for exactly its due, with one tender (all or nothing). */

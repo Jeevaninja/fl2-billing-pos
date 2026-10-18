@@ -25,6 +25,23 @@ describe('local HTTP API', () => {
     expect(body.openBills).toEqual([]);
   });
 
+  it('lists today\'s orders, opens one, and reprints a DUPLICATE receipt to the printer', async () => {
+    const { fx, call } = await start({ printer: { printReceipt: async (t) => ({ printedAt: new Date(), text: `DUPLICATE #${t.billNo}` }) } });
+    const bill = await call('POST', '/api/bills', { mode: 'NORMAL' });
+    await call('POST', `/api/bills/${bill.body.id}/items`, { skuId: fx.sku.quarter, quantity: 2 });
+    await call('POST', `/api/bills/${bill.body.id}/settle`, { payments: [{ mode: 'UPI', amount: String(2 * PRICE.quarter) }] });
+
+    const list = await call('GET', '/api/orders');
+    expect(list).toMatchObject({ status: 200, body: [{ billId: bill.body.id, status: 'SETTLED', bottles: 2, upiPaise: String(2 * PRICE.quarter), cashPaise: '0' }] });
+
+    const detail = await call('GET', `/api/orders/${bill.body.id}`);
+    expect(detail.body).toMatchObject({ settledVia: 'COUNTER', summary: { billNo: bill.body.billNo }, payments: [{ tender: 'UPI', receiptTotalPaise: null }] });
+    expect((await call('GET', `/api/orders/${MISSING}`)).status).toBe(404);
+
+    const reprint = await call('POST', `/api/orders/${bill.body.id}/reprint`, {});
+    expect(reprint).toMatchObject({ status: 201, body: { text: `DUPLICATE #${bill.body.billNo}` } });
+  });
+
   it('runs the waiter ledger: list, detail, lump sum, settle selected', async () => {
     const { fx, call } = await start();
     const bills: string[] = [];

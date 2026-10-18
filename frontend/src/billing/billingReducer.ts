@@ -118,6 +118,8 @@ export type BillingAction =
   | { type: 'tabSwitched'; tabId: number }
   | { type: 'tabCycled'; delta: 1 | -1 }
   | { type: 'tabClosed'; tabId: number }
+  /** Orders → "Jump to bill": activate the tab holding this server bill (after a resume). */
+  | { type: 'focusBill'; billId: string }
   | { type: 'dialog'; dialog: DialogKind | null }
   | { type: 'flash'; kind: Flash['kind']; text: string }
 
@@ -312,6 +314,10 @@ export function billingReducer(state: BillingState, action: BillingAction): Bill
       const tabs = state.tabs.filter((t) => t.id !== tab.id)
       const activeTabId = tab.id === state.activeTabId ? (tabs[Math.max(0, at - 1)]?.id ?? state.activeTabId) : state.activeTabId
       return { ...state, tabs, activeTabId }
+    }
+    case 'focusBill': {
+      const tab = state.tabs.find((t) => t.bill?.bill.id === action.billId)
+      return tab ? switchTo(state, tab.id) : state
     }
     case 'dialog':
       return { ...state, dialog: action.dialog }

@@ -6,11 +6,14 @@ import CatalogScreen from './components/CatalogScreen'
 import Dashboard from './components/Dashboard'
 import DayEndScreen from './components/DayEndScreen'
 import ExpenseScreen from './components/ExpenseScreen'
+import OrdersScreen from './components/OrdersScreen'
 import PurchaseScreen from './components/PurchaseScreen'
 import { DEFAULT_RECENT, pushRecent, type PosActionId } from './components/dashboard/actions'
+import type { LedgerFocus } from './captain/waiterLedgerReducer'
 import type { CountDraft } from './dayend/dayEndReducer'
+import type { JumpTarget } from './orders/ordersView'
 
-type View = 'dashboard' | 'billing' | 'captain-orders' | 'day-end' | 'expenses' | 'bank-deposits' | 'purchase' | 'catalog'
+type View = 'dashboard' | 'billing' | 'captain-orders' | 'day-end' | 'expenses' | 'bank-deposits' | 'purchase' | 'catalog' | 'orders'
 
 export default function App() {
   const [view, setView] = useState<View>('dashboard')
@@ -19,9 +22,28 @@ export default function App() {
   const [countDraft, setCountDraft] = useState<CountDraft | null>(null)
   /** Set when Expenses (F6) or Bank deposits was opened from Day End: its Esc goes back there. */
   const [fromDayEnd, setFromDayEnd] = useState(false)
+  /** Orders → "Jump to bill": the billing tab or Waiter Ledger bill to land on, used once. */
+  const [billingFocus, setBillingFocus] = useState<string | null>(null)
+  const [ledgerFocus, setLedgerFocus] = useState<LedgerFocus | null>(null)
   const onUse = useCallback((id: PosActionId) => setRecent((prev) => pushRecent(prev, id)), [])
-  const openBilling = useCallback(() => setView('billing'), [])
-  const openCaptainOrders = useCallback(() => setView('captain-orders'), [])
+  const openBilling = useCallback(() => {
+    setBillingFocus(null)
+    setView('billing')
+  }, [])
+  const openCaptainOrders = useCallback(() => {
+    setLedgerFocus(null)
+    setView('captain-orders')
+  }, [])
+  const openOrders = useCallback(() => setView('orders'), [])
+  const jumpFromOrders = useCallback((target: Exclude<JumpTarget, { kind: 'none' }>) => {
+    if (target.kind === 'billing') {
+      setBillingFocus(target.billId)
+      setView('billing')
+    } else {
+      setLedgerFocus({ waiterId: target.waiterId, billId: target.billId })
+      setView('captain-orders')
+    }
+  }, [])
   const openDayEnd = useCallback(() => setView('day-end'), [])
   const openExpenses = useCallback(() => {
     setFromDayEnd(false)
@@ -43,8 +65,9 @@ export default function App() {
   const openCatalog = useCallback(() => setView('catalog'), [])
   const exitToDashboard = useCallback(() => setView('dashboard'), [])
 
-  if (view === 'billing') return <BillingScreen onExit={exitToDashboard} />
-  if (view === 'captain-orders') return <WaiterLedgerScreen onExit={exitToDashboard} />
+  if (view === 'billing') return <BillingScreen onExit={exitToDashboard} focusBillId={billingFocus} />
+  if (view === 'captain-orders') return <WaiterLedgerScreen onExit={exitToDashboard} focus={ledgerFocus} />
+  if (view === 'orders') return <OrdersScreen onExit={exitToDashboard} onJump={jumpFromOrders} />
   if (view === 'expenses') return (
       <ExpenseScreen
         onExit={fromDayEnd ? openDayEnd : exitToDashboard}
@@ -85,6 +108,7 @@ export default function App() {
       onOpenBankDeposits={openBankDeposits}
       onOpenPurchase={openPurchase}
       onOpenCatalog={openCatalog}
+      onOpenOrders={openOrders}
     />
   )
 }

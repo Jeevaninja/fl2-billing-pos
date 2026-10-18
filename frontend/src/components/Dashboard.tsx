@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronRight, Keyboard, PlugZap, Sunrise } from 'lucide-react'
+import { ChevronRight, Keyboard, PlugZap, Settings, Sunrise } from 'lucide-react'
 import { api } from '../api/client'
 import type { CounterContext, PeakSessionView } from '../api/types'
 import { useGlobalShortcuts } from '../hooks/useGlobalShortcuts'
 import { formatPaise } from '../lib/money'
 import { describeVariance } from '../peak/peakMath'
 import { PeakBanner, PeakEndDialog, PeakStartDialog, StartPeakButton } from './peak/PeakControls'
-import { ACTIONS, BILLING_ACTIONS, MODULE_TILES, runStub, type PosActionId } from './dashboard/actions'
+import { ACTIONS, BILLING_ACTIONS, MODULE_TILES, runStub, SETTINGS_ACTIONS, type PosActionId } from './dashboard/actions'
 import { FOCUS_RING, formatTime } from '../lib/ui'
 import { Kbd, LiveClock } from './ui'
 
@@ -20,6 +20,7 @@ const TILE_ACCENT: Record<PosActionId, string> = {
   'bank-deposit': 'bg-indigo-400 text-zinc-950',
   purchase: 'bg-violet-400 text-zinc-950',
   catalog: 'bg-teal-400 text-zinc-950',
+  orders: 'bg-cyan-400 text-zinc-950',
   'day-end': 'bg-orange-500 text-zinc-950',
   reports: 'bg-emerald-500 text-zinc-950',
 }
@@ -40,6 +41,7 @@ interface DashboardProps {
   onOpenBankDeposits: () => void
   onOpenPurchase: () => void
   onOpenCatalog: () => void
+  onOpenOrders: () => void
 }
 
 const CAPTAIN_COUNT_POLL_MS = 15_000
@@ -89,7 +91,18 @@ function useCounterContext(): { context: CounterContext | null; reload: () => vo
 /** Start dialog, or the end dialog with its own session snapshot (it outlives the session to show the result). */
 type PeakDialog = { kind: 'start'; businessDayId: string } | { kind: 'end'; session: PeakSessionView } | null
 
-export default function Dashboard({ recent, onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd, onOpenExpenses, onOpenBankDeposits, onOpenPurchase, onOpenCatalog }: DashboardProps) {
+export default function Dashboard({
+  recent,
+  onUse,
+  onOpenBilling,
+  onOpenCaptainOrders,
+  onOpenDayEnd,
+  onOpenExpenses,
+  onOpenBankDeposits,
+  onOpenPurchase,
+  onOpenCatalog,
+  onOpenOrders,
+}: DashboardProps) {
   const [lastAction, setLastAction] = useState<LastAction | null>(null)
   const [status, setStatus] = useState<string | null>(null)
   const [peakDialog, setPeakDialog] = useState<PeakDialog>(null)
@@ -136,10 +149,14 @@ export default function Dashboard({ recent, onUse, onOpenBilling, onOpenCaptainO
         onOpenCatalog()
         return
       }
+      if (id === 'orders') {
+        onOpenOrders()
+        return
+      }
       runStub(id)
       setLastAction({ id, at: new Date() })
     },
-    [onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd, onOpenExpenses, onOpenBankDeposits, onOpenPurchase, onOpenCatalog],
+    [onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd, onOpenExpenses, onOpenBankDeposits, onOpenPurchase, onOpenCatalog, onOpenOrders],
   )
 
   useGlobalShortcuts(
@@ -165,6 +182,7 @@ export default function Dashboard({ recent, onUse, onOpenBilling, onOpenCaptainO
           {businessDay && <span className="text-zinc-400">Day {businessDay.businessDate}</span>}
           {businessDay && !peak && <StartPeakButton onClick={togglePeak} />}
           <LiveClock />
+          <SettingsMenu onSelect={trigger} />
         </div>
       </header>
 
@@ -321,5 +339,73 @@ function RailButton({ id, onSelect }: { id: PosActionId; onSelect: (id: PosActio
       </span>
       {shortcut && <Kbd>{shortcut}</Kbd>}
     </button>
+  )
+}
+
+/** Header gear: setup screens that don't need a grid tile (Inventory Catalog; expense categories later). */
+function SettingsMenu({ onSelect }: { onSelect: (id: PosActionId) => void }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    function onDown(event: MouseEvent) {
+      if (!ref.current?.contains(event.target as Node)) setOpen(false)
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      setOpen(false)
+    }
+    window.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey, true)
+    return () => {
+      window.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey, true)
+    }
+  }, [open])
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Settings"
+        title="Settings"
+        className={`flex items-center rounded-md border-2 p-1.5 ${open ? 'border-amber-400 bg-amber-400 text-zinc-950' : 'border-zinc-600 text-zinc-300 hover:border-zinc-300 hover:text-zinc-50'} ${FOCUS_RING}`}
+      >
+        <Settings className="size-5" aria-hidden />
+      </button>
+      {open && (
+        <div role="menu" aria-label="Settings" className="absolute top-full right-0 z-40 mt-2 w-80 rounded-lg border-2 border-zinc-600 bg-zinc-900 p-2 shadow-2xl">
+          <p className="px-2 pt-1 pb-2 text-[11px] font-bold tracking-widest text-zinc-400 uppercase">Settings</p>
+          {SETTINGS_ACTIONS.map((id, i) => {
+            const { label, hint, icon: Icon } = ACTIONS[id]
+            return (
+              <button
+                key={id}
+                type="button"
+                role="menuitem"
+                autoFocus={i === 0}
+                onClick={() => {
+                  setOpen(false)
+                  onSelect(id)
+                }}
+                className={`flex w-full items-center gap-3 rounded-md px-2 py-2 text-left hover:bg-zinc-800 ${FOCUS_RING}`}
+              >
+                <span className={`rounded-md p-2 ${TILE_ACCENT[id]}`}>
+                  <Icon className="size-5" aria-hidden />
+                </span>
+                <span className="flex flex-col">
+                  <span className="font-bold">{label}</span>
+                  <span className="text-sm text-zinc-400">{hint}</span>
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
 }

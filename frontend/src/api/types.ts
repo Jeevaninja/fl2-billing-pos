@@ -491,3 +491,49 @@ export interface SkuPatchPayload {
   barcode?: string | null
   isActive?: boolean
 }
+
+// ── Orders (Phase 17, GET /api/orders) ───────────────────────────────────────
+
+export type OrderStatus = 'OPEN' | 'SETTLED' | 'CANCELLED' | 'VOIDED' | 'PEAK_PENDING' | 'PEAK_RECONCILED'
+
+export interface OrderSummary {
+  billId: string
+  billNo: number
+  createdAt: string
+  settledAt: string | null
+  status: OrderStatus
+  mode: 'NORMAL' | 'PEAK'
+  source: 'COUNTER' | 'WAITER_APP'
+  waiter: { id: string; code: string; displayName: string } | null
+  member: { membershipNo: string; displayName: string } | null
+  peakSessionId: string | null
+  peakSessionNo: number | null
+  createdByStaffId: string
+  lines: number
+  bottles: number
+  totalPaise: Paise
+  cashPaise: Paise
+  upiPaise: Paise
+  creditPaise: Paise
+  duePaise: Paise
+  voidedAt: string | null
+}
+
+export interface OrderPayment {
+  id: string
+  tender: Tender
+  amountPaise: Paise
+  at: string
+  /** The whole waiter payment this tender was a slice of (Waiter Ledger lump sum), or null. */
+  receiptTotalPaise: Paise | null
+}
+
+export interface OrderDetail {
+  summary: OrderSummary
+  detail: BillDetail
+  payments: OrderPayment[]
+  cashier: string
+  settledVia: 'COUNTER' | 'WAITER' | 'PEAK' | null
+  peakSession: { sessionNo: number; endedAt: string | null } | null
+  reversal: { billNo: number; at: string; reason: string; refunds: Array<{ tender: Tender; amountPaise: Paise }> } | null
+}

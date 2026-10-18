@@ -43,7 +43,7 @@ const CONTEXT_POLL_MS = 15_000
  * Counter billing. Keys come from window-level listeners (scan buffer + F-keys), so no input ever
  * needs focus. Every write runs through one serial queue, so a scanner burst is applied in order.
  */
-export default function BillingScreen({ onExit }: { onExit: () => void }) {
+export default function BillingScreen({ onExit, focusBillId = null }: { onExit: () => void; focusBillId?: string | null }) {
   const [state, dispatch] = useReducer(billingReducer, initialBillingState)
   const [peakDialog, setPeakDialog] = useState<PeakDialog>(null)
   /** The abandon confirm came from a tab's ×: close the tab once the bill is cancelled. */
@@ -62,6 +62,8 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
   const queue = useRef<Promise<void>>(Promise.resolve())
   const scanSeq = useRef(0)
   const loadedOnce = useRef(false)
+  /** Orders → "Jump to bill": focused once, on the first load that resumes the held bills. */
+  const pendingFocus = useRef(focusBillId)
   const busyRef = useRef(0)
 
   const apply = useCallback((action: BillingAction) => {
@@ -97,6 +99,14 @@ export default function BillingScreen({ onExit }: { onExit: () => void }) {
       loadedOnce.current = true
       contextRef.current = context
       apply({ type: 'contextLoaded', context, resume })
+      const focus = pendingFocus.current
+      if (resume && focus) {
+        pendingFocus.current = null
+        apply({ type: 'focusBill', billId: focus })
+        const tab = activeTab(stateRef.current)
+        if (tab.bill?.bill.id === focus) apply({ type: 'flash', kind: 'ok', text: `Bill ${tab.label} · #${tab.bill.bill.billNo} — continue billing` })
+        else apply({ type: 'flash', kind: 'error', text: 'That bill is no longer open on this till' })
+      }
     } catch (err) {
       loadedOnce.current = false
       apply({ type: 'contextFailed', message: counterErrorMessage(err) })

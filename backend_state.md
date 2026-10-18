@@ -1,6 +1,6 @@
 # FL2 POS — Backend State Reference
 
-Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`), Phase 10 master catalog and case-based inwarding (`0009_catalog_case_size`, `CatalogService`; plan `docs/ui/phase10-catalog-case-grn-plan.md`), Phase 11 peak start baseline and Day End sales breakdown (no migration; plan `docs/ui/phase11-peak-day-end-visibility-plan.md`), Phase 12 server-side peak undo (no migration; plan `docs/ui/phase12-billing-speed-plan.md`), Phase 13 Day End tally adjustments and running peak analytics (`0010_tender_adjustments`; plan `docs/ui/phase13-peak-close-tally-plan.md`), Phase 14 bank deposits / cash drops (`0011_bank_deposits`; plan `docs/ui/phase14-bank-deposits-plan.md`), Phase 15 held bills in `/api/context` and per-waiter day stats (no migration; plan `docs/ui/phase15-billing-tabs-waiter-sidebar-plan.md`), and Phase 16 waiter ledger, multi-bill and lump-sum waiter settlement and the Day End waiter-balance blocker (no migration; plan `docs/ui/phase16-waiter-ledger-plan.md`). Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
+Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`), Phase 10 master catalog and case-based inwarding (`0009_catalog_case_size`, `CatalogService`; plan `docs/ui/phase10-catalog-case-grn-plan.md`), Phase 11 peak start baseline and Day End sales breakdown (no migration; plan `docs/ui/phase11-peak-day-end-visibility-plan.md`), Phase 12 server-side peak undo (no migration; plan `docs/ui/phase12-billing-speed-plan.md`), Phase 13 Day End tally adjustments and running peak analytics (`0010_tender_adjustments`; plan `docs/ui/phase13-peak-close-tally-plan.md`), Phase 14 bank deposits / cash drops (`0011_bank_deposits`; plan `docs/ui/phase14-bank-deposits-plan.md`), Phase 15 held bills in `/api/context` and per-waiter day stats (no migration; plan `docs/ui/phase15-billing-tabs-waiter-sidebar-plan.md`), Phase 16 waiter ledger, multi-bill and lump-sum waiter settlement and the Day End waiter-balance blocker (no migration; plan `docs/ui/phase16-waiter-ledger-plan.md`), and Phase 17 Orders (bill-wise tracking) and DUPLICATE receipt reprints (no migration; plan `docs/ui/phase17-orders-plan.md`). Upcoming phases, not built: `docs/roadmap.md`. Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
 
 - **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`, `0006_expense_category`, `0007_peak_drawer_cash`, `0008_stock_receipts`, `0009_catalog_case_size`, `0010_tender_adjustments`, `0011_bank_deposits`.
 - **Money:** `BIGINT` whole paise in SQL, `bigint` in TypeScript (`type Paise = bigint`). No floats anywhere.
@@ -395,6 +395,38 @@ interface BillDetail {
 }
 ```
 
+### `OrdersQueries` (`src/services/orders.queries.ts`, Phase 17)
+
+Read-only.
+- **`listOrders(): OrderSummary[]`** returns the open day's SALE bills, newest first (`[]` with no open day). One
+  query covers status, tender sums, lines and bottles.
+- **`getOrder(billId): OrderDetail`** works on any day: `NotFoundError` for an unknown or REVERSAL bill.
+- **`receiptFor(order, reprintedAt)`** builds the customer `ReceiptTicket`.
+
+```ts
+type OrderStatus = 'OPEN' | 'SETTLED' | 'CANCELLED' | 'VOIDED' | 'PEAK_PENDING' | 'PEAK_RECONCILED';
+// VOIDED = a REVERSAL bill points at it (peak undo included); CANCELLED = SETTLED at ₹0; REVERSAL bills are never rows.
+interface OrderSummary {
+  billId; billNo; createdAt; settledAt; status; mode; source; waiter: { id; code; displayName } | null;
+  member: { membershipNo; displayName } | null; peakSessionId; peakSessionNo; createdByStaffId;
+  lines; bottles;                          // after same-bill cancellations (a void doesn't change them)
+  totalPaise; cashPaise; upiPaise; creditPaise; duePaise /* OPEN only */; voidedAt;
+}
+interface OrderDetail {
+  summary: OrderSummary; detail: BillDetail; cashier: string;
+  payments: Array<{ id; tender; amountPaise; at; receiptTotalPaise: Paise | null }>;   // receiptTotal: the waiter payment this tender was a slice of
+  settledVia: 'COUNTER' | 'WAITER' | 'PEAK' | null;                                    // WAITER = the bill carries a waiter
+  peakSession: { sessionNo; endedAt } | null;
+  reversal: { billNo; at; reason; refunds: Array<{ tender; amountPaise /* < 0 */ }> } | null;
+}
+```
+
+**Printer (`printer.service.ts`):** `formatReceipt` / `ReceiptPrinter` / `PrinterService.printReceipt`.
+- The receipt is fixed-width (48 / 32 columns), ASCII via `asciiText`, with money via `receiptMoney` (`Rs 1,23,456.78`).
+- It carries no tax lines, and a reprint prints `*** DUPLICATE ***` and a reprint stamp.
+- Reprints are stateless (not logged).
+- `ApiConfig.printer` defaults to the console stub, like KOT.
+
 ### `PurchaseService` (`src/services/purchase.service.ts`)
 
 ```ts
@@ -593,6 +625,9 @@ Migrations run on every boot (already-applied ones are skipped).
 | `POST /api/peak/sessions` | `{ businessDayId, declaredCash, declaredUpi }` | `startPeakSession(…, cashier)` | 201 |
 | `POST /api/peak/sessions/:sessionId/end` | `{ countedCash, countedUpi }` | `endPeakSession(…, cashier)` | 200 |
 | `POST /api/waiters/:waiterId/repayments` | `{ amount, tender: 'CASH'\|'UPI' }` | `recordWaiterRepayment(…, cashier)` | 201 |
+| `GET /api/orders` | | `listOrders` (Phase 17) | 200 |
+| `GET /api/orders/:billId` | | `getOrder` (Phase 17) | 200 |
+| `POST /api/orders/:billId/reprint` | `{}` | `printer.printReceipt(receiptFor(order, now))` → `{ printedAt, text }` (Phase 17) | 201 |
 | `GET /api/waiter-ledger` | | `listWaiterLedger` (Phase 16) | 200 |
 | `GET /api/waiter-ledger/:waiterId` | | `getWaiterLedger` (Phase 16) | 200 |
 | `POST /api/waiters/:waiterId/settle-bills` | `{ billIds: string[], tender }` | `settleWaiterBills(…, cashier)` (Phase 16) | 201 |

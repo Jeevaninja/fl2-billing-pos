@@ -32,6 +32,13 @@ export interface WaiterLedgerState {
   lastUpdated: number | null
   dialog: LedgerDialog | null
   flash: Flash | null
+  /** Orders → "Jump to bill": select this waiter, then highlight the bill, once both have loaded. */
+  pendingFocus: LedgerFocus | null
+}
+
+export interface LedgerFocus {
+  waiterId: string
+  billId: string
 }
 
 export const initialWaiterLedgerState: WaiterLedgerState = {
@@ -49,6 +56,11 @@ export const initialWaiterLedgerState: WaiterLedgerState = {
   lastUpdated: null,
   dialog: null,
   flash: null,
+  pendingFocus: null,
+}
+
+export function initialWaiterLedgerStateFor(focus: LedgerFocus | null): WaiterLedgerState {
+  return { ...initialWaiterLedgerState, pendingFocus: focus }
 }
 
 export type WaiterLedgerAction =
@@ -195,6 +207,8 @@ export function waiterLedgerReducer(state: WaiterLedgerState, action: WaiterLedg
         seenNewest.set(w.id, w.newestOpenAt)
       }
       let next: WaiterLedgerState = { ...state, load: 'ready', offlineMessage: null, waiters: action.waiters, lastUpdated: action.at, seenNewest, freshWaiterIds: fresh }
+      const focus = state.pendingFocus
+      if (focus && action.waiters.some((w) => w.id === focus.waiterId)) return select(next, focus.waiterId)
       const stillThere = action.waiters.some((w) => w.id === state.selectedWaiterId)
       if (!stillThere) {
         // First load, or the selected waiter dropped off: take the row in its place (or the top one).
@@ -209,10 +223,16 @@ export function waiterLedgerReducer(state: WaiterLedgerState, action: WaiterLedg
     case 'ledgerLoaded':
       // A ledger for a waiter the cashier has already moved away from is dropped.
       if (action.ledger.waiter.id !== state.selectedWaiterId) return state
-      return {
+      const loaded = {
         ...withLedger(state, action.ledger),
         waiters: state.waiters.map((w) => (w.id === action.ledger.waiter.id ? action.ledger.waiter : w)),
       }
+      const focus = state.pendingFocus
+      if (focus?.waiterId !== action.ledger.waiter.id) return loaded
+      const cleared = { ...loaded, pendingFocus: null }
+      return action.ledger.openBills.some((b) => b.bill.id === focus.billId)
+        ? { ...waiterLedgerReducer(cleared, { type: 'cursor', billId: focus.billId }), focus: 'bills' }
+        : cleared
     case 'selectWaiter':
       return state.waiters.some((w) => w.id === action.id) ? select(state, action.id) : state
     case 'cursor': {

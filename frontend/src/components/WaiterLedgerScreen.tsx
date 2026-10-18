@@ -13,7 +13,8 @@ import {
   cursorBill,
   editBlock,
   formatAge,
-  initialWaiterLedgerState,
+  initialWaiterLedgerStateFor,
+  type LedgerFocus,
   openBills,
   receiveError,
   selectedWaiter,
@@ -36,8 +37,8 @@ const AGE_TICK_MS = 15_000
  * for trusted waiters (F7), and today's receipts. Captain-app orders can still be corrected line by
  * line (−, X, member). Polls every 5 s; polling pauses while a dialog is open.
  */
-export default function WaiterLedgerScreen({ onExit }: { onExit: () => void }) {
-  const [state, dispatch] = useReducer(waiterLedgerReducer, initialWaiterLedgerState)
+export default function WaiterLedgerScreen({ onExit, focus = null }: { onExit: () => void; focus?: LedgerFocus | null }) {
+  const [state, dispatch] = useReducer(waiterLedgerReducer, focus, initialWaiterLedgerStateFor)
   const waiter = selectedWaiter(state)
   const bills = openBills(state)
   const cursor = cursorBill(state)
