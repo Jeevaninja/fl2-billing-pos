@@ -1,10 +1,10 @@
 # FL2 POS — Frontend State Reference
 
-As of Phase 11 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders, Phase 7 Day End, Phase 8 Expenses and peak controls, Phase 9 Purchase / GRN, Phase 10 Inventory Catalog and case-based GRN, Phase 11 peak start baseline and Day End sales breakdown, Phase 12 Enter → qty → pay, payment arrow keys and server-side peak undo; plan `docs/ui/phase12-billing-speed-plan.md`, Phase 13 peak end live split, Day End tally adjustments and Day End ⇄ Expenses; plan `docs/ui/phase13-peak-close-tally-plan.md`, Phase 14 bank deposits; plan `docs/ui/phase14-bank-deposits-plan.md`, Phase 15 multi-tab billing and the waiter sidebar; plan `docs/ui/phase15-billing-tabs-waiter-sidebar-plan.md`, Phase 16 Waiter Ledger (replaces the Captain Orders queue) and the strict Day End waiter-balance blocker; plan `docs/ui/phase16-waiter-ledger-plan.md`, Phase 17 Orders screen, the header Settings menu and Jump to bill; plan `docs/ui/phase17-orders-plan.md`). Upcoming phases (not built): `docs/roadmap.md`. Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
+As of Phase 11 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders, Phase 7 Day End, Phase 8 Expenses and peak controls, Phase 9 Purchase / GRN, Phase 10 Inventory Catalog and case-based GRN, Phase 11 peak start baseline and Day End sales breakdown, Phase 12 Enter → qty → pay, payment arrow keys and server-side peak undo; plan `docs/ui/phase12-billing-speed-plan.md`, Phase 13 peak end live split, Day End tally adjustments and Day End ⇄ Expenses; plan `docs/ui/phase13-peak-close-tally-plan.md`, Phase 14 bank deposits; plan `docs/ui/phase14-bank-deposits-plan.md`, Phase 15 multi-tab billing and the waiter sidebar; plan `docs/ui/phase15-billing-tabs-waiter-sidebar-plan.md`, Phase 16 Waiter Ledger (replaces the Captain Orders queue) and the strict Day End waiter-balance blocker; plan `docs/ui/phase16-waiter-ledger-plan.md`, Phase 17 Orders screen, the header Settings menu and Jump to bill; plan `docs/ui/phase17-orders-plan.md`, Phase 18 custom expense categories (Settings screen + Expense picker); plan `docs/ui/phase18-expense-categories-plan.md`). Upcoming phases (not built): `docs/roadmap.md`. Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
 
 - **Stack:** Vite 8, React 19, TypeScript, Tailwind CSS 4 (`@tailwindcss/vite`), Lucide icons, Vitest. No router, no state library.
 - **Run:** `npm run api:dev` at the repo root (API on `127.0.0.1:4310`), then `npm run dev` in `frontend/` (http://localhost:5173). Vite proxies `/api` to the API.
-- **Check:** `npm test` (Vitest, 201 tests), `npx tsc -b`, `npx oxlint src`, `npm run build`.
+- **Check:** `npm test` (Vitest, 209 tests), `npx tsc -b`, `npx oxlint src`, `npm run build`.
 - **Money:** `bigint` paise end to end. The API client decodes every `…Paise` JSON string to `bigint` and encodes `bigint` back to strings. Display goes through `formatPaise`; cashier input goes through `parseRupeesToPaise`. No floats.
 - **Server is the source of truth:** bills enter screen state only as `BillDetail` responses, so the UI never adds up prices to get a total.
 
@@ -14,9 +14,9 @@ As of Phase 11 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Cap
 
 ```
 main.tsx                      StrictMode → <App/>, imports index.css (Tailwind)
-└─ App                        view: 'dashboard' | 'billing' | 'captain-orders' | 'day-end' | 'expenses' | 'bank-deposits' | 'purchase' | 'catalog' | 'orders'; holds the Recently Used list and the one-shot Jump-to-bill targets (billingFocus, ledgerFocus)
+└─ App                        view: 'dashboard' | 'billing' | 'captain-orders' | 'day-end' | 'expenses' | 'bank-deposits' | 'purchase' | 'catalog' | 'orders' | 'expense-categories'; holds the Recently Used list and the one-shot Jump-to-bill targets (billingFocus, ledgerFocus)
    ├─ Dashboard               module tiles + Recently Used rail + key legend footer
-   │  ├─ header               Start peak (F8) button when a day is open and no peak runs; Settings gear menu (Phase 17): Inventory Catalog
+   │  ├─ header               Start peak (F8) button when a day is open and no peak runs; Settings gear menu (Phase 17): Inventory Catalog, Expense Categories (Phase 18)
    │  ├─ PeakBanner           amber "PEAK #n running · since · expected drawer total" strip with End peak session (F8)
    │  ├─ day banner           "No business day is open" strip → Day End (context polled 15 s)
    │  ├─ ModuleTile ×8        4 × 2 grid (2 × 4 narrow), equal tiles (Phase 14). Billing, Waiter Ledger (live "n open" Captain-order badge,
@@ -78,8 +78,10 @@ main.tsx                      StrictMode → <App/>, imports index.css (Tailwind
       ├─ OpenDayPanel         opening float + Enter → POST /api/days (after a lock, or when no day exists)
       └─ dialogs (Modal)      ConfirmLock (Enter), RepayDialog (amount, C/U), PeakEndDialog (shared),
                               TallyDialog (F7: UPI → Cash / Cash → UPI, amount, required reason, live after-figures), void-adjustment confirm
-   └─ ExpenseScreen           useReducer(expenseReducer); GET /api/context + /api/expenses polled 15 s
-      ├─ form (left)          category chips ×6 (keys 1–6), amount RupeeField (lg), note, "Paid by <till cashier>" (read-only),
+   └─ ExpenseScreen           useReducer(expenseReducer); GET /api/context + /api/expenses + /api/expense-categories polled 15 s
+      ├─ form (left)          Phase 18: category search box (focused; type to filter, ↑/↓, Enter) over the matching category chips
+      │                       (first nine in the manager's order show keys 1–9), amount RupeeField (lg), note (required when the
+      │                       category says so), "Paid by <till cashier>" (read-only),
       │                       Record expense (Enter); keeps the category for the next entry
       ├─ list (right)         today's expenses newest first: time, category, note, ⚡ = during a peak, amount, Void /
       │                       VOIDED (struck through); header shows today's live total and count
@@ -146,6 +148,8 @@ Shared: components/peak/PeakControls.tsx: PeakBanner, StartPeakButton, PeakStart
 | `captain/waiterLedgerReducer.ts` | `waiterLedgerReducer`, `initialWaiterLedgerState`, `selectedWaiter`, `openBills`, `cursorBill`, `billsToSettle`, `selectionTotal`, `allocate`, `receiveError`, `editBlock`, `formatAge` |
 | `components/DayEndScreen.tsx` | `DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrders })` |
 | `components/ExpenseScreen.tsx` | `ExpenseScreen({ onExit, onOpenDayEnd })` |
+| `components/ExpenseCategoriesScreen.tsx` | `ExpenseCategoriesScreen({ onExit })` (Phase 18, Settings) |
+| `settings/expenseCategoryForm.ts` | `NEW_CATEGORY`, `MAX_NAME`, `formFor`, `cleanName`, `categoryFormError`, `categoryPatch`, `visibleCategories`, `quickKeyFor` |
 | `components/BankDepositScreen.tsx` | `BankDepositScreen({ onExit, onOpenDayEnd, exitLabel? })` |
 | `components/PurchaseScreen.tsx` | `PurchaseScreen({ onExit, onOpenDayEnd })` |
 | `components/CatalogScreen.tsx` | `CatalogScreen({ onExit })` |
@@ -153,7 +157,7 @@ Shared: components/peak/PeakControls.tsx: PeakBanner, StartPeakButton, PeakStart
 | `components/RupeeField.tsx` | `RupeeField` |
 | `components/dayend/SalesBreakdownCard.tsx` | `SalesBreakdownCard({ sales })` |
 | `deposit/bankDepositReducer.ts` | `bankDepositReducer`, `initialBankDepositState`, `MAX_REFERENCE`, `formError`, `formPayload`, `overDrawerWarning`, `todayTotals` |
-| `expense/expenseReducer.ts` | `expenseReducer`, `initialExpenseState`, `CATEGORIES`, `CATEGORY_LABEL`, `formError`, `formPayload`, `todayTotals` |
+| `expense/expenseReducer.ts` | `expenseReducer`, `initialExpenseState`, `QUICK_KEYS`, `selectedCategory`, `pickerMatches`, `quickKey`, `categoryForKey`, `formError`, `formPayload`, `todayTotals` |
 | `purchase/purchaseReducer.ts` | `purchaseReducer`, `initialPurchaseState`, `MAX_LINE_QTY`, `lineError`, `submitError`, `submitPayload`, `lineTotal`, `stagedTotals`, `pickFromSearch`, `entryCount`, `bottlesFor`, `mergeCounts`, `countLabel` |
 | `catalog/catalogReducer.ts` | `catalogReducer`, `initialCatalogState`, `catalogRows`, `suggestPrefix`, `skuCodePreview`, `formError`, `newProductPayload`, `productPatch`, `addSkuPayload`, `skuPatch`, `deactivates`, `conflictField`, `DEFAULT_CASE_SIZE` |
 | `billing/billingReducer.ts` (Phase 12) | adds `cancelPlan`; Phase 15 adds `activeTab`, `findTab`, `isEmptyTab`, `newTabBlock`, `MAX_TABS`, `BillTab` |
@@ -203,13 +207,28 @@ Only the Reports tile still calls `runStub`; every other tile (and F1/F2/F9, whi
 - **Keys:** type the count (the field is focused) · Enter or F9 asks to lock · Enter confirms in the modal · F6 add expense (Esc on Expenses returns here) · F7 tally adjustment · Esc dashboard. The repayment dialog takes C/U for the tender; Enter records it.
 
 **Expense screen** (`expenseReducer`, pure and unit-tested):
-- **State:** `load` (`loading` / `ready` / `offline` / `noDay`), `till` (cashier name and day for the header), `entries`, the form (`category`, `amount` text, `note`), `submitting`, `confirmVoidId`, `flash`.
+- **State:** `load` (`loading` / `ready` / `offline` / `noDay`), `till` (cashier name and day for the header), `entries`, `categories` (active, the manager's order), the form (`categoryId`, `query` search text, `highlighted`, `amount` text, `note`), `submitting`, `confirmVoidId`, `flash`.
+- **Categories (Phase 18):**
+  - `categories` replaces the list. A picked category that was disabled meanwhile is dropped.
+  - `pickerMatches` returns all categories while the search is blank or still reads the picked name; otherwise the
+    names containing the typed text.
+  - `quickKey` / `categoryForKey` map keys 1–9 to the first nine categories.
 - **Selectors:**
-  - `formError` checks in order: a category, then an amount, then valid rupees, then more than ₹0, then a note for Other.
-  - `formPayload` gives paise, the category, and the trimmed note (null when blank).
+  - `formError` checks in order: a category, then an amount, then valid rupees, then more than ₹0, then a note when the category requires one.
+  - `formPayload` gives paise, the `categoryId`, and the trimmed note (null when blank).
   - `todayTotals` excludes voided entries.
 - `recorded` clears the amount and note but keeps the category, ready for a run of similar entries. A void confirmation is dropped once the list no longer offers that entry.
-- **Keys:** 1–6 pick a category when no text field has focus (and move focus to the amount) · Enter records · Enter confirms a void · Esc dashboard.
+- **Keys:** type in the category box (↑/↓, Enter picks and moves to the amount) · 1–9 pick a category when no text field has focus · Enter records · Enter confirms a void · Esc dashboard.
+
+**Expense Categories screen** (Settings, Phase 18; helpers in `settings/expenseCategoryForm.ts`):
+- **List:** active categories in picker order, with their 1–9 key, a Note required badge, and "Used on n expenses".
+  "Show disabled" lists disabled ones after them. Each active row has ↑ / ↓ buttons.
+- **Modal** (touch-friendly; Enter / F9 saves): name, a Note required switch, and an Active switch when editing.
+  - Disabling turns Save into "Disable & save" and warns that past expenses keep the name.
+  - A rename warns that it relabels the category's history.
+  - `categoryFormError` catches a blank, too-long or duplicate name (with a "disabled — enable it instead" hint) and
+    the last active category. The server's refusal is shown and outlines the field.
+- **Keys:** ↑/↓ select · Alt+↑ / Alt+↓ reorder · Enter edit · Ins new · Esc dashboard.
 
 **Purchase screen (GRN)** (`purchaseReducer`, pure and unit-tested):
 - **State:** `load` (`loading` / `ready` / `offline` / `noDay`), `till`, `receipts` (today's, newest first), `invoiceNo`, `vendorName`, `invoiceError` (set by a PS011 duplicate, cleared on edit), the picker (`query`, `results`, `highlighted`, `picked`), `cases`, `loose` (digits; empty = 0), `cost`, `lines: StagedLine[]` (`sku`, `cases`, `looseBottles`, `caseSize`, `quantity`, `unitCostPaise`), `selectedLine`, `confirming`, `submitting`, `flash`.
@@ -332,6 +351,7 @@ No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDow
 | `lib/beep.ts` | WebAudio scan feedback; silent if audio is unavailable |
 
 **Tests** (`*.test.ts`, Node environment, no DOM):
+- `expense/expenseReducer.test.ts` (Phase 18: server categories, picker filter and highlight, quick keys 1–9, note rule, disabled-meanwhile) and `settings/expenseCategoryForm.test.ts`
 - `orders/ordersView.test.ts` (Phase 17: filters and waiter filter, chip counts, peak grouping and expansion, moves, labels, jump targets, settlement wording)
 - `captain/waiterLedgerReducer.test.ts` (Phase 16: selection, ticks across refreshes, panes, new-order flag, `allocate`, `receiveError`; Phase 17 jump focus)
 - `billingReducer.test.ts` (Phase 15: tab isolation, replies to a non-current tab, drop / close / cycle / limit, resume into tabs, peak per tab), `payment.test.ts` and `waiterStats.test.ts`, with fixtures in `testData.ts`

@@ -28,7 +28,7 @@ describe('peak start baseline and sales breakdown', () => {
     await waiters.settleWaiterBill(c.id, fx.waiter.trusted, 'WAITER_CREDIT'); // 600 credit
     await waiters.recordWaiterRepayment(fx.waiter.trusted, 200_00n, 'CASH', fx.cashier);
     await waiters.recordWaiterRepayment(fx.waiter.trusted, 100_00n, 'UPI', fx.cashier);
-    await dayEnd.recordCashExpense(150_00n, 'Ice', fx.cashier);
+    await dayEnd.recordCashExpense(150_00n, 'Ice', fx.cashier, fx.expenseCategory.OTHER);
     const d = await billing.createBill('NORMAL', fx.cashier);
     await billing.addItemToBill(d.id, fx.sku.beer330, 1); // paid by UPI during peak 1
 
@@ -57,7 +57,7 @@ describe('peak start baseline and sales breakdown', () => {
     await billing.recordPeakSale(p1.id, fx.sku.full, 1, fx.cashier);
     await billing.reverseBill(undone.bill.id, 'double scan', fx.manager); // in-session reversal: −250
     await waiters.recordWaiterRepayment(fx.waiter.trusted, 100_00n, 'CASH', fx.cashier);
-    await dayEnd.recordCashExpense(50_00n, 'Ice (rush)', fx.cashier);
+    await dayEnd.recordCashExpense(50_00n, 'Ice (rush)', fx.cashier, fx.expenseCategory.OTHER);
     // Peak sales 2,450: customers paid 800 by UPI and 1,650 in cash; the drawer is ₹20 short.
     const end1Cash = 2250_00n + 1650_00n + 100_00n - 50_00n - 20_00n;
     const end1Upi = 1300_00n + 150_00n + 800_00n;

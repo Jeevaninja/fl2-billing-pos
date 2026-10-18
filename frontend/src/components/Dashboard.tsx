@@ -21,6 +21,7 @@ const TILE_ACCENT: Record<PosActionId, string> = {
   purchase: 'bg-violet-400 text-zinc-950',
   catalog: 'bg-teal-400 text-zinc-950',
   orders: 'bg-cyan-400 text-zinc-950',
+  'expense-categories': 'bg-rose-400 text-zinc-950',
   'day-end': 'bg-orange-500 text-zinc-950',
   reports: 'bg-emerald-500 text-zinc-950',
 }
@@ -42,6 +43,7 @@ interface DashboardProps {
   onOpenPurchase: () => void
   onOpenCatalog: () => void
   onOpenOrders: () => void
+  onOpenExpenseCategories: () => void
 }
 
 const CAPTAIN_COUNT_POLL_MS = 15_000
@@ -102,6 +104,7 @@ export default function Dashboard({
   onOpenPurchase,
   onOpenCatalog,
   onOpenOrders,
+  onOpenExpenseCategories,
 }: DashboardProps) {
   const [lastAction, setLastAction] = useState<LastAction | null>(null)
   const [status, setStatus] = useState<string | null>(null)
@@ -153,10 +156,14 @@ export default function Dashboard({
         onOpenOrders()
         return
       }
+      if (id === 'expense-categories') {
+        onOpenExpenseCategories()
+        return
+      }
       runStub(id)
       setLastAction({ id, at: new Date() })
     },
-    [onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd, onOpenExpenses, onOpenBankDeposits, onOpenPurchase, onOpenCatalog, onOpenOrders],
+    [onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd, onOpenExpenses, onOpenBankDeposits, onOpenPurchase, onOpenCatalog, onOpenOrders, onOpenExpenseCategories],
   )
 
   useGlobalShortcuts(
@@ -342,7 +349,7 @@ function RailButton({ id, onSelect }: { id: PosActionId; onSelect: (id: PosActio
   )
 }
 
-/** Header gear: setup screens that don't need a grid tile (Inventory Catalog; expense categories later). */
+/** Header gear: setup screens that don't need a grid tile (Inventory Catalog, Expense Categories). */
 function SettingsMenu({ onSelect }: { onSelect: (id: PosActionId) => void }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)

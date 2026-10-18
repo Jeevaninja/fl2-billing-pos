@@ -60,7 +60,7 @@ describe('CounterQueries', () => {
       await billing.settleNormalBill(open.id, [{ mode: 'CASH', amount: PAISE.beer330 }]); // + 150 cash
       await waiters.recordWaiterRepayment(fx.waiter.trusted, 100_00n, 'CASH', fx.cashier); // + 100 cash
       await waiters.recordWaiterRepayment(fx.waiter.trusted, 50_00n, 'UPI', fx.cashier); // UPI: not in the drawer
-      await dayEnd.recordCashExpense(30_00n, null, fx.cashier, 'ICE'); // − 30
+      await dayEnd.recordCashExpense(30_00n, null, fx.cashier, fx.expenseCategory.ICE); // − 30
 
       const expected = 1000_00n + 2n * PAISE.beer650 + PAISE.beer330 + 100_00n - 30_00n;
       const { peakSession } = await queries.getCounterContext(fx.cashier);

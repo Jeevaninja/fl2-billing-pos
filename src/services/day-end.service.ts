@@ -161,8 +161,9 @@ export interface DayFigures {
   peakSessions: PeakSessionCash[];
 }
 
+/** The fixed 0006 codes, still on pre-0012 expense rows (resolved through expense_categories.legacy_code). */
 export const EXPENSE_CATEGORIES = ['ICE', 'STAFF_FOOD', 'TRANSPORT', 'CLEANING', 'REPAIRS', 'OTHER'] as const;
-export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
+export type LegacyExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
 
 export interface CashExpense {
   id: string;
@@ -171,8 +172,9 @@ export interface CashExpense {
   /** Negative on a void row. */
   amountPaise: Paise;
   reversesExpenseId: string | null;
-  category: ExpenseCategory;
-  /** Optional note; required for OTHER. */
+  /** The managed category (Phase 18); pre-0012 rows resolve through their legacy code. */
+  category: { id: string; name: string };
+  /** Optional note; required when the category says so ("Other"). */
   description: string | null;
   createdByStaffId: string;
   createdAt: Date;
@@ -291,10 +293,25 @@ interface ExpenseRow {
   peak_session_id: string | null;
   amount_paise: DbInt;
   reverses_expense_id: string | null;
-  category: ExpenseCategory;
+  category: LegacyExpenseCategory | null;
+  category_id: string | null;
+  /** Resolved: by id, else by legacy code. */
+  cat_id: string;
+  cat_name: string;
   description: string | null;
   created_by_staff_id: string;
   created_at: Date;
+}
+
+/** Expense rows with their category resolved (id first, then the pre-0012 legacy code). */
+const EXPENSE_SELECT = `
+  SELECT e.*, coalesce(c.id, lc.id) AS cat_id, coalesce(c.name, lc.name) AS cat_name
+    FROM cash_expenses e
+    LEFT JOIN expense_categories c ON c.id = e.category_id
+    LEFT JOIN expense_categories lc ON lc.legacy_code = e.category`;
+
+async function getExpense(db: SqlClient, id: string): Promise<CashExpense> {
+  return mapExpense(await one<ExpenseRow>(db, `${EXPENSE_SELECT} WHERE e.id = $1`, [id]));
 }
 
 function mapExpense(r: ExpenseRow): CashExpense {
@@ -304,7 +321,7 @@ function mapExpense(r: ExpenseRow): CashExpense {
     peakSessionId: r.peak_session_id,
     amountPaise: toPaise(r.amount_paise),
     reversesExpenseId: r.reverses_expense_id,
-    category: r.category,
+    category: { id: r.cat_id, name: r.cat_name },
     description: r.description,
     createdByStaffId: r.created_by_staff_id,
     createdAt: r.created_at,
@@ -392,28 +409,25 @@ export class DayEndService {
   }
 
   /**
-   * A petty-cash payment from the drawer on the open day (tagged to the running peak, if any).
-   * The note is optional, except for OTHER, where it is the only description.
+   * A petty-cash payment from the drawer on the open day (tagged to the running peak, if any), filed
+   * under a managed category. The database refuses a disabled category, or a missing note where the
+   * category requires one (PS002); an unknown category id is a NotFoundError.
    */
-  async recordCashExpense(
-    amount: Paise,
-    description: string | null,
-    staffId: string,
-    category: ExpenseCategory = 'OTHER',
-  ): Promise<CashExpense> {
+  async recordCashExpense(amount: Paise, description: string | null, staffId: string, categoryId: string): Promise<CashExpense> {
     assertPaise(amount, 'amount');
-    if (!EXPENSE_CATEGORIES.includes(category)) throw new RangeError(`category must be one of ${EXPENSE_CATEGORIES.join(', ')}`);
     const text = description?.trim() || null;
     if (text !== null && text.length > MAX_DESCRIPTION) throw new RangeError(`description must be at most ${MAX_DESCRIPTION} characters`);
-    if (text === null && category === 'OTHER') throw new RangeError('an OTHER expense needs a description');
-    return withPosErrors(async () =>
-      mapExpense(
-        await one<ExpenseRow>(
-          this.db,
-          `INSERT INTO cash_expenses (amount_paise, category, description, created_by_staff_id) VALUES ($1, $2, $3, $4) RETURNING *`,
-          [paiseParam(amount), category, text, staffId],
-        ),
-      ),
+    return withPosErrors(() =>
+      this.db.transaction(async (tx) => {
+        const known = await maybeOne(tx, `SELECT 1 FROM expense_categories WHERE id = $1`, [categoryId]);
+        if (!known) throw new NotFoundError('expense category', categoryId);
+        const row = await one<{ id: string }>(
+          tx,
+          `INSERT INTO cash_expenses (amount_paise, category_id, description, created_by_staff_id) VALUES ($1, $2, $3, $4) RETURNING id`,
+          [paiseParam(amount), categoryId, text, staffId],
+        );
+        return getExpense(tx, row.id);
+      }),
     );
   }
 
@@ -514,8 +528,7 @@ export class DayEndService {
   /** The day's expenses, newest first: originals only, each with the time it was voided (if it was). */
   async listCashExpenses(businessDayId: string): Promise<ExpenseEntry[]> {
     const { rows } = await this.db.query<ExpenseRow & { voided_at: Date | null }>(
-      `SELECT e.*, v.created_at AS voided_at
-         FROM cash_expenses e
+      `${EXPENSE_SELECT.replace('SELECT e.*,', 'SELECT e.*, v.created_at AS voided_at,')}
          LEFT JOIN cash_expenses v ON v.reverses_expense_id = e.id
         WHERE e.business_day_id = $1 AND e.amount_paise > 0
         ORDER BY e.created_at DESC, e.id DESC`,
@@ -533,14 +546,14 @@ export class DayEndService {
       this.db.transaction(async (tx) => {
         const original = await maybeOne<ExpenseRow>(tx, `SELECT * FROM cash_expenses WHERE id = $1`, [expenseId]);
         if (!original) throw new NotFoundError('expense', expenseId);
-        return mapExpense(
-          await one<ExpenseRow>(
-            tx,
-            `INSERT INTO cash_expenses (amount_paise, reverses_expense_id, category, description, created_by_staff_id)
-             VALUES (-$1::bigint, $2, $3, $4, $5) RETURNING *`,
-            [paiseParam(toPaise(original.amount_paise)), expenseId, original.category, original.description, staffId],
-          ),
+        // The insert trigger copies the original's category (legacy code or id) onto the void.
+        const row = await one<{ id: string }>(
+          tx,
+          `INSERT INTO cash_expenses (amount_paise, reverses_expense_id, category, category_id, description, created_by_staff_id)
+           VALUES (-$1::bigint, $2, $3, $4, $5, $6) RETURNING id`,
+          [paiseParam(toPaise(original.amount_paise)), expenseId, original.category, original.category_id, original.description, staffId],
         );
+        return getExpense(tx, row.id);
       }),
     );
   }

@@ -33,6 +33,8 @@ export type {
   WaiterSummary,
 } from './counter-queries.js';
 export { DayEndService, EXPENSE_CATEGORIES } from './day-end.service.js';
+export { cleanCategoryName, ExpenseCategoryService, MAX_CATEGORY_NAME } from './expense-category.service.js';
+export type { ExpenseCategory, ExpenseCategoryPatch, NewExpenseCategory } from './expense-category.service.js';
 export type {
   WaiterBalanceBlocker,
   BankDeposit,
@@ -43,7 +45,7 @@ export type {
   DayEndSummary,
   DayFigures,
   DaySummary,
-  ExpenseCategory,
+  LegacyExpenseCategory,
   ExpenseEntry,
   OpenBillBlocker,
   OwingWaiter,

@@ -360,7 +360,25 @@ export interface PeakSession {
 
 // ── Expenses ────────────────────────────────────────────────────────────────
 
-export type ExpenseCategory = 'ICE' | 'STAFF_FOOD' | 'TRANSPORT' | 'CLEANING' | 'REPAIRS' | 'OTHER'
+/** A managed expense category (Phase 18, Settings → Expense Categories). */
+export interface ExpenseCategory {
+  id: string
+  name: string
+  isActive: boolean
+  noteRequired: boolean
+  /** Picker order: the first nine active categories get keys 1–9. */
+  sortOrder: number
+  /** The pre-Phase-18 code old expenses carry (ICE, OTHER, …); null for categories added since. */
+  legacyCode: string | null
+  usedCount: number
+}
+
+export interface ExpenseCategoryPatch {
+  name?: string
+  noteRequired?: boolean
+  isActive?: boolean
+  move?: 'up' | 'down'
+}
 
 export interface CashExpense {
   id: string
@@ -368,7 +386,8 @@ export interface CashExpense {
   peakSessionId: string | null
   amountPaise: Paise
   reversesExpenseId: string | null
-  category: ExpenseCategory
+  /** Resolved by the server (old rows through their legacy code). */
+  category: { id: string; name: string }
   description: string | null
   createdAt: string
 }

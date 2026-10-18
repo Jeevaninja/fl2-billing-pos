@@ -127,8 +127,8 @@ describe('DayEndService', () => {
       await waiters.settleWaiterBill(c.id, fx.waiter.trusted, 'WAITER_CREDIT'); // credit, no cash
       await waiters.recordWaiterRepayment(fx.waiter.trusted, 200_00n, 'CASH', fx.cashier); // +200 cash
       await waiters.recordWaiterRepayment(fx.waiter.trusted, 100_00n, 'UPI', fx.cashier); // UPI only
-      await dayEnd.recordCashExpense(150_00n, 'Ice', fx.cashier); // −150 cash
-      const tea = await dayEnd.recordCashExpense(40_00n, 'Tea', fx.cashier);
+      await dayEnd.recordCashExpense(150_00n, 'Ice', fx.cashier, fx.expenseCategory.OTHER); // −150 cash
+      const tea = await dayEnd.recordCashExpense(40_00n, 'Tea', fx.cashier, fx.expenseCategory.OTHER);
       await db.query(
         `INSERT INTO cash_expenses (amount_paise, reverses_expense_id, description, created_by_staff_id) VALUES (-4000, $1, 'Tea entered twice', $2)`,
         [tea.id, fx.cashier],
@@ -143,7 +143,7 @@ describe('DayEndService', () => {
       await billing.settleNormalBill(d.id, [{ mode: 'CASH', amount: PAISE.beer330 }]);
       await billing.recordPeakSale(session.id, fx.sku.beer650, 2, fx.cashier); // ₹500, taken as 300 cash + 200 UPI
       await waiters.recordWaiterRepayment(fx.waiter.trusted, 300_00n, 'CASH', fx.cashier);
-      const iceDuringPeak = await dayEnd.recordCashExpense(50_00n, 'Ice (rush)', fx.cashier);
+      const iceDuringPeak = await dayEnd.recordCashExpense(50_00n, 'Ice (rush)', fx.cashier, fx.expenseCategory.OTHER);
       expect(iceDuringPeak.peakSessionId).toBe(session.id);
       // Drawer: 1,000 + 150 bill D + 300 peak cash + 300 waiter cash − 50 expense = 1,700; UPI 200.
       const ended = await peak.endPeakSession(session.id, 1700_00n, 200_00n, fx.cashier);
@@ -222,7 +222,7 @@ describe('DayEndService', () => {
       await expectPosError(billing.createBill('NORMAL', fx.cashier), PosErrorCode.DAY_OR_PEAK_RULE);
       await expectPosError(peak.startPeakSession(fx.dayId, 0n, 0n, fx.cashier), PosErrorCode.DAY_OR_PEAK_RULE);
       await expectPosError(waiters.recordWaiterRepayment(fx.waiter.trusted, 1n, 'CASH', fx.cashier), PosErrorCode.DAY_OR_PEAK_RULE);
-      await expectPosError(dayEnd.recordCashExpense(1n, 'Ice', fx.cashier), PosErrorCode.DAY_OR_PEAK_RULE);
+      await expectPosError(dayEnd.recordCashExpense(1n, 'Ice', fx.cashier, fx.expenseCategory.OTHER), PosErrorCode.DAY_OR_PEAK_RULE);
     });
   });
 
@@ -265,10 +265,10 @@ describe('DayEndService', () => {
   describe('recordCashExpense', () => {
     it('records an expense on the open day and refuses blank descriptions or non-positive amounts', async () => {
       const { fx, dayEnd } = setup();
-      const expense = await dayEnd.recordCashExpense(120_00n, '  Ice  ', fx.cashier);
+      const expense = await dayEnd.recordCashExpense(120_00n, '  Ice  ', fx.cashier, fx.expenseCategory.OTHER);
       expect(expense).toMatchObject({ businessDayId: fx.dayId, peakSessionId: null, amountPaise: 120_00n, description: 'Ice' });
-      await expect(dayEnd.recordCashExpense(10n, '   ', fx.cashier)).rejects.toBeInstanceOf(RangeError);
-      await expect(dayEnd.recordCashExpense(0n, 'Ice', fx.cashier)).rejects.toBeInstanceOf(RangeError);
+      await expectPosError(dayEnd.recordCashExpense(10n, '   ', fx.cashier, fx.expenseCategory.OTHER), PosErrorCode.ILLEGAL_TRANSITION, /needs a note/);
+      await expect(dayEnd.recordCashExpense(0n, 'Ice', fx.cashier, fx.expenseCategory.OTHER)).rejects.toBeInstanceOf(RangeError);
     });
   });
 });

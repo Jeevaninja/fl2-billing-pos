@@ -11,7 +11,7 @@ import {
   CatalogService,
   CounterQueries,
   DayEndService,
-  EXPENSE_CATEGORIES,
+  ExpenseCategoryService,
   NotFoundError,
   OrdersQueries,
   PeakSessionService,
@@ -22,6 +22,7 @@ import {
   SIZE_CODES,
   WaiterService,
   type CounterPayment,
+  type ExpenseCategoryPatch,
   type NewSkuInput,
   type ReceiptLineInput,
   type ReceiptPrinter,
@@ -95,6 +96,7 @@ function buildRoutes({ db, cashierId, printer = new PrinterService() }: ApiConfi
   const purchases = new PurchaseService(db);
   const catalog = new CatalogService(db);
   const orders = new OrdersQueries(db);
+  const expenseCategories = new ExpenseCategoryService(db);
 
   return [
     route('GET', '/api/health', async () => ok({ ok: true })),
@@ -241,10 +243,28 @@ function buildRoutes({ db, cashierId, printer = new PrinterService() }: ApiConfi
           paise(body.amount, 'amount'),
           body.description === undefined || body.description === null ? null : str(body.description, 'description'),
           cashierId,
-          optOneOf(body.category, 'category', EXPENSE_CATEGORIES) ?? 'OTHER',
+          id(body.categoryId, 'categoryId'),
         ),
       ),
     ),
+    // ── Expense categories (Phase 18, Settings) ──
+    route('GET', '/api/expense-categories', async ({ query }) =>
+      ok(await expenseCategories.listCategories({ includeInactive: query.get('includeInactive') === '1' })),
+    ),
+    route('POST', '/api/expense-categories', async ({ body }) =>
+      created(await expenseCategories.createCategory({ name: str(body.name, 'name'), noteRequired: optBool(body.noteRequired, 'noteRequired') ?? false })),
+    ),
+    route('PATCH', '/api/expense-categories/:categoryId', async ({ params, body }) => {
+      const patch: ExpenseCategoryPatch = {};
+      if (body.name !== undefined) patch.name = str(body.name, 'name');
+      const noteRequired = optBool(body.noteRequired, 'noteRequired');
+      if (noteRequired !== undefined) patch.noteRequired = noteRequired;
+      const isActive = optBool(body.isActive, 'isActive');
+      if (isActive !== undefined) patch.isActive = isActive;
+      const move = optOneOf(body.move, 'move', ['up', 'down'] as const);
+      if (move !== undefined) patch.move = move;
+      return ok(await expenseCategories.updateCategory(id(params.categoryId, 'categoryId'), patch));
+    }),
     route('POST', '/api/expenses/:expenseId/void', async ({ params }) =>
       created(await dayEnd.voidCashExpense(id(params.expenseId, 'expenseId'), cashierId)),
     ),

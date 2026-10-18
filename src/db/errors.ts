@@ -60,6 +60,7 @@ const CONSTRAINT_CODES: Readonly<Record<string, PosErrorCode>> = {
   skus_sku_code_unique: PosErrorCode.DUPLICATE_CATALOG_ENTRY,
   skus_barcode_unique: PosErrorCode.DUPLICATE_CATALOG_ENTRY,
   skus_product_size_unique: PosErrorCode.DUPLICATE_CATALOG_ENTRY,
+  expense_categories_name_unique: PosErrorCode.DUPLICATE_CATALOG_ENTRY,
 };
 
 /** A POS business-rule violation, carrying one of the PS001–PS012 codes. */

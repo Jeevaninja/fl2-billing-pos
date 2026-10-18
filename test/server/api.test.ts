@@ -194,11 +194,15 @@ describe('local HTTP API', () => {
     await call('POST', `/api/bills/${bill.id}/items`, { skuId: fx.sku.quarter, quantity: 1 });
     await call('PUT', `/api/bills/${bill.id}/waiter`, { waiterId: fx.waiter.trusted });
     await call('POST', `/api/bills/${bill.id}/settle-waiter`, { waiterId: fx.waiter.trusted, tender: 'WAITER_CREDIT' });
-    expect(await call('POST', '/api/expenses', { amount: '5000', description: 'Ice' })).toMatchObject({
+    expect(await call('POST', '/api/expenses', { amount: '5000', description: 'Ice', categoryId: fx.expenseCategory.OTHER })).toMatchObject({
       status: 201,
       body: { amountPaise: '5000', description: 'Ice', businessDayId: fx.dayId },
     });
-    expect(await call('POST', '/api/expenses', { amount: '5000', description: '  ' })).toMatchObject({ status: 400 });
+    expect(await call('POST', '/api/expenses', { amount: '5000', description: '  ', categoryId: fx.expenseCategory.OTHER })).toMatchObject({
+      status: 409,
+      body: { error: { code: 'PS002' } },
+    });
+    expect(await call('POST', '/api/expenses', { amount: '5000', description: 'Ice' })).toMatchObject({ status: 400 });
 
     const summary = await call('GET', '/api/day-end');
     expect(summary).toMatchObject({
@@ -332,14 +336,14 @@ describe('local HTTP API', () => {
 
   it('records, lists and voids categorised expenses', async () => {
     const { fx, call } = await start();
-    const ice = await call('POST', '/api/expenses', { amount: '15000', category: 'ICE' });
-    expect(ice).toMatchObject({ status: 201, body: { category: 'ICE', description: null, amountPaise: '15000' } });
-    await call('POST', '/api/expenses', { amount: '4000', category: 'OTHER', description: 'Tea' });
-    expect(await call('POST', '/api/expenses', { amount: '4000', category: 'OTHER' })).toMatchObject({ status: 400 });
-    expect(await call('POST', '/api/expenses', { amount: '4000', category: 'PARTY', description: 'x' })).toMatchObject({ status: 400 });
+    const ice = await call('POST', '/api/expenses', { amount: '15000', categoryId: fx.expenseCategory.ICE });
+    expect(ice).toMatchObject({ status: 201, body: { category: { id: fx.expenseCategory.ICE, name: 'Ice' }, description: null, amountPaise: '15000' } });
+    await call('POST', '/api/expenses', { amount: '4000', categoryId: fx.expenseCategory.OTHER, description: 'Tea' });
+    expect(await call('POST', '/api/expenses', { amount: '4000', categoryId: fx.expenseCategory.OTHER })).toMatchObject({ status: 409 });
+    expect(await call('POST', '/api/expenses', { amount: '4000', categoryId: MISSING, description: 'x' })).toMatchObject({ status: 404 });
 
     const voided = await call('POST', `/api/expenses/${ice.body.id}/void`, {});
-    expect(voided).toMatchObject({ status: 201, body: { amountPaise: '-15000', reversesExpenseId: ice.body.id, category: 'ICE' } });
+    expect(voided).toMatchObject({ status: 201, body: { amountPaise: '-15000', reversesExpenseId: ice.body.id, category: { name: 'Ice' } } });
     expect(await call('POST', `/api/expenses/${ice.body.id}/void`, {})).toMatchObject({ status: 409, body: { error: { code: 'PS006' } } });
 
     const list = await call('GET', '/api/expenses');
@@ -351,6 +355,37 @@ describe('local HTTP API', () => {
 
     await call('POST', `/api/days/${fx.dayId}/close`, { countedCash: '0' });
     expect(await call('GET', '/api/expenses')).toMatchObject({ status: 404 });
+  });
+
+  it('manages expense categories: list, create, rename, reorder, disable', async () => {
+    const { fx, call } = await start();
+    const list = await call('GET', '/api/expense-categories');
+    expect(list.status).toBe(200);
+    expect(list.body.map((c: { name: string }) => c.name)).toEqual([
+      'Ice',
+      'Staff food',
+      'Transport',
+      'Cleaning',
+      'Repairs & Maintenance',
+      'Bata / Daily Wages',
+      'Other',
+    ]);
+
+    const soda = await call('POST', '/api/expense-categories', { name: '  Soda   water ', noteRequired: true });
+    expect(soda).toMatchObject({ status: 201, body: { name: 'Soda water', noteRequired: true, isActive: true, sortOrder: 8, usedCount: 0 } });
+    expect(await call('POST', '/api/expense-categories', { name: 'soda WATER' })).toMatchObject({ status: 409, body: { error: { code: 'PS012' } } });
+
+    const moved = await call('PATCH', `/api/expense-categories/${soda.body.id}`, { move: 'up', name: 'Soda' });
+    expect(moved).toMatchObject({ status: 200, body: { name: 'Soda', sortOrder: 7 } });
+    expect(await call('PATCH', `/api/expense-categories/${fx.expenseCategory.ICE}`, { move: 'sideways' })).toMatchObject({ status: 400 });
+
+    await call('PATCH', `/api/expense-categories/${soda.body.id}`, { isActive: false });
+    expect((await call('GET', '/api/expense-categories')).body).toHaveLength(7);
+    expect((await call('GET', '/api/expense-categories?includeInactive=1')).body).toHaveLength(8);
+    expect(await call('POST', '/api/expenses', { amount: '100', categoryId: soda.body.id, description: 'x' })).toMatchObject({
+      status: 409,
+      body: { error: { code: 'PS002' } },
+    });
   });
 
   it('searches members and returns 404 for unknown SKUs and bills', async () => {

@@ -13,6 +13,7 @@ import type {
   CashExpense,
   CatalogProduct,
   ExpenseCategory,
+  ExpenseCategoryPatch,
   ExpenseEntry,
   MemberSummary,
   NewProductPayload,
@@ -158,8 +159,14 @@ export const api = {
 
   /** The open day's expenses, newest first (404 when no day is open). */
   listExpenses: () => call<ExpenseEntry[]>('GET', '/api/expenses'),
-  addExpense: (amount: Paise, category: ExpenseCategory, description: string | null) =>
-    call<CashExpense>('POST', '/api/expenses', { amount, category, description }),
+  addExpense: (amount: Paise, categoryId: string, description: string | null) =>
+    call<CashExpense>('POST', '/api/expenses', { amount, categoryId, description }),
+  /** Active categories in picker order; with `includeInactive`, disabled ones too (Settings). */
+  listExpenseCategories: (includeInactive = false) =>
+    call<ExpenseCategory[]>('GET', `/api/expense-categories${includeInactive ? '?includeInactive=1' : ''}`),
+  createExpenseCategory: (name: string, noteRequired: boolean) => call<ExpenseCategory>('POST', '/api/expense-categories', { name, noteRequired }),
+  updateExpenseCategory: (categoryId: string, patch: ExpenseCategoryPatch) =>
+    call<ExpenseCategory>('PATCH', `/api/expense-categories/${encodeURIComponent(categoryId)}`, patch),
   voidExpense: (expenseId: string) => call<CashExpense>('POST', `/api/expenses/${encodeURIComponent(expenseId)}/void`),
   listBankDeposits: () => call<BankDepositEntry[]>('GET', '/api/bank-deposits'),
   addBankDeposit: (amount: Paise, reference: string | null) => call<BankDeposit>('POST', '/api/bank-deposits', { amount, reference }),

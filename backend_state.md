@@ -1,8 +1,8 @@
 # FL2 POS — Backend State Reference
 
-Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`), Phase 10 master catalog and case-based inwarding (`0009_catalog_case_size`, `CatalogService`; plan `docs/ui/phase10-catalog-case-grn-plan.md`), Phase 11 peak start baseline and Day End sales breakdown (no migration; plan `docs/ui/phase11-peak-day-end-visibility-plan.md`), Phase 12 server-side peak undo (no migration; plan `docs/ui/phase12-billing-speed-plan.md`), Phase 13 Day End tally adjustments and running peak analytics (`0010_tender_adjustments`; plan `docs/ui/phase13-peak-close-tally-plan.md`), Phase 14 bank deposits / cash drops (`0011_bank_deposits`; plan `docs/ui/phase14-bank-deposits-plan.md`), Phase 15 held bills in `/api/context` and per-waiter day stats (no migration; plan `docs/ui/phase15-billing-tabs-waiter-sidebar-plan.md`), Phase 16 waiter ledger, multi-bill and lump-sum waiter settlement and the Day End waiter-balance blocker (no migration; plan `docs/ui/phase16-waiter-ledger-plan.md`), and Phase 17 Orders (bill-wise tracking) and DUPLICATE receipt reprints (no migration; plan `docs/ui/phase17-orders-plan.md`). Upcoming phases, not built: `docs/roadmap.md`. Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
+Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`), Phase 10 master catalog and case-based inwarding (`0009_catalog_case_size`, `CatalogService`; plan `docs/ui/phase10-catalog-case-grn-plan.md`), Phase 11 peak start baseline and Day End sales breakdown (no migration; plan `docs/ui/phase11-peak-day-end-visibility-plan.md`), Phase 12 server-side peak undo (no migration; plan `docs/ui/phase12-billing-speed-plan.md`), Phase 13 Day End tally adjustments and running peak analytics (`0010_tender_adjustments`; plan `docs/ui/phase13-peak-close-tally-plan.md`), Phase 14 bank deposits / cash drops (`0011_bank_deposits`; plan `docs/ui/phase14-bank-deposits-plan.md`), Phase 15 held bills in `/api/context` and per-waiter day stats (no migration; plan `docs/ui/phase15-billing-tabs-waiter-sidebar-plan.md`), Phase 16 waiter ledger, multi-bill and lump-sum waiter settlement and the Day End waiter-balance blocker (no migration; plan `docs/ui/phase16-waiter-ledger-plan.md`), Phase 17 Orders (bill-wise tracking) and DUPLICATE receipt reprints (no migration; plan `docs/ui/phase17-orders-plan.md`), and Phase 18 custom expense categories (`0012_expense_categories`; plan `docs/ui/phase18-expense-categories-plan.md`). Upcoming phases, not built: `docs/roadmap.md`. Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
 
-- **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`, `0006_expense_category`, `0007_peak_drawer_cash`, `0008_stock_receipts`, `0009_catalog_case_size`, `0010_tender_adjustments`, `0011_bank_deposits`.
+- **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`, `0006_expense_category`, `0007_peak_drawer_cash`, `0008_stock_receipts`, `0009_catalog_case_size`, `0010_tender_adjustments`, `0011_bank_deposits`, `0012_expense_categories`.
 - **Money:** `BIGINT` whole paise in SQL, `bigint` in TypeScript (`type Paise = bigint`). No floats anywhere.
 - **Quantities:** `INTEGER` whole sealed bottles. No ml / peg columns.
 - **Append-only:** DELETE and TRUNCATE are blocked on every domain table. Ledger tables also block UPDATE. Corrections are made with reversing records.
@@ -23,13 +23,14 @@ Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local 
 | `stock_receipt_lines` | GRN lines: `qty` whole bottles > 0 of one SKU at `unit_cost_paise` ≥ 0 (₹0 = scheme / free); one line per SKU per receipt; append-only (0008). `cases` ≥ 0 and the `case_size` snapshot record how the line was counted (NULL / 0 = loose only); `cases × case_size ≤ qty` (0009) | `receipt_id → stock_receipts`, `sku_id → skus` |
 | `business_days` | Trading day; one OPEN at a time; bill-number counter; `opening_float_paise` (immutable); on close: `counted_cash_paise`, and trigger-computed `expected_cash_paise` / `cash_variance_paise` (0005) | `opened_by_staff_id`, `closed_by_staff_id → staff` |
 | `peak_sessions` | Peak windows (several per day, one running); start/end cash and UPI; frozen expected and variance | `business_day_id → business_days`, `started_by_staff_id`, `ended_by_staff_id → staff` |
+| `expense_categories` | Phase 18 (0012). Managed petty-cash categories: `name` (unique, case-insensitive), `is_active`, `note_required`, `sort_order` (Expense picker order), `legacy_code` (the 0006 code it stands for; immutable). Editable master data, no DELETE (disable instead), outbox on change. Seeds: Ice, Staff food, Transport, Cleaning, Repairs & Maintenance (`REPAIRS`), Bata / Daily Wages, Other (`OTHER`, note required) | — |
 | `waiters` | `is_trusted`, `outstanding_balance` (paise, `≥ 0`, trigger-maintained), optional `credit_limit_paise` | — |
 | `waiter_payments` | Repayments against a waiter's account (append-only) | `waiter_id → waiters`, `business_day_id → business_days`, `peak_session_id → peak_sessions`, `reverses_waiter_payment_id → waiter_payments`, `received_by_staff_id → staff` |
 | `waiter_ledger_entries` | Waiter running account: BILL_CREDIT, BILL_CREDIT_REVERSAL, PAYMENT, PAYMENT_REVERSAL, MANUAL_ADJUSTMENT | `waiter_id → waiters`, `business_day_id → business_days`, `bill_payment_id → bill_payments`, `waiter_payment_id → waiter_payments`, `created_by_staff_id → staff` |
 | `bills` | `billing_mode` NORMAL / PEAK; `status` OPEN → SETTLED or PEAK_UNSETTLED → PEAK_RECONCILED; `bill_kind` SALE / REVERSAL; Captain orders carry `request_id` (unique idempotency key), `request_fingerprint` and `captain_device_id` (0004) | `business_day_id → business_days`, `peak_session_id → peak_sessions`, `waiter_id → waiters`, `member_id → members`, `reverses_bill_id → bills` (unique), `replaces_bill_id → bills` (unique), `created_by_staff_id`, `settled_by_staff_id → staff` |
 | `bill_items` | Lines with SKU / price snapshots; negative lines cancel or reverse | `bill_id → bills`, `sku_id → skus`, `reverses_item_id → bill_items`, `waiter_id → waiters`, `created_by_staff_id → staff` |
 | `bill_payments` | Tenders: CASH, UPI, WAITER_CREDIT; negative amounts are refunds | `bill_id → bills`, `business_day_id → business_days`, `peak_session_id → peak_sessions`, `reverses_payment_id → bill_payments` (unique), `received_by_staff_id → staff` |
-| `cash_expenses` | Petty-cash payments from the drawer (append-only; a negative row with `reverses_expense_id` voids one); tagged to the open day and running peak by trigger (0005). `category` ∈ ICE, STAFF_FOOD, TRANSPORT, CLEANING, REPAIRS, OTHER; `description` optional except for OTHER (0006) | `business_day_id → business_days`, `peak_session_id → peak_sessions`, `reverses_expense_id → cash_expenses` (unique), `created_by_staff_id → staff` |
+| `cash_expenses` | Petty-cash payments from the drawer (append-only; a negative row with `reverses_expense_id` voids one); tagged to the open day and running peak by trigger (0005). Phase 18 (0012): new rows carry `category_id → expense_categories` (active category, note when `note_required`); pre-0012 rows keep their legacy text `category` (ICE … OTHER) and are never back-filled — exactly one of the two is set (`cash_expenses_one_category`); a void copies the original's | `business_day_id → business_days`, `peak_session_id → peak_sessions`, `reverses_expense_id → cash_expenses` (unique), `created_by_staff_id → staff` |
 | `tender_adjustments` | Day-level Cash ⇄ UPI reclassification of normal-bill revenue (append-only; a negating row with `reverses_adjustment_id` voids one). `cash_delta_paise + upi_delta_paise = 0`; `system_cash_paise` / `system_upi_paise` are the normal-bill tenders when the row was written (trigger-set); `reason` required (0010) | `business_day_id → business_days`, `reverses_adjustment_id → tender_adjustments` (unique), `created_by_staff_id → staff` |
 | `bank_deposits` | Cash taken out of the drawer to be banked, e.g. RTGS (append-only; a negative row with `reverses_deposit_id` voids one). Not an expense, not revenue. `reference` optional (0011) | `business_day_id → business_days`, `reverses_deposit_id → bank_deposits` (unique), `created_by_staff_id → staff` |
 | `sync_outbox` | Transactional outbox for cloud sync (written by trigger) | — |
@@ -251,7 +252,7 @@ class DayEndService {
   getDayEndSummary(businessDayId: string): Promise<DayEndSummary>;        // NotFoundError for an unknown day
   closeBusinessDay(businessDayId: string, countedCash: Paise, staffId: string): Promise<DayEndSummary>;
   openBusinessDay(openingFloat: Paise, staffId: string, businessDate?: string /* default: today, Asia/Kolkata */): Promise<DaySummary>;
-  recordCashExpense(amount: Paise, description: string | null, staffId: string, category?: ExpenseCategory /* default OTHER */): Promise<CashExpense>;
+  recordCashExpense(amount: Paise, description: string | null, staffId: string, categoryId: string): Promise<CashExpense>;   // Phase 18: a managed category
   listCashExpenses(businessDayId: string): Promise<ExpenseEntry[]>;        // originals only, newest first, with voidedAt
   voidCashExpense(expenseId: string, staffId: string): Promise<CashExpense>; // appends the negating row
   adjustTenderSplit(businessDayId: string, cashDelta: Paise /* ≠ 0; + = UPI → Cash */, reason: string, staffId: string): Promise<TenderAdjustment>;
@@ -261,7 +262,8 @@ class DayEndService {
   voidBankDeposit(depositId: string, staffId: string): Promise<BankDeposit>; // appends the negating row
 }
 
-type ExpenseCategory = 'ICE' | 'STAFF_FOOD' | 'TRANSPORT' | 'CLEANING' | 'REPAIRS' | 'OTHER';  // EXPENSE_CATEGORIES
+type LegacyExpenseCategory = 'ICE' | 'STAFF_FOOD' | 'TRANSPORT' | 'CLEANING' | 'REPAIRS' | 'OTHER';  // EXPENSE_CATEGORIES: pre-0012 rows only
+// CashExpense.category: { id, name } — resolved by id, else through expense_categories.legacy_code.
 interface ExpenseEntry extends CashExpense { voidedAt: Date | null; }
 
 interface DaySummary {
@@ -295,7 +297,11 @@ interface CashExpense { id; businessDayId; peakSessionId: string | null; amountP
 - **Sales breakdown (Phase 11), per ended peak session:** `peakUpi = upiDelta − in-window UPI` (UPI bill tenders and UPI waiter repayments taken during the peak, which moved the reading too); `peakCash = sales − peakUpi`. The variance therefore lands in peak cash. `getDayFigures` (shared with the peak baseline) asserts `peakCash = cashDelta − in-window cash tenders − in-window waiter cash + in-window expenses − variance` and `total.upi + waiterRepayments.upi = breakdown.upiTotalPaise`, throwing on drift. Normal-bill tenders taken inside a peak count under `normal` here but stay inside the peak's cash delta in `CashBreakdown`. A negative derived peak cash (UPI readings above sales) is reported, not clamped.
 - **`closeBusinessDay`:** locks the day row first, so a sale racing the close either commits before it (and is counted) or fails `PS007`. The database re-checks every blocker. The returned breakdown is checked against the frozen expected figure.
 - **`openBusinessDay`:** refuses a second open day and a date that has already traded (`PS007`). A business date trades once, so closing and reopening on the same calendar day is refused.
-- **`recordCashExpense`:** amount > 0; the note is trimmed (blank → null), at most 200 characters, and required for OTHER (`RangeError`, also a CHECK). Unknown categories are a `RangeError`.
+- **`recordCashExpense`:**
+  - The amount must be above ₹0, and the note is trimmed (blank → null), at most 200 characters.
+  - An unknown `categoryId` is a `NotFoundError`.
+  - The insert trigger refuses (`PS002`) a disabled category, a missing note on a `note_required` category, and a legacy code on a new row.
+  - Day End and peak math only sum amounts, so they are unchanged by categories.
 - **`voidCashExpense`:** `NotFoundError` for an unknown id; double void or voiding a void row is `PS006`; an expense from a closed day is `PS007`.
 - **`recordBankDeposit` (Phase 14):** amount > 0; the reference is trimmed (blank → null), at most 200 characters (`RangeError`). `CashBreakdown.bankDepositsPaise` is subtracted from expected cash (asserted against `pos_day_expected_cash`); `SalesBreakdown` and `cashExpensesPaise` never include deposits. `PeakStartBaseline` gains `tenderAdjustmentPaise` and `bankDepositsPaise`, so its cash terms add up to `expectedCashPaise`. **`voidBankDeposit`:** `NotFoundError` for an unknown id, otherwise the trigger's void rules.
 - **`adjustTenderSplit` (Phase 13):** `upiDelta` is always `−cashDelta`, so total revenue can't change; `normal.totalPaise` and `total.salesPaise` are asserted unchanged. Reason trimmed, 1–200 characters (`RangeError`). **`voidTenderAdjustment`:** `NotFoundError` for an unknown id, otherwise the trigger's void rules.
@@ -394,6 +400,22 @@ interface BillDetail {
   tenderedPaise: Paise; duePaise: Paise;
 }
 ```
+
+### `ExpenseCategoryService` (`src/services/expense-category.service.ts`, Phase 18)
+
+```ts
+class ExpenseCategoryService {
+  listCategories(opts?: { includeInactive?: boolean }): Promise<ExpenseCategory[]>;  // sort_order, then name
+  createCategory(input: { name: string; noteRequired?: boolean }): Promise<ExpenseCategory>;  // appended last; PS012 duplicate (any case)
+  updateCategory(id: string, patch: { name?; noteRequired?; isActive?; move?: 'up' | 'down' }): Promise<ExpenseCategory>;
+}
+interface ExpenseCategory { id; name; isActive; noteRequired; sortOrder; legacyCode: string | null; usedCount: number }
+```
+
+- **Names:** `cleanCategoryName` trims and collapses spaces. A blank name or one over 40 characters is a `RangeError`.
+- **Disabling:** refused for the last active category (`PS002`).
+- **Order:** `move` swaps `sort_order` with the neighbour, under a table lock.
+- **Renames:** relabel history, because past expenses resolve by id or by legacy code.
 
 ### `OrdersQueries` (`src/services/orders.queries.ts`, Phase 17)
 
@@ -636,7 +658,10 @@ Migrations run on every boot (already-applied ones are skipped).
 | `POST /api/days` | `{ openingFloat }` | `openBusinessDay(…, cashier)` | 201 |
 | `POST /api/days/:dayId/close` | `{ countedCash }` | `closeBusinessDay(…, cashier)` | 200 |
 | `GET /api/expenses` | | `listCashExpenses(open day)`; 404 when no day is open | 200 |
-| `POST /api/expenses` | `{ amount, category?, description? }` (category defaults to OTHER) | `recordCashExpense(…, cashier, category)` | 201 |
+| `POST /api/expenses` | `{ amount, categoryId, description? }` (Phase 18; `categoryId` required) | `recordCashExpense(…, cashier, categoryId)` | 201 |
+| `GET /api/expense-categories` | `?includeInactive=1` | `listCategories` (picker order; `usedCount` per category) | 200 |
+| `POST /api/expense-categories` | `{ name, noteRequired? }` | `createCategory` (appended last; PS012 duplicate) | 201 |
+| `PATCH /api/expense-categories/:categoryId` | `{ name?, noteRequired?, isActive?, move?: 'up'\|'down' }` | `updateCategory` (PS002 for disabling the last active one) | 200 |
 | `POST /api/expenses/:expenseId/void` | | `voidCashExpense(…, cashier)` | 201 |
 | `POST /api/days/:dayId/tender-adjustments` | `{ cashDelta, reason }` (`cashDelta` signed paise string, ≠ 0) | `adjustTenderSplit(…, cashier)` | 201 |
 | `POST /api/tender-adjustments/:adjustmentId/void` | | `voidTenderAdjustment(…, cashier)` | 201 |

@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useReducer, useRef, type ReactNode } from 'react'
-import { ArrowLeft, ReceiptIndianRupee, RefreshCw, Sunrise, WifiOff, Zap } from 'lucide-react'
+import { ArrowLeft, ReceiptIndianRupee, RefreshCw, Search, Sunrise, WifiOff, Zap } from 'lucide-react'
 import { ApiError, api } from '../api/client'
 import type { ExpenseEntry } from '../api/types'
 import { FlashLine } from '../billing/BillingPanels'
 import { counterErrorMessage } from '../billing/errors'
 import { Modal } from '../billing/Modal'
 import {
-  CATEGORIES,
-  CATEGORY_LABEL,
+  categoryForKey,
   expenseReducer,
   formError,
   formPayload,
   initialExpenseState,
+  pickerMatches,
+  quickKey,
+  selectedCategory,
   todayTotals,
 } from '../expense/expenseReducer'
 import { beep } from '../lib/beep'
@@ -55,7 +57,9 @@ export default function ExpenseScreen({ onExit, onOpenDayEnd, exitLabel = 'Dashb
         dispatch({ type: 'noDay' })
         return
       }
-      dispatch({ type: 'loaded', entries: await api.listExpenses() })
+      const [entries, categories] = await Promise.all([api.listExpenses(), api.listExpenseCategories()])
+      dispatch({ type: 'categories', categories })
+      dispatch({ type: 'loaded', entries })
     } catch (err) {
       if (err instanceof ApiError && err.code === 'NOT_FOUND') dispatch({ type: 'noDay' })
       else dispatch({ type: 'failed', message: counterErrorMessage(err) })
@@ -78,10 +82,10 @@ export default function ExpenseScreen({ onExit, onOpenDayEnd, exitLabel = 'Dashb
     }
     dispatch({ type: 'submitting', on: true })
     api
-      .addExpense(payload.amount, payload.category, payload.description)
+      .addExpense(payload.amount, payload.categoryId, payload.description)
       .then((expense) => {
         dispatch({ type: 'recorded' })
-        flash('ok', `Recorded ${formatPaise(expense.amountPaise)} · ${CATEGORY_LABEL[expense.category]}${expense.peakSessionId ? ' (during peak)' : ''}`)
+        flash('ok', `Recorded ${formatPaise(expense.amountPaise)} · ${expense.category.name}${expense.peakSessionId ? ' (during peak)' : ''}`)
         amountRef.current?.focus()
       })
       .catch((err: unknown) => {
@@ -96,14 +100,19 @@ export default function ExpenseScreen({ onExit, onOpenDayEnd, exitLabel = 'Dashb
       dispatch({ type: 'confirmVoid', id: null })
       api
         .voidExpense(entry.id)
-        .then(() => flash('ok', `Voided ${formatPaise(entry.amountPaise)} · ${CATEGORY_LABEL[entry.category]}`))
+        .then(() => flash('ok', `Voided ${formatPaise(entry.amountPaise)} · ${entry.category.name}`))
         .catch((err: unknown) => flash('error', counterErrorMessage(err)))
         .finally(() => void refresh())
     },
     [flash, refresh],
   )
 
-  // Keys: 1–6 pick a category when no text field has focus; Esc leaves (when no dialog is open).
+  const pickCategory = useCallback((id: string) => {
+    dispatch({ type: 'category', id })
+    amountRef.current?.focus()
+  }, [])
+
+  // Keys: 1–9 pick the first nine categories when no text field has focus; Esc leaves (when no dialog is open).
   const dialogOpen = state.confirmVoidId !== null
   useEffect(() => {
     if (dialogOpen) return
@@ -115,21 +124,23 @@ export default function ExpenseScreen({ onExit, onOpenDayEnd, exitLabel = 'Dashb
         return
       }
       const inField = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement
-      const category = CATEGORIES.find((c) => c.key === event.key)
+      const category = categoryForKey(stateRef.current, event.key)
       if (category && !inField && stateRef.current.load === 'ready') {
         event.preventDefault()
-        dispatch({ type: 'category', category: category.id })
-        amountRef.current?.focus()
+        pickCategory(category.id)
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [dialogOpen, onExit])
+  }, [dialogOpen, onExit, pickCategory])
 
   const { till } = state
   const totals = todayTotals(state.entries)
   const error = formError(state)
   const confirming = state.entries.find((e) => e.id === state.confirmVoidId)
+  const picked = selectedCategory(state)
+  const matches = pickerMatches(state)
+  const searching = state.query.trim() !== '' && state.query.trim().toLowerCase() !== picked?.name.toLowerCase()
 
   return (
     <div className="flex h-full min-h-screen flex-col">
@@ -189,31 +200,65 @@ export default function ExpenseScreen({ onExit, onOpenDayEnd, exitLabel = 'Dashb
           <section className="flex w-[46%] max-w-2xl min-w-96 shrink-0 flex-col gap-5 overflow-y-auto border-r-2 border-zinc-800 bg-zinc-900 p-5" aria-label="New expense">
             <h2 className="text-xs font-bold tracking-widest text-zinc-400 uppercase">New cash expense</h2>
             <div>
-              <span className="text-sm font-semibold text-zinc-300">Category</span>
-              <div className="mt-2 grid grid-cols-3 gap-2" role="radiogroup" aria-label="Category">
-                {CATEGORIES.map((c) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    role="radio"
-                    aria-checked={state.category === c.id}
-                    onClick={() => {
-                      dispatch({ type: 'category', category: c.id })
-                      amountRef.current?.focus()
+              <label className="block">
+                <span className="text-sm font-semibold text-zinc-300">Category</span>
+                <div className="mt-1 flex items-center gap-2 rounded-md border-2 border-zinc-600 bg-zinc-950 px-3 focus-within:border-amber-400">
+                  <Search className="size-5 shrink-0 text-zinc-500" aria-hidden />
+                  <input
+                    autoFocus
+                    role="combobox"
+                    aria-expanded="true"
+                    aria-controls="expense-categories"
+                    aria-autocomplete="list"
+                    value={state.query}
+                    autoComplete="off"
+                    onChange={(e) => dispatch({ type: 'query', text: e.target.value })}
+                    onFocus={(e) => e.currentTarget.select()}
+                    onKeyDown={(e) => {
+                      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                        e.preventDefault()
+                        dispatch({ type: 'highlight', delta: e.key === 'ArrowDown' ? 1 : -1 })
+                      } else if (e.key === 'Enter') {
+                        e.preventDefault()
+                        const target = searching ? matches[state.highlighted] : (picked ?? matches[state.highlighted])
+                        if (target) pickCategory(target.id)
+                        else flash('error', `No category matches “${state.query.trim()}”`)
+                      }
                     }}
-                    className={`flex min-h-16 items-center justify-between rounded-lg border-2 px-4 text-lg font-bold ${FOCUS_RING} ${
-                      state.category === c.id ? 'border-amber-400 bg-amber-400 text-zinc-950' : 'border-zinc-700 bg-zinc-950 hover:border-zinc-400'
-                    }`}
-                  >
-                    {c.label}
-                    <Kbd>{c.key}</Kbd>
-                  </button>
-                ))}
+                    placeholder="Type to search, or press 1–9"
+                    className="w-full bg-transparent py-3 text-lg outline-none"
+                  />
+                </div>
+              </label>
+              {state.categories === null && <p className="mt-2 text-sm text-zinc-400">Loading categories…</p>}
+              {state.categories?.length === 0 && <p className="mt-2 text-sm text-amber-300">No active categories — add one in Settings → Expense Categories.</p>}
+              {searching && matches.length === 0 && <p className="mt-2 text-sm text-zinc-400">No category matches.</p>}
+              <div id="expense-categories" className="mt-2 grid grid-cols-3 gap-2" role="listbox" aria-label="Categories">
+                {matches.map((c, i) => {
+                  const key = quickKey(state, c.id)
+                  const chosen = state.categoryId === c.id
+                  const lit = searching && i === state.highlighted
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      role="option"
+                      aria-selected={chosen}
+                      onClick={() => pickCategory(c.id)}
+                      className={`flex min-h-16 items-center justify-between gap-2 rounded-lg border-2 px-4 text-left text-lg font-bold ${FOCUS_RING} ${
+                        chosen ? 'border-amber-400 bg-amber-400 text-zinc-950' : lit ? 'border-amber-400 bg-zinc-800' : 'border-zinc-700 bg-zinc-950 hover:border-zinc-400'
+                      }`}
+                    >
+                      <span className="leading-tight">{c.name}</span>
+                      {key && <Kbd>{key}</Kbd>}
+                    </button>
+                  )
+                })}
               </div>
             </div>
             <RupeeField label="Amount paid from the drawer" value={state.amount} onChange={(text) => dispatch({ type: 'amount', text })} onEnter={record} inputRef={amountRef} size="lg" />
             <label className="block">
-              <span className="text-sm font-semibold text-zinc-300">Note {state.category === 'OTHER' ? '(required for Other)' : '(optional)'}</span>
+              <span className="text-sm font-semibold text-zinc-300">Note {picked?.noteRequired ? `(required for ${picked.name})` : '(optional)'}</span>
               <input
                 value={state.note}
                 maxLength={200}
@@ -243,7 +288,7 @@ export default function ExpenseScreen({ onExit, onOpenDayEnd, exitLabel = 'Dashb
               </span>
               <Kbd>Enter</Kbd>
             </button>
-            {error && state.category !== null && <p className="-mt-3 text-center text-sm text-amber-300">{error}</p>}
+            {error && picked !== null && <p className="-mt-3 text-center text-sm text-amber-300">{error}</p>}
           </section>
 
           <main className="flex min-w-0 flex-1 flex-col" aria-label="Today's expenses">
@@ -268,7 +313,7 @@ export default function ExpenseScreen({ onExit, onOpenDayEnd, exitLabel = 'Dashb
 
       {confirming && (
         <Modal
-          title={`Void ${formatPaise(confirming.amountPaise)} · ${CATEGORY_LABEL[confirming.category]}?`}
+          title={`Void ${formatPaise(confirming.amountPaise)} · ${confirming.category.name}?`}
           onClose={() => dispatch({ type: 'confirmVoid', id: null })}
           onKey={(e) => {
             if (e.key !== 'Enter') return false
@@ -304,7 +349,7 @@ function ExpenseRow({ entry, onVoid }: { entry: ExpenseEntry; onVoid: () => void
       <span className="w-14 shrink-0 font-mono text-sm text-zinc-400">
         {new Date(entry.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false })}
       </span>
-      <span className="w-28 shrink-0 font-bold">{CATEGORY_LABEL[entry.category]}</span>
+      <span className="w-40 shrink-0 truncate font-bold">{entry.category.name}</span>
       <span className="min-w-0 flex-1 truncate">{entry.description ?? ''}</span>
       {entry.peakSessionId && <Zap className="size-4 shrink-0 text-amber-400" aria-label="Paid during a peak session" />}
       <span className={`shrink-0 font-mono text-lg font-bold tabular-nums ${voided ? 'line-through' : ''}`}>{formatPaise(entry.amountPaise)}</span>

@@ -20,7 +20,7 @@ describe('bank deposits', () => {
     const upi = await services.billing.createBill('NORMAL', fx.cashier);
     await services.billing.addItemToBill(upi.id, fx.sku.half, 1);
     await services.billing.settleNormalBill(upi.id, [{ mode: 'UPI', amount: PAISE.half }]);
-    await services.dayEnd.recordCashExpense(150_00n, 'Ice', fx.cashier, 'ICE');
+    await services.dayEnd.recordCashExpense(150_00n, 'Ice', fx.cashier, fx.expenseCategory.ICE);
     return services;
   };
 

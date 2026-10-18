@@ -27,7 +27,11 @@ export interface Fixture {
     /** Trusted with a ₹1,000.00 credit limit. */
     limited: string;
   };
+  /** Seeded expense categories (0012): the six legacy codes plus Bata. Empty before 0012 is applied. */
+  expenseCategory: Record<ExpenseCategoryKey, string>;
 }
+
+export type ExpenseCategoryKey = 'ICE' | 'STAFF_FOOD' | 'TRANSPORT' | 'CLEANING' | 'REPAIRS' | 'OTHER' | 'BATA';
 
 /** Bottles per supplier case (skus.case_size). */
 export const CASE_SIZE: Record<SkuKey, number> = { full: 12, half: 32, quarter: 64, beer650: 12, beer330: 24 };
@@ -77,5 +81,16 @@ export async function seed(db: SqlClient): Promise<Fixture> {
     manager,
   ]);
 
-  return { cashier, manager, dayId, sku, waiter };
+  // Migration-seeded categories; a database stopped before 0012 (upgrade tests) has none.
+  const expenseCategory = {} as Record<ExpenseCategoryKey, string>;
+  const table = await one<{ t: string | null }>(db, `SELECT to_regclass('expense_categories')::text AS t`);
+  if (table.t !== null) {
+    const { rows } = await db.query<{ id: string; legacy_code: string | null; name: string }>(`SELECT id, legacy_code, name FROM expense_categories`);
+    for (const r of rows) {
+      if (r.legacy_code) expenseCategory[r.legacy_code as ExpenseCategoryKey] = r.id;
+      else if (r.name === 'Bata / Daily Wages') expenseCategory.BATA = r.id;
+    }
+  }
+
+  return { cashier, manager, dayId, sku, waiter, expenseCategory };
 }

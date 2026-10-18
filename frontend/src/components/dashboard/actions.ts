@@ -8,6 +8,7 @@ import {
   PackagePlus,
   ReceiptText,
   Smartphone,
+  Tags,
   UserSearch,
   Wallet,
   type LucideIcon,
@@ -25,6 +26,7 @@ export type PosActionId =
   | 'purchase'
   | 'catalog'
   | 'orders'
+  | 'expense-categories'
   | 'day-end'
   | 'reports'
 
@@ -47,6 +49,7 @@ export const ACTIONS: Record<PosActionId, PosAction> = {
   purchase: { id: 'purchase', label: 'Purchase', hint: 'Stock inwarding (GRN)', icon: PackagePlus },
   catalog: { id: 'catalog', label: 'Inventory Catalog', hint: 'Liquors, prices and case sizes', icon: Boxes },
   orders: { id: 'orders', label: 'Orders', hint: "Today's bills, receipts and reprints", icon: ClipboardList },
+  'expense-categories': { id: 'expense-categories', label: 'Expense Categories', hint: 'Petty-cash categories and their order', icon: Tags },
   'day-end': { id: 'day-end', label: 'Day End', hint: 'Peak reconciliation and close', icon: CalendarCheck },
   reports: { id: 'reports', label: 'Reports', hint: 'Sales, stock and F.Ac.2', icon: ChartColumn },
 }
@@ -54,8 +57,8 @@ export const ACTIONS: Record<PosActionId, PosAction> = {
 /** Dashboard tiles, in grid order. Inventory Catalog lives in the header Settings menu (Phase 17). */
 export const MODULE_TILES: readonly PosActionId[] = ['billing', 'captain-orders', 'expense', 'bank-deposit', 'purchase', 'orders', 'day-end', 'reports']
 
-/** Header Settings menu entries (custom expense categories join later, see docs/roadmap.md). */
-export const SETTINGS_ACTIONS: readonly PosActionId[] = ['catalog']
+/** Header Settings menu entries: setup screens that don't need a grid tile. */
+export const SETTINGS_ACTIONS: readonly PosActionId[] = ['catalog', 'expense-categories']
 
 /** Rail contents before the operator has used anything this session. */
 export const DEFAULT_RECENT: readonly PosActionId[] = ['new-bill', 'member', 'pay', 'captain-orders', 'day-end']

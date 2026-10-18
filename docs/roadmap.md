@@ -1,10 +1,13 @@
-# FL2 POS — Upcoming Roadmap (logged 2026-10-18, not built yet)
+# FL2 POS — Upcoming Roadmap (logged 2026-10-18)
 
-These phases were logged alongside Phase 17 so that today's architecture leaves room for them. They are **not**
-implemented. Each will get its own schema and component plan, approved before any code is written
+These phases were logged alongside Phase 17 so that today's architecture leaves room for them. Item 1 is built
+(Phase 18); items 2 and 3 are **not** implemented yet. Each will get its own schema and component plan, approved before any code is written
 (CLAUDE.md protocol).
 
-## 1. Settings expansion — custom expense categories
+## 1. Settings expansion — custom expense categories ✅ Done in Phase 18
+
+Built as `expense_categories` (migration `0012`) with the Settings → Expense Categories screen and a searchable
+Expense picker (plan `docs/ui/phase18-expense-categories-plan.md`). The notes below are kept for history.
 
 A UI under the header **Settings** gear (added in Phase 17, which already holds Inventory Catalog) to create and
 manage custom expense categories.
