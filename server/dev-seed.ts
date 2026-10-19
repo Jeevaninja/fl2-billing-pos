@@ -5,11 +5,14 @@
  */
 import type { SqlClient } from '../src/db/client.js';
 
-// [code, size, display name, sale price, purchase price, case size]
+// [code, size, display name, sale price, purchase price, case size]. Kitchen items get no opening stock (not tracked).
 const PRODUCTS = [
-  { name: 'House Whisky', category: 'WHISKY', skus: [['HWHS-F', 'FULL', 'House Whisky — Full', 180_000, 110_000, 12], ['HWHS-H', 'HALF', 'House Whisky — Half', 95_000, 56_000, 32], ['HWHS-Q', 'QUARTER', 'House Whisky — Quarter', 50_000, 29_000, 64]] },
-  { name: 'House Rum', category: 'RUM', skus: [['HRUM-F', 'FULL', 'House Rum — Full', 120_000, 72_000, 12], ['HRUM-H', 'HALF', 'House Rum — Half', 65_000, 38_000, 32], ['HRUM-Q', 'QUARTER', 'House Rum — Quarter', 35_000, 21_000, 64]] },
-  { name: 'House Lager', category: 'BEER', skus: [['HLAG-650', 'BEER_650', 'House Lager — 650', 22_000, 13_000, 12], ['HLAG-330', 'BEER_330', 'House Lager — 330', 14_000, 8_500, 24]] },
+  { name: 'House Whisky', category: 'WHISKY', department: 'LIQUOR', skus: [['HWHS-F', 'FULL', 'House Whisky — Full', 180_000, 110_000, 12], ['HWHS-H', 'HALF', 'House Whisky — Half', 95_000, 56_000, 32], ['HWHS-Q', 'QUARTER', 'House Whisky — Quarter', 50_000, 29_000, 64]] },
+  { name: 'House Rum', category: 'RUM', department: 'LIQUOR', skus: [['HRUM-F', 'FULL', 'House Rum — Full', 120_000, 72_000, 12], ['HRUM-H', 'HALF', 'House Rum — Half', 65_000, 38_000, 32], ['HRUM-Q', 'QUARTER', 'House Rum — Quarter', 35_000, 21_000, 64]] },
+  { name: 'House Lager', category: 'BEER', department: 'LIQUOR', skus: [['HLAG-650', 'BEER_650', 'House Lager — 650', 22_000, 13_000, 12], ['HLAG-330', 'BEER_330', 'House Lager — 330', 14_000, 8_500, 24]] },
+  { name: 'Soda', category: 'BEVERAGE', department: 'ANCILLARY', skus: [['SODA-U', 'UNIT', 'Soda', 4_000, 2_000, 24]] },
+  { name: 'Chicken 65', category: 'FOOD', department: 'KITCHEN', skus: [['CH65-H', 'HALF', 'Chicken 65 — Half', 18_000, null, 1], ['CH65-F', 'FULL', 'Chicken 65 — Full', 32_000, null, 1]] },
+  { name: 'Masala Peanuts', category: 'FOOD', department: 'KITCHEN', skus: [['MPNT-U', 'UNIT', 'Masala Peanuts', 12_000, null, 1]] },
 ] as const;
 
 const OPENING_QTY = 48;
@@ -31,9 +34,10 @@ export async function seedDevData(db: SqlClient): Promise<{ cashierId: string } 
 
   let barcode = 8_900_000_000_001;
   for (const product of PRODUCTS) {
-    const productId = await insertId(db, `INSERT INTO products (name, category) VALUES ($1, $2) RETURNING id`, [
+    const productId = await insertId(db, `INSERT INTO products (name, category, department) VALUES ($1, $2, $3) RETURNING id`, [
       product.name,
       product.category,
+      product.department,
     ]);
     for (const [code, size, name, price, cost, caseSize] of product.skus) {
       const skuId = await insertId(
@@ -42,7 +46,9 @@ export async function seedDevData(db: SqlClient): Promise<{ cashierId: string } 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
         [productId, code, String(barcode++), size, name, price, cost, caseSize],
       );
-      await db.query(`INSERT INTO stock_movements (sku_id, movement_type, qty_delta) VALUES ($1, 'OPENING', $2)`, [skuId, OPENING_QTY]);
+      if (product.department !== 'KITCHEN') {
+        await db.query(`INSERT INTO stock_movements (sku_id, movement_type, qty_delta) VALUES ($1, 'OPENING', $2)`, [skuId, OPENING_QTY]);
+      }
     }
   }
 

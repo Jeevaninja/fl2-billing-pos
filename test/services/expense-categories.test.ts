@@ -97,15 +97,15 @@ describe('upgrading a day with pre-0012 expenses', () => {
           [amount, category, description, before.cashier],
         )
       ).rows[0]!.id;
+    const iceOld = await legacy(150_00, 'ICE', null);
+    const teaOld = await legacy(40_00, 'OTHER', 'Tea');
+
+    // Phase 18 (and every later migration) arrives mid-day.
+    expect((await runMigrations(db))[0]).toBe('0012_expense_categories');
     const billing = new BillingService(db);
     const sale = await billing.createBill('NORMAL', before.cashier);
     await billing.addItemToBill(sale.id, before.sku.full, 1);
     await billing.settleNormalBill(sale.id, [{ mode: 'CASH', amount: PAISE.full }]);
-    const iceOld = await legacy(150_00, 'ICE', null);
-    const teaOld = await legacy(40_00, 'OTHER', 'Tea');
-
-    // Phase 18 arrives mid-day.
-    expect(await runMigrations(db)).toEqual(['0012_expense_categories']);
     const { rows: untouched } = await db.query<{ category: string; category_id: string | null }>(`SELECT category, category_id FROM cash_expenses WHERE id = $1`, [iceOld]);
     expect(untouched).toEqual([{ category: 'ICE', category_id: null }]);
 

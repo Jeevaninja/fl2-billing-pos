@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type Ref } from 'react'
 import { ArrowLeft, PackagePlus, RefreshCw, ScanBarcode, Sunrise, WifiOff, X } from 'lucide-react'
 import { ApiError, api } from '../api/client'
-import type { StockReceipt } from '../api/types'
+import type { SkuLookup, StockReceipt } from '../api/types'
 import { FlashLine, SizeChip } from '../billing/BillingPanels'
 import { counterErrorMessage } from '../billing/errors'
 import { Modal } from '../billing/Modal'
@@ -25,6 +25,9 @@ import { Kbd, LiveClock } from './ui'
 
 const POLL_MS = 15_000
 const SEARCH_DEBOUNCE_MS = 150
+
+/** Kitchen items are not stock-tracked (Phase 19), so they never appear on a GRN. */
+const receivable = (results: SkuLookup[]) => results.filter((sku) => sku.tracksStock)
 /** A second Esc within this window leaves even with lines staged. */
 const DISCARD_WINDOW_MS = 3_000
 
@@ -85,7 +88,7 @@ export default function PurchaseScreen({ onExit, onOpenDayEnd }: PurchaseScreenP
     if (formShown) invoiceRef.current?.focus()
   }, [formShown])
 
-  // Debounced SKU search while typing (not once a SKU is picked).
+  // Debounced SKU search while typing (not once a SKU is picked). Kitchen items are never received.
   const { query, picked } = state
   useEffect(() => {
     const text = query.trim()
@@ -93,7 +96,7 @@ export default function PurchaseScreen({ onExit, onOpenDayEnd }: PurchaseScreenP
     const timer = setTimeout(() => {
       api
         .searchSkus(text)
-        .then((results) => dispatch({ type: 'results', query: text, results }))
+        .then((results) => dispatch({ type: 'results', query: text, results: receivable(results) }))
         .catch(() => undefined) // the poll reports an unreachable server
     }, SEARCH_DEBOUNCE_MS)
     return () => clearTimeout(timer)
@@ -111,7 +114,7 @@ export default function PurchaseScreen({ onExit, onOpenDayEnd }: PurchaseScreenP
     let results = current.results
     if (results.length === 0 || pickFromSearch(text, results, current.highlighted) === null) {
       try {
-        results = await api.searchSkus(text)
+        results = receivable(await api.searchSkus(text))
       } catch (err) {
         flash('error', counterErrorMessage(err))
         return

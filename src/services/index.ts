@@ -3,15 +3,18 @@ export type { BillLine, CounterPayment, PeakUndoResult, ReversalResult, ReverseB
 export {
   CatalogService,
   DEFAULT_CASE_SIZE,
+  DEPARTMENT_CODES,
   MAX_CASE_SIZE,
   PRODUCT_CATEGORIES,
   SIZE_CODES,
   displayNameFor,
   skuCodeFor,
 } from './catalog.service.js';
-export type { CatalogFilter, CatalogProduct, CatalogSku, NewProductInput, NewSkuInput, ProductCategory, ProductPatch, SkuPatch } from './catalog.service.js';
+export type { CatalogFilter, CatalogProduct, CatalogSku, Department, NewProductInput, NewSkuInput, ProductCategory, ProductPatch, SkuPatch } from './catalog.service.js';
 export { CaptainService, MAX_ORDER_LINES, orderFingerprint } from './captain.service.js';
-export type { KotStatus, OrderLine, OrderRequest, PlacedOrder, WaiterProfile } from './captain.service.js';
+export type { OrderLine, OrderRequest, PlacedOrder, WaiterProfile } from './captain.service.js';
+export { KotService } from './kot.service.js';
+export type { KotSender, KotSendOptions, KotStatus } from './kot.service.js';
 export { CounterQueries } from './counter-queries.js';
 export type {
   BillDetail,
@@ -45,6 +48,7 @@ export type {
   DayEndSummary,
   DayFigures,
   DaySummary,
+  DepartmentSales,
   LegacyExpenseCategory,
   ExpenseEntry,
   OpenBillBlocker,

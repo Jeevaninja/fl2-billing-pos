@@ -3,8 +3,9 @@ import { formatKot, PrinterService, type KotTicket } from '../../src/services/in
 
 const ticket: KotTicket = {
   kotNo: 17,
+  ticketNo: 1,
   billId: 'bill-17',
-  station: 'COUNTER',
+  station: 'BAR',
   waiter: { code: 'W01', displayName: 'Suresh' },
   member: { membershipNo: 'M-0001', displayName: 'Anil Kumar' },
   lines: [
@@ -19,7 +20,7 @@ describe('formatKot', () => {
     expect(formatKot(ticket)).toBe(
       [
         '================================================',
-        '               KOT #17 - COUNTER',
+        '                 KOT #17 - BAR',
         '================================================',
         'Bill #17                       14/10/2026, 20:30',
         'Waiter: W01 Suresh',
@@ -69,7 +70,7 @@ describe('PrinterService (stub)', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const result = await new PrinterService().printKOT(ticket);
     expect(log).toHaveBeenCalledWith(formatKot(ticket));
-    expect(result).toEqual({ station: 'COUNTER', printedAt: expect.any(Date), text: formatKot(ticket) });
+    expect(result).toEqual({ station: 'BAR', printedAt: expect.any(Date), text: formatKot(ticket) });
   });
 
   it('accepts a custom sink and paper width', async () => {

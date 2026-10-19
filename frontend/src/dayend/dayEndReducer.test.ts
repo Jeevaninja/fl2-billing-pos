@@ -53,6 +53,8 @@ function summary(over: { id?: string; status?: 'OPEN' | 'CLOSED'; expected?: big
       peak: { salesPaise: 0n, cashPaise: 0n, upiPaise: 0n, sessionCount: 0, runningSessionNo: null },
       waiterRepayments: { cashPaise: 0n, upiPaise: 0n },
       total: { cashPaise: 0n, upiPaise: 0n, creditPaise: 0n, salesPaise: 0n },
+      byDepartment: [],
+      unallocatedPaise: 0n,
     },
     peakSessions: [],
     tenderAdjustments: [],

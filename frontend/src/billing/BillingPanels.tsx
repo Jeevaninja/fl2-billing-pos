@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { CheckCircle2, CircleAlert, CreditCard, ScanBarcode, UserRound, UsersRound } from 'lucide-react'
+import { ChefHat, CheckCircle2, CircleAlert, CreditCard, ScanBarcode, UserRound, UsersRound } from 'lucide-react'
 import type { BillDetail, MemberSummary, PeakSessionView, SizeCode, WaiterSummary } from '../api/types'
 import { Kbd } from '../components/ui'
 import { FOCUS_RING, keepFocus } from '../lib/ui'
@@ -9,7 +9,7 @@ import type { Flash, ItemRow, PeakEntry, PendingScan, Receipt } from './billingR
 import { TrustBadge } from './PickerDialogs'
 import { StartPeakButton } from '../components/peak/PeakControls'
 
-const SIZE_LABEL: Record<SizeCode, string> = { FULL: 'Full', HALF: 'Half', QUARTER: 'Qtr', BEER_650: '650', BEER_330: '330' }
+const SIZE_LABEL: Record<SizeCode, string> = { FULL: 'Full', HALF: 'Half', QUARTER: 'Qtr', BEER_650: '650', BEER_330: '330', UNIT: 'Unit' }
 
 export function SizeChip({ size }: { size: SizeCode }) {
   return <span className="rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-xs font-bold text-zinc-200">{SIZE_LABEL[size]}</span>
@@ -122,7 +122,10 @@ export function ItemsGrid({
               >
                 <td className="px-4 py-2.5 font-mono text-zinc-500">{i + 1}</td>
                 <td className="px-2 py-2.5 font-mono text-sm text-zinc-400">{row.skuCode}</td>
-                <td className="px-2 py-2.5 font-semibold">{row.displayName}</td>
+                <td className="px-2 py-2.5 font-semibold">
+                  {row.displayName}
+                  {row.department === 'KITCHEN' && <KitchenMark pending={row.kotPending} />}
+                </td>
                 <td className="px-2 py-2.5">
                   <SizeChip size={row.sizeCode} />
                 </td>
@@ -148,6 +151,22 @@ export function ItemsGrid({
       </table>
       {rows.length === 0 && pending.length === 0 && (empty ?? <EmptyBill receipt={receipt} />)}
     </div>
+  )
+}
+
+/** Kitchen line marker: where it goes, and whether the kitchen has it yet (F6 sends). */
+function KitchenMark({ pending }: { pending: number }) {
+  return (
+    <span className="ml-2 inline-flex items-center gap-1 align-middle">
+      <span className="rounded border border-emerald-700 bg-emerald-950 px-1.5 py-0.5 text-[11px] font-black tracking-wider text-emerald-200 uppercase">Kitchen</span>
+      {pending > 0 ? (
+        <span className="rounded bg-amber-400 px-1.5 py-0.5 text-[11px] font-black text-zinc-950 uppercase">KOT pending {pending}</span>
+      ) : pending < 0 ? (
+        <span className="rounded bg-rose-500 px-1.5 py-0.5 text-[11px] font-black text-zinc-950 uppercase">Cancel pending {-pending}</span>
+      ) : (
+        <span className="text-[11px] font-bold text-emerald-400 uppercase">KOT ✓</span>
+      )}
+    </span>
   )
 }
 
@@ -184,6 +203,7 @@ const FOOTER_KEYS: Record<'NORMAL' | 'PEAK', Array<[string[], string]>> = {
     [['PgUp', 'PgDn'], 'switch tab'],
     [['F2'], 'member'],
     [['F4'], 'waiter'],
+    [['F6'], 'kitchen KOT'],
     [['F9'], 'pay'],
     [['Esc'], 'dashboard'],
   ],
@@ -220,11 +240,14 @@ interface SidePanelProps {
   onMember: () => void
   onWaiter: () => void
   onPay: () => void
+  /** Kitchen quantity not yet on a KOT, and sent quantity since cancelled (Phase 19). */
+  kot: { send: number; cancel: number }
+  onSendKot: () => void
   /** Shown when no peak session is running. */
   onStartPeak?: (() => void) | undefined
 }
 
-export function SidePanel({ detail, pendingMember, pendingWaiter, lines, bottles, onMember, onWaiter, onPay, onStartPeak }: SidePanelProps) {
+export function SidePanel({ detail, pendingMember, pendingWaiter, lines, bottles, onMember, onWaiter, onPay, kot, onSendKot, onStartPeak }: SidePanelProps) {
   const member = detail?.member ?? pendingMember
   const waiter = detail?.waiter ?? pendingWaiter
   const waiterLocked = (detail?.tenderedPaise ?? 0n) > 0n
@@ -264,7 +287,7 @@ export function SidePanel({ detail, pendingMember, pendingWaiter, lines, bottles
       <div className="rounded-lg border-2 border-zinc-700 bg-zinc-950 p-4">
         <div className="flex justify-between text-sm text-zinc-400">
           <span>Lines {lines}</span>
-          <span>Bottles {bottles}</span>
+          <span>Qty {bottles}</span>
         </div>
         {detail && detail.tenderedPaise > 0n && (
           <div className="mt-2 flex justify-between font-mono text-sm text-zinc-300">
@@ -280,6 +303,23 @@ export function SidePanel({ detail, pendingMember, pendingWaiter, lines, bottles
         </div>
       </div>
 
+      {(kot.send > 0 || kot.cancel > 0) && (
+        <button
+          type="button"
+          {...keepFocus}
+          onClick={onSendKot}
+          className={`flex items-center justify-between rounded-lg border-2 border-emerald-500 bg-emerald-950 px-4 py-3 text-lg font-black text-emerald-100 hover:bg-emerald-900 ${FOCUS_RING}`}
+        >
+          <span className="flex items-center gap-2">
+            <ChefHat className="size-6" aria-hidden />
+            Send KOT to kitchen
+            <span className="text-sm font-bold text-emerald-300">
+              {[kot.send > 0 ? `${kot.send} item${kot.send === 1 ? '' : 's'}` : null, kot.cancel > 0 ? `${kot.cancel} cancel` : null].filter(Boolean).join(' · ')}
+            </span>
+          </span>
+          <Kbd>F6</Kbd>
+        </button>
+      )}
       {onStartPeak && <StartPeakButton onClick={onStartPeak} className="mt-auto justify-center py-2.5" />}
       <button
         type="button"

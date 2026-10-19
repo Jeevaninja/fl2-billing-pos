@@ -6,7 +6,7 @@
 import type { SqlClient, SqlDatabase } from '../db/client.js';
 import { NotFoundError, PosError, PosErrorCode, withPosErrors } from '../db/errors.js';
 import { assertPaise, type DbInt, type Paise, paiseParam, toPaise, toPaiseOrNull } from '../domain/money.js';
-import type { BillSource, BillStatus } from '../domain/types.js';
+import type { BillSource, BillStatus, DepartmentCode } from '../domain/types.js';
 import {
   mapPeakSessionView,
   mapWaiter,
@@ -120,6 +120,23 @@ export interface SalesBreakdown {
   /** Waiter credit collected today: money in, not sales. */
   waiterRepayments: { cashPaise: Paise; upiPaise: Paise };
   total: { cashPaise: Paise; upiPaise: Paise; creditPaise: Paise; salesPaise: Paise };
+  /**
+   * Phase 19, info only: the same sales split by the department snapshotted on each bill line, over
+   * the bills the totals above count (settled normal bills, ended peak sessions). Every department
+   * is listed, in display order.
+   */
+  byDepartment: DepartmentSales[];
+  /**
+   * Tenders already counted above on bills not yet split: part-paid open bills, or bills settled
+   * inside a still-running peak window. Σ byDepartment + this = total.salesPaise. ₹0 at close.
+   */
+  unallocatedPaise: Paise;
+}
+
+export interface DepartmentSales {
+  code: DepartmentCode;
+  name: string;
+  salesPaise: Paise;
 }
 
 export interface DayEndSummary {
@@ -172,8 +189,11 @@ export interface CashExpense {
   /** Negative on a void row. */
   amountPaise: Paise;
   reversesExpenseId: string | null;
-  /** The managed category (Phase 18); pre-0012 rows resolve through their legacy code. */
-  category: { id: string; name: string };
+  /**
+   * The managed category (Phase 18); pre-0012 rows resolve through their legacy code. `department`
+   * is the category's current P&L (Phase 19); null = Shared.
+   */
+  category: { id: string; name: string; department: DepartmentCode | null };
   /** Optional note; required when the category says so ("Other"). */
   description: string | null;
   createdByStaffId: string;
@@ -298,6 +318,7 @@ interface ExpenseRow {
   /** Resolved: by id, else by legacy code. */
   cat_id: string;
   cat_name: string;
+  cat_department: DepartmentCode | null;
   description: string | null;
   created_by_staff_id: string;
   created_at: Date;
@@ -305,7 +326,8 @@ interface ExpenseRow {
 
 /** Expense rows with their category resolved (id first, then the pre-0012 legacy code). */
 const EXPENSE_SELECT = `
-  SELECT e.*, coalesce(c.id, lc.id) AS cat_id, coalesce(c.name, lc.name) AS cat_name
+  SELECT e.*, coalesce(c.id, lc.id) AS cat_id, coalesce(c.name, lc.name) AS cat_name,
+         CASE WHEN c.id IS NOT NULL THEN c.department ELSE lc.department END AS cat_department
     FROM cash_expenses e
     LEFT JOIN expense_categories c ON c.id = e.category_id
     LEFT JOIN expense_categories lc ON lc.legacy_code = e.category`;
@@ -321,7 +343,7 @@ function mapExpense(r: ExpenseRow): CashExpense {
     peakSessionId: r.peak_session_id,
     amountPaise: toPaise(r.amount_paise),
     reversesExpenseId: r.reverses_expense_id,
-    category: { id: r.cat_id, name: r.cat_name },
+    category: { id: r.cat_id, name: r.cat_name, department: r.cat_department },
     description: r.description,
     createdByStaffId: r.created_by_staff_id,
     createdAt: r.created_at,
@@ -373,6 +395,10 @@ export class DayEndService {
           throw new Error(
             `day ${day.businessDate}: breakdown expects ${summary.breakdown.expectedCashPaise}, frozen figure is ${day.expectedCashPaise}`,
           );
+        }
+        // No open bill and no running peak can survive the close, so every rupee is split by department.
+        if (summary.sales.unallocatedPaise !== 0n) {
+          throw new Error(`day ${day.businessDate}: ${summary.sales.unallocatedPaise} paise of sales left unsplit at close`);
         }
         return summary;
       }),
@@ -651,6 +677,45 @@ async function summarise(db: SqlClient, day: DaySummary): Promise<DayEndSummary>
   };
 }
 
+/**
+ * Bills whose revenue the sales totals count in full: settled normal bills of the day (none of their
+ * tenders inside a still-running peak window) and every bill of an ended peak session. `$1` = day.
+ */
+const COUNTED_BILLS = `
+  SELECT b.id FROM bills b
+   WHERE b.business_day_id = $1 AND b.billing_mode = 'NORMAL' AND b.status = 'SETTLED'
+     AND NOT EXISTS (SELECT 1 FROM bill_payments p JOIN peak_sessions s ON s.id = p.peak_session_id
+                      WHERE p.bill_id = b.id AND s.ended_at IS NULL)
+  UNION ALL
+  SELECT b.id FROM bills b JOIN peak_sessions s ON s.id = b.peak_session_id
+   WHERE s.business_day_id = $1 AND s.ended_at IS NOT NULL`;
+
+/** Sales per department over COUNTED_BILLS, plus the counted tenders on every other bill. */
+async function departmentSplit(db: SqlClient, dayId: string): Promise<Pick<SalesBreakdown, 'byDepartment' | 'unallocatedPaise'>> {
+  const { rows } = await db.query<{ code: DepartmentCode; name: string; sales: DbInt }>(
+    `WITH counted AS (${COUNTED_BILLS})
+     SELECT d.code, d.name,
+            coalesce((SELECT sum(i.line_total_paise) FROM bill_items i
+                       WHERE i.department = d.code AND i.bill_id IN (SELECT id FROM counted)), 0)::text AS sales
+       FROM departments d
+      ORDER BY d.sort_order`,
+    [dayId],
+  );
+  const open = await one<{ total: DbInt }>(
+    db,
+    `WITH counted AS (${COUNTED_BILLS})
+     SELECT coalesce(sum(p.amount_paise), 0)::text AS total
+       FROM bill_payments p LEFT JOIN peak_sessions s ON s.id = p.peak_session_id
+      WHERE p.business_day_id = $1 AND (p.peak_session_id IS NULL OR s.ended_at IS NOT NULL)
+        AND p.bill_id NOT IN (SELECT id FROM counted)`,
+    [dayId],
+  );
+  return {
+    byDepartment: rows.map((r) => ({ code: r.code, name: r.name, salesPaise: toPaise(r.sales) })),
+    unallocatedPaise: toPaise(open.total),
+  };
+}
+
 type SessionSumRow = PeakSessionRow & Record<'sales' | 'bill_cash' | 'bill_upi' | 'waiter_cash' | 'waiter_upi' | 'expenses', DbInt>;
 type TenderSumRow = { kind: 'BILL' | 'WAITER'; tender_type: 'CASH' | 'UPI' | 'WAITER_CREDIT'; total: DbInt };
 
@@ -797,6 +862,7 @@ export async function getDayFigures(db: SqlClient, day: DaySummary): Promise<Day
     sessionCount: peakSessions.length,
     runningSessionNo: running?.session_no ?? null,
   };
+  const split = await departmentSplit(db, day.id);
   const sales: SalesBreakdown = {
     normal,
     peak,
@@ -807,9 +873,14 @@ export async function getDayFigures(db: SqlClient, day: DaySummary): Promise<Day
       creditPaise: normal.creditPaise,
       salesPaise: normal.totalPaise + peak.salesPaise,
     },
+    ...split,
   };
   if (sales.total.upiPaise + sales.waiterRepayments.upiPaise !== breakdown.upiTotalPaise) {
     throw new Error(`day ${day.businessDate}: sales UPI ${sales.total.upiPaise} + repayments disagrees with UPI today ${breakdown.upiTotalPaise}`);
+  }
+  const splitTotal = split.byDepartment.reduce((sum, d) => sum + d.salesPaise, split.unallocatedPaise);
+  if (splitTotal !== sales.total.salesPaise) {
+    throw new Error(`day ${day.businessDate}: department split ${splitTotal} disagrees with total sales ${sales.total.salesPaise}`);
   }
 
   return { breakdown, sales, peakSessions };

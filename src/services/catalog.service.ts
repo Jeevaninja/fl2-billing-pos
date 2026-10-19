@@ -7,22 +7,32 @@
 import type { SqlClient, SqlDatabase } from '../db/client.js';
 import { InactiveError, NotFoundError, withPosErrors } from '../db/errors.js';
 import { assertPaise, type Paise, paiseParam } from '../domain/money.js';
-import type { SizeCode } from '../domain/types.js';
+import type { DepartmentCode, KotStation, SizeCode } from '../domain/types.js';
 import { mapSkuLookup, type SkuLookup, type SkuLookupRow } from './counter-queries.js';
 import { maybeOne, one } from './rows.js';
 
-export const PRODUCT_CATEGORIES = ['WHISKY', 'RUM', 'VODKA', 'BRANDY', 'GIN', 'WINE', 'BEER', 'OTHER'] as const;
+export const PRODUCT_CATEGORIES = ['WHISKY', 'RUM', 'VODKA', 'BRANDY', 'GIN', 'WINE', 'BEER', 'OTHER', 'FOOD', 'BEVERAGE', 'TOBACCO'] as const;
 export type ProductCategory = (typeof PRODUCT_CATEGORIES)[number];
 
-/** Display order of sizes everywhere in the catalog. */
-export const SIZE_CODES = ['FULL', 'HALF', 'QUARTER', 'BEER_650', 'BEER_330'] as const satisfies readonly SizeCode[];
+/** The fixed departments (0013), in display order. */
+export const DEPARTMENT_CODES = ['LIQUOR', 'KITCHEN', 'ANCILLARY'] as const satisfies readonly DepartmentCode[];
+
+export interface Department {
+  code: DepartmentCode;
+  name: string;
+  kotStation: KotStation;
+  tracksStock: boolean;
+}
+
+/** Display order of sizes everywhere in the catalog. UNIT is the single size of a dish or a soda. */
+export const SIZE_CODES = ['FULL', 'HALF', 'QUARTER', 'BEER_650', 'BEER_330', 'UNIT'] as const satisfies readonly SizeCode[];
 
 /** Bottles per case pre-filled for a new size (Indian distribution cases); editable per SKU. */
-export const DEFAULT_CASE_SIZE: Readonly<Record<SizeCode, number>> = { FULL: 12, HALF: 32, QUARTER: 64, BEER_650: 12, BEER_330: 24 };
+export const DEFAULT_CASE_SIZE: Readonly<Record<SizeCode, number>> = { FULL: 12, HALF: 32, QUARTER: 64, BEER_650: 12, BEER_330: 24, UNIT: 1 };
 
 /** SKU code suffix (`HWHS-F`) and display-name label (`House Whisky — Full`) per size. */
-const SIZE_SUFFIX: Readonly<Record<SizeCode, string>> = { FULL: 'F', HALF: 'H', QUARTER: 'Q', BEER_650: '650', BEER_330: '330' };
-const SIZE_LABEL: Readonly<Record<SizeCode, string>> = { FULL: 'Full', HALF: 'Half', QUARTER: 'Quarter', BEER_650: '650', BEER_330: '330' };
+const SIZE_SUFFIX: Readonly<Record<SizeCode, string>> = { FULL: 'F', HALF: 'H', QUARTER: 'Q', BEER_650: '650', BEER_330: '330', UNIT: 'U' };
+const SIZE_LABEL: Readonly<Record<SizeCode, string>> = { FULL: 'Full', HALF: 'Half', QUARTER: 'Quarter', BEER_650: '650', BEER_330: '330', UNIT: 'Unit' };
 
 export const MAX_CASE_SIZE = 1000;
 const MAX_NAME = 80;
@@ -37,6 +47,7 @@ export interface CatalogProduct {
   id: string;
   name: string;
   category: ProductCategory;
+  department: DepartmentCode;
   isActive: boolean;
   skus: CatalogSku[];
 }
@@ -52,6 +63,8 @@ export interface NewSkuInput {
 export interface NewProductInput {
   name: string;
   category: ProductCategory;
+  /** Default LIQUOR. Every size of the product shares it. */
+  department?: DepartmentCode | undefined;
   /** Upper-case letters/digits; SKU codes are `PREFIX-F`, `PREFIX-H`, `PREFIX-Q`, `PREFIX-650`, `PREFIX-330`. */
   codePrefix: string;
   skus: readonly NewSkuInput[];
@@ -60,6 +73,8 @@ export interface NewProductInput {
 export interface ProductPatch {
   name?: string | undefined;
   category?: ProductCategory | undefined;
+  /** Applies to new sales only: billed lines keep their snapshot. */
+  department?: DepartmentCode | undefined;
   isActive?: boolean | undefined;
 }
 
@@ -82,8 +97,9 @@ export function skuCodeFor(prefix: string, size: SizeCode): string {
   return `${prefix}-${SIZE_SUFFIX[size]}`;
 }
 
+/** `House Whisky — Full`; a single-size (UNIT) item is just its name. */
 export function displayNameFor(productName: string, size: SizeCode): string {
-  return `${productName} — ${SIZE_LABEL[size]}`;
+  return size === 'UNIT' ? productName : `${productName} — ${SIZE_LABEL[size]}`;
 }
 
 // ── Validation (RangeError → HTTP 400) ──
@@ -100,6 +116,13 @@ function checkCategory(category: string): ProductCategory {
     throw new RangeError(`category must be one of ${PRODUCT_CATEGORIES.join(', ')}`);
   }
   return category as ProductCategory;
+}
+
+function checkDepartment(department: string): DepartmentCode {
+  if (!(DEPARTMENT_CODES as readonly string[]).includes(department)) {
+    throw new RangeError(`department must be one of ${DEPARTMENT_CODES.join(', ')}`);
+  }
+  return department as DepartmentCode;
 }
 
 function checkPrefix(prefix: string): string {
@@ -151,19 +174,21 @@ interface CatalogRow extends SkuLookupRow {
   product_id: string;
   product_name: string;
   category: ProductCategory;
+  product_department: DepartmentCode;
   product_active: boolean;
 }
 
 const CATALOG_SELECT = `
-  SELECT p.id AS product_id, p.name AS product_name, p.category, p.is_active AS product_active,
+  SELECT p.id AS product_id, p.name AS product_name, p.category, p.department AS product_department, p.is_active AS product_active,
          k.id, k.sku_code, k.barcode, k.display_name, k.size_code, k.price_paise, k.purchase_price_paise,
-         k.case_size, k.is_active, coalesce(s.on_hand_qty, 0) AS on_hand_qty
+         k.case_size, k.is_active, coalesce(s.on_hand_qty, 0) AS on_hand_qty, p.department, d.tracks_stock
     FROM products p
+    JOIN departments d ON d.code = p.department
     LEFT JOIN skus k ON k.product_id = p.id
     LEFT JOIN sku_stock s ON s.sku_id = k.id`;
 const CATALOG_ORDER = `
   ORDER BY lower(p.name), p.id,
-           array_position(ARRAY['FULL', 'HALF', 'QUARTER', 'BEER_650', 'BEER_330'], k.size_code)`;
+           array_position(ARRAY['FULL', 'HALF', 'QUARTER', 'BEER_650', 'BEER_330', 'UNIT'], k.size_code)`;
 
 /** Groups product × SKU rows (in order) into products; a product without SKUs gets an empty list. */
 function groupCatalog(rows: readonly CatalogRow[]): CatalogProduct[] {
@@ -171,7 +196,14 @@ function groupCatalog(rows: readonly CatalogRow[]): CatalogProduct[] {
   for (const row of rows) {
     let product = products.at(-1);
     if (product?.id !== row.product_id) {
-      product = { id: row.product_id, name: row.product_name, category: row.category, isActive: row.product_active, skus: [] };
+      product = {
+        id: row.product_id,
+        name: row.product_name,
+        category: row.category,
+        department: row.product_department,
+        isActive: row.product_active,
+        skus: [],
+      };
       products.push(product);
     }
     if (row.id !== null) product.skus.push({ ...mapSkuLookup(row), productId: row.product_id });
@@ -218,10 +250,22 @@ export class CatalogService {
     return loadProduct(this.db, productId);
   }
 
-  /** Creates a liquor with 1–5 sizes in one transaction. SKUs start at zero stock (stock comes from a GRN). */
+  /** The three departments in display order. */
+  async listDepartments(): Promise<Department[]> {
+    const { rows } = await this.db.query<{ code: DepartmentCode; name: string; kot_station: KotStation; tracks_stock: boolean }>(
+      `SELECT code, name, kot_station, tracks_stock FROM departments ORDER BY sort_order`,
+    );
+    return rows.map((r) => ({ code: r.code, name: r.name, kotStation: r.kot_station, tracksStock: r.tracks_stock }));
+  }
+
+  /**
+   * Creates an item with 1–6 sizes in one transaction. Tracked SKUs start at zero stock (stock comes
+   * from a GRN); Kitchen items are never stock-tracked.
+   */
   async createProduct(input: NewProductInput): Promise<CatalogProduct> {
     const name = checkName(input.name);
     const category = checkCategory(input.category);
+    const department = checkDepartment(input.department ?? 'LIQUOR');
     const prefix = checkPrefix(input.codePrefix);
     if (input.skus.length === 0) throw new RangeError('add at least one size');
     const skus = input.skus.map((s, i) => checkNewSku(s, `skus[${i}]`));
@@ -229,7 +273,9 @@ export class CatalogService {
 
     return withPosErrors(() =>
       this.db.transaction(async (tx) => {
-        const { id } = await one<{ id: string }>(tx, `INSERT INTO products (name, category) VALUES ($1, $2) RETURNING id`, [name, category]);
+        const { id } = await one<{ id: string }>(tx, `INSERT INTO products (name, category, department) VALUES ($1, $2, $3) RETURNING id`,
+          [name, category, department],
+        );
         for (const sku of skus) await insertSku(tx, id, name, prefix, sku);
         return loadProduct(tx, id);
       }),
@@ -243,15 +289,17 @@ export class CatalogService {
   async updateProduct(productId: string, patch: ProductPatch): Promise<CatalogProduct> {
     const name = patch.name === undefined ? undefined : checkName(patch.name);
     const category = patch.category === undefined ? undefined : checkCategory(patch.category);
+    const department = patch.department === undefined ? undefined : checkDepartment(patch.department);
 
     return withPosErrors(() =>
       this.db.transaction(async (tx) => {
         const current = await maybeOne<{ name: string }>(tx, `SELECT name FROM products WHERE id = $1 FOR UPDATE`, [productId]);
         if (!current) throw new NotFoundError('product', productId);
         await tx.query(
-          `UPDATE products SET name = coalesce($2, name), category = coalesce($3, category), is_active = coalesce($4, is_active)
+          `UPDATE products SET name = coalesce($2, name), category = coalesce($3, category), is_active = coalesce($4, is_active),
+                  department = coalesce($5, department)
             WHERE id = $1`,
-          [productId, name ?? null, category ?? null, patch.isActive ?? null],
+          [productId, name ?? null, category ?? null, patch.isActive ?? null, department ?? null],
         );
         if (name !== undefined && name !== current.name) {
           const { rows } = await tx.query<{ id: string; size_code: SizeCode }>(`SELECT id, size_code FROM skus WHERE product_id = $1`, [productId]);

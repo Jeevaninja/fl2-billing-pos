@@ -4,7 +4,11 @@ export type BillingMode = 'NORMAL' | 'PEAK';
 export type BillKind = 'SALE' | 'REVERSAL';
 export type BillStatus = 'OPEN' | 'SETTLED' | 'PEAK_UNSETTLED' | 'PEAK_RECONCILED';
 export type BillSource = 'COUNTER' | 'WAITER_APP';
-export type SizeCode = 'FULL' | 'HALF' | 'QUARTER' | 'BEER_650' | 'BEER_330';
+export type SizeCode = 'FULL' | 'HALF' | 'QUARTER' | 'BEER_650' | 'BEER_330' | 'UNIT';
+/** P&L department (0013). Every line of a bill carries one; the drawer stays unified. */
+export type DepartmentCode = 'LIQUOR' | 'KITCHEN' | 'ANCILLARY';
+/** Where a department's KOT lines print. */
+export type KotStation = 'BAR' | 'KITCHEN';
 export type CounterTender = 'CASH' | 'UPI';
 export type Tender = CounterTender | 'WAITER_CREDIT';
 
@@ -49,6 +53,8 @@ export interface BillItem {
   lineTotalPaise: Paise;
   reversesItemId: string | null;
   restock: boolean;
+  /** Snapshotted at insert (a cancellation / reversal copies the original's). */
+  department: DepartmentCode;
 }
 
 export interface BillPayment {

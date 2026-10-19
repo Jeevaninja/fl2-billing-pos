@@ -5,6 +5,16 @@ import { one } from '../support/pos.js';
 import { makeServices, PAISE } from '../support/services.js';
 
 /** Phase 11: the peak start baseline and the Day End sales breakdown. */
+
+/** The Day End department split, every department listed (Phase 19). */
+function departments(liquor: bigint, kitchen = 0n, ancillary = 0n) {
+  return [
+    { code: 'LIQUOR', name: 'Liquor', salesPaise: liquor },
+    { code: 'KITCHEN', name: 'Kitchen', salesPaise: kitchen },
+    { code: 'ANCILLARY', name: 'Ancillary', salesPaise: ancillary },
+  ];
+}
+
 describe('peak start baseline and sales breakdown', () => {
   const ctx = useSeededDb();
   const setup = () => {
@@ -81,6 +91,8 @@ describe('peak start baseline and sales breakdown', () => {
       peak: { salesPaise: 3050_00n, cashPaise: 1650_00n, upiPaise: 1400_00n, sessionCount: 2, runningSessionNo: null },
       waiterRepayments: { cashPaise: 300_00n, upiPaise: 100_00n },
       total: { cashPaise: 3850_00n, upiPaise: 2750_00n, creditPaise: 600_00n, salesPaise: 7200_00n },
+      byDepartment: departments(7200_00n),
+      unallocatedPaise: 0n,
     });
     expect(summary.peakSessions).toEqual([
       expect.objectContaining({
@@ -122,6 +134,9 @@ describe('peak start baseline and sales breakdown', () => {
       peak: { salesPaise: 0n, cashPaise: 0n, upiPaise: 0n, sessionCount: 0, runningSessionNo: 1 },
       waiterRepayments: { cashPaise: 0n, upiPaise: 0n },
       total: { cashPaise: 0n, upiPaise: 0n, creditPaise: 0n, salesPaise: 0n },
+      // The bill settled inside the running window is neither counted nor split yet.
+      byDepartment: departments(0n),
+      unallocatedPaise: 0n,
     });
 
     await peak.endPeakSession(session.id, PAISE.beer650, PAISE.half, fx.cashier);

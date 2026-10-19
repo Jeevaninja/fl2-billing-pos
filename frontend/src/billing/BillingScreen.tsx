@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
 import { ArrowLeft, RefreshCw, WifiOff } from 'lucide-react'
 import { ApiError, api } from '../api/client'
-import type { BillDetail, CounterContext, MemberSummary, PeakSessionView, WaiterSummary } from '../api/types'
+import type { BillDetail, CounterContext, KotStatus, MemberSummary, PeakSessionView, WaiterSummary } from '../api/types'
 import { Kbd, LiveClock } from '../components/ui'
 import { keepFocus } from '../lib/ui'
 import { useGlobalShortcuts } from '../hooks/useGlobalShortcuts'
@@ -18,6 +18,8 @@ import {
   findTab,
   groupItems,
   initialBillingState,
+  kitchenKotPending,
+  kotMessage,
   newTabBlock,
   screenMode,
   stockLeft,
@@ -175,7 +177,7 @@ export default function BillingScreen({ onExit, focusBillId = null }: { onExit: 
 
           const session = context.peakSession
           if (session && !billOf(tabId)) {
-            const { bill, item } = await api.peakSale(session.id, sku.id, quantity)
+            const { bill, item, kots } = await api.peakSale(session.id, sku.id, quantity)
             apply({
               type: 'peakSale',
               entry: {
@@ -189,7 +191,8 @@ export default function BillingScreen({ onExit, focusBillId = null }: { onExit: 
                 undone: false,
               },
             })
-            flash('ok', `Peak #${bill.billNo}: ${quantity} × ${sku.displayName} · ${stockLeft(sku.onHandQty, quantity)}`)
+            const kot = kotMessage(kots, bill.billNo)
+            flash(kot?.kind ?? 'ok', `Peak #${bill.billNo}: ${quantity} × ${sku.displayName} · ${kot ? kot.text : stockLeft(sku.onHandQty, quantity)}`)
             void refreshContext()
             return
           }
@@ -205,7 +208,7 @@ export default function BillingScreen({ onExit, focusBillId = null }: { onExit: 
           }
           await api.addItem(billId, sku.id, quantity)
           setBill(tabId, await api.getBill(billId), sku.id)
-          flash('ok', `Added ${quantity} × ${sku.displayName} · ${stockLeft(sku.onHandQty, quantity)}`)
+          flash('ok', `Added ${quantity} × ${sku.displayName} · ${sku.tracksStock ? stockLeft(sku.onHandQty, quantity) : 'Kitchen — F6 sends the KOT'}`)
         } finally {
           apply({ type: 'scanDone', id })
         }
@@ -223,10 +226,13 @@ export default function BillingScreen({ onExit, focusBillId = null }: { onExit: 
       void run(async () => {
         const billId = billOf(tabId)?.bill.id
         if (!billId) return
+        let kots: KotStatus[] | undefined
         if (delta === 1) await api.addItem(billId, row.skuId, 1)
-        else if (row.cancelItemId) await api.cancelItem(billId, row.cancelItemId, 1)
-        setBill(tabId, await api.getBill(billId), row.skuId)
-        flash('ok', `${delta === 1 ? 'Added' : 'Removed'} 1 × ${row.displayName}`)
+        else if (row.cancelItemId) kots = (await api.cancelItem(billId, row.cancelItemId, 1)).kots
+        const updated = await api.getBill(billId)
+        setBill(tabId, updated, row.skuId)
+        const kot = kotMessage(kots, updated.bill.billNo)
+        flash(kot?.kind ?? 'ok', `${delta === 1 ? 'Added' : 'Removed'} 1 × ${row.displayName}${kot ? ` · ${kot.text}` : ''}`)
       }, tabId)
     },
     [run, billOf, setBill, flash],
@@ -278,13 +284,19 @@ export default function BillingScreen({ onExit, focusBillId = null }: { onExit: 
       apply({ type: 'dialog', dialog: null }) // closing first makes a double Enter harmless
       void run(async () => {
         const billId = detail.bill.id
+        // Settling sends any Kitchen lines still pending (Phase 19).
+        const kots: KotStatus[] = []
         if (plan.kind === 'counter') {
-          await api.settle(billId, plan.payments)
+          kots.push(...(await api.settle(billId, plan.payments)).kots)
         } else {
-          for (const step of plan.steps) await api.settleWaiter(billId, plan.waiterId, step.tender, step.amount)
+          for (const step of plan.steps) kots.push(...((await api.settleWaiter(billId, plan.waiterId, step.tender, step.amount)).kots ?? []))
         }
         finishBill(tabId, { billNo: detail.bill.billNo, totalPaise: detail.bill.totalPaise, changePaise: plan.changePaise, summary: describePlan(plan, detail) })
-        flash('ok', `Bill #${detail.bill.billNo} settled${plan.changePaise > 0n ? ` · change ${formatPaise(plan.changePaise)}` : ''}`)
+        const kot = kotMessage(kots, detail.bill.billNo)
+        flash(
+          kot?.kind ?? 'ok',
+          `Bill #${detail.bill.billNo} settled${plan.changePaise > 0n ? ` · change ${formatPaise(plan.changePaise)}` : ''}${kot ? ` · ${kot.text}` : ''}`,
+        )
       }, tabId)
     },
     [apply, run, billOf, finishBill, flash],
@@ -315,11 +327,12 @@ export default function BillingScreen({ onExit, focusBillId = null }: { onExit: 
   /** Ctrl+Z in peak: the server finds this till's newest scan, so it works after a reload too. */
   const undoPeak = useCallback(() => {
     void run(async () => {
-      const { undone } = await api.undoLastPeak().catch((err: unknown) => {
+      const { undone, kots } = await api.undoLastPeak().catch((err: unknown) => {
         throw err instanceof ApiError && err.code === 'NOT_FOUND' ? new CounterError('Nothing left to undo in this peak') : err
       })
       apply({ type: 'peakUndone', billId: undone.billId })
-      flash('ok', `Last scan voided: ${undone.displayName} ×${undone.quantity} (peak bill #${undone.billNo})`)
+      const kot = kotMessage(kots, undone.billNo)
+      flash(kot?.kind ?? 'ok', `Last scan voided: ${undone.displayName} ×${undone.quantity} (peak bill #${undone.billNo})${kot ? ` · ${kot.text}` : ''}`)
       void refreshContext()
     })
   }, [run, apply, flash, refreshContext])
@@ -386,6 +399,27 @@ export default function BillingScreen({ onExit, focusBillId = null }: { onExit: 
   }, [])
   const canEditBill = mode === 'NORMAL'
 
+  /** F6: print the current bill's pending Kitchen lines (and cancels) now, e.g. for a held tab. */
+  const sendKot = useCallback(() => {
+    const tabId = currentTabId()
+    const detail = billOf(tabId)
+    if (!detail) {
+      flash('error', 'No bill — scan an item first')
+      return
+    }
+    const pending = kitchenKotPending(detail.items)
+    if (pending.send === 0 && pending.cancel === 0) {
+      flash('error', detail.items.some((i) => i.kotStation === 'KITCHEN') ? 'The kitchen already has every item on this bill' : 'No Kitchen items on this bill')
+      return
+    }
+    void run(async () => {
+      const { kots } = await api.sendKot(detail.bill.id)
+      setBill(tabId, await api.getBill(detail.bill.id))
+      const kot = kotMessage(kots, detail.bill.billNo)
+      if (kot) flash(kot.kind, kot.text)
+    }, tabId)
+  }, [billOf, flash, run, setBill])
+
   const openPayment = useCallback(() => {
     const tabId = currentTabId()
     const detail = billOf(tabId)
@@ -429,6 +463,7 @@ export default function BillingScreen({ onExit, focusBillId = null }: { onExit: 
         else if ((billOf(currentTabId())?.tenderedPaise ?? 0n) > 0n) flash('error', 'Waiter is locked after the first payment')
         else apply({ type: 'dialog', dialog: 'waiter' })
       },
+      F6: () => (canEditBill ? sendKot() : flash('error', 'Peak scans send their KOT straight away')),
       F8: togglePeak,
       F9: () => (canEditBill ? openPayment() : flash('error', 'Peak bills take no payment — they reconcile at session end')),
     },
@@ -449,12 +484,14 @@ export default function BillingScreen({ onExit, focusBillId = null }: { onExit: 
         const row = groupItems(detail?.items ?? []).find((r) => r.key === key)
         if (!detail || !row) return
         if (quantity !== row.quantity) {
+          const kots: KotStatus[] = []
           if (quantity > row.quantity) await api.addItem(detail.bill.id, row.skuId, quantity - row.quantity)
           else {
-            for (const c of cancelPlan(detail.items, row.key, row.quantity - quantity)) await api.cancelItem(detail.bill.id, c.itemId, c.quantity)
+            for (const c of cancelPlan(detail.items, row.key, row.quantity - quantity)) kots.push(...((await api.cancelItem(detail.bill.id, c.itemId, c.quantity)).kots ?? []))
           }
           setBill(tabId, await api.getBill(detail.bill.id), row.skuId)
-          flash('ok', `${row.displayName} × ${quantity}`)
+          const kot = kotMessage(kots, detail.bill.billNo)
+          flash(kot?.kind ?? 'ok', `${row.displayName} × ${quantity}${kot ? ` · ${kot.text}` : ''}`)
         }
         // Payment opens on the current tab; skip it if the cashier has moved to another bill meanwhile.
         if (currentTabId() === tabId) openPayment()
@@ -620,6 +657,8 @@ export default function BillingScreen({ onExit, focusBillId = null }: { onExit: 
               onMember={() => apply({ type: 'dialog', dialog: 'member' })}
               onWaiter={() => apply({ type: 'dialog', dialog: 'waiter' })}
               onPay={openPayment}
+              kot={tab.bill ? kitchenKotPending(tab.bill.items) : { send: 0, cancel: 0 }}
+              onSendKot={sendKot}
               onStartPeak={peakSession ? undefined : togglePeak}
             />
           )}

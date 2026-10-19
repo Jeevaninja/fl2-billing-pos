@@ -6,6 +6,7 @@
 import type {
   CatalogProduct,
   CatalogSku,
+  DepartmentCode,
   NewProductPayload,
   NewSkuPayload,
   Paise,
@@ -19,9 +20,26 @@ import { paiseToRupeeInput, parseRupeesToPaise } from '../lib/money'
 import { SIZE_ORDER } from '../lib/ui'
 
 /** Bottles per case pre-filled when a size is ticked (Indian distribution cases); editable. */
-export const DEFAULT_CASE_SIZE: Readonly<Record<SizeCode, number>> = { FULL: 12, HALF: 32, QUARTER: 64, BEER_650: 12, BEER_330: 24 }
+export const DEFAULT_CASE_SIZE: Readonly<Record<SizeCode, number>> = { FULL: 12, HALF: 32, QUARTER: 64, BEER_650: 12, BEER_330: 24, UNIT: 1 }
 export const MAX_CASE_SIZE = 1000
-const SIZE_SUFFIX: Readonly<Record<SizeCode, string>> = { FULL: 'F', HALF: 'H', QUARTER: 'Q', BEER_650: '650', BEER_330: '330' }
+const SIZE_SUFFIX: Readonly<Record<SizeCode, string>> = { FULL: 'F', HALF: 'H', QUARTER: 'Q', BEER_650: '650', BEER_330: '330', UNIT: 'U' }
+
+/** The department a category pre-selects (Phase 19); the manager can override it. */
+export function departmentForCategory(category: ProductCategory): DepartmentCode {
+  if (category === 'FOOD') return 'KITCHEN'
+  if (category === 'BEVERAGE' || category === 'TOBACCO') return 'ANCILLARY'
+  return 'LIQUOR'
+}
+
+/** Sizes a department offers: a dish is a Full / Half plate or a single size, never a bottle size. */
+export function sizesFor(department: DepartmentCode): readonly SizeCode[] {
+  return department === 'KITCHEN' ? SIZE_ORDER.filter((s) => s === 'FULL' || s === 'HALF' || s === 'UNIT') : SIZE_ORDER
+}
+
+/** Kitchen items are not counted in cases (or at all): their case size is always 1. */
+function defaultCaseSize(size: SizeCode, department: DepartmentCode): number {
+  return department === 'KITCHEN' ? 1 : DEFAULT_CASE_SIZE[size]
+}
 const MAX_NAME = 80
 
 /** The price, case size and barcode fields of one size, as typed. */
@@ -36,6 +54,9 @@ export interface NewProductForm {
   kind: 'newProduct'
   name: string
   category: ProductCategory
+  department: DepartmentCode
+  /** Once the operator picks a department it stops following the category. */
+  departmentTouched: boolean
   codePrefix: string
   /** Once the operator edits the prefix it stops following the name. */
   prefixTouched: boolean
@@ -47,6 +68,8 @@ export interface EditProductForm {
   product: CatalogProduct
   name: string
   category: ProductCategory
+  department: DepartmentCode
+  departmentTouched: boolean
   isActive: boolean
 }
 
@@ -76,10 +99,10 @@ const CONFLICT_BY_CONSTRAINT: Readonly<Record<string, ConflictField>> = {
 }
 
 const CONFLICT_TEXT: Readonly<Record<ConflictField, string>> = {
-  name: 'A liquor with this name already exists',
+  name: 'An item with this name already exists',
   codePrefix: 'That SKU code is already used — choose another code prefix',
   barcode: 'That barcode is already on another SKU',
-  size: 'This liquor already has that size',
+  size: 'This item already has that size',
 }
 
 export function conflictField(constraint: string | undefined): ConflictField | null {
@@ -121,6 +144,7 @@ export const initialCatalogState: CatalogState = {
 export type FormField =
   | { field: 'name' | 'codePrefix'; value: string }
   | { field: 'category'; value: ProductCategory }
+  | { field: 'department'; value: DepartmentCode }
   | { field: 'isActive'; value: boolean }
   | { field: 'sizeCode'; value: SizeCode }
   | { field: keyof SizeFields; value: string; size?: SizeCode }
@@ -168,7 +192,7 @@ const EMPTY_SIZE: SizeFields = { sale: '', buy: '', caseSize: '', barcode: '' }
 
 function newProductForm(): NewProductForm {
   const sizes = Object.fromEntries(SIZE_ORDER.map((s) => [s, { ...EMPTY_SIZE, on: false }])) as NewProductForm['sizes']
-  return { kind: 'newProduct', name: '', category: 'WHISKY', codePrefix: '', prefixTouched: false, sizes }
+  return { kind: 'newProduct', name: '', category: 'WHISKY', department: 'LIQUOR', departmentTouched: false, codePrefix: '', prefixTouched: false, sizes }
 }
 
 function skuFields(sku: CatalogSku): SizeFields {
@@ -189,8 +213,11 @@ interface ParsedSize {
   barcode: string | null
 }
 
-/** Checks one size's fields; returns the parsed values or the first problem, prefixed with `label`. */
-function parseSize(fields: SizeFields, label: string): ParsedSize | string {
+/**
+ * Checks one size's fields; returns the parsed values or the first problem, prefixed with `label`.
+ * A Kitchen item has no case size to check (it is always 1).
+ */
+function parseSize(fields: SizeFields, label: string, department: DepartmentCode): ParsedSize | string {
   const sale = parseRupeesToPaise(fields.sale)
   if (fields.sale.trim() === '' || sale === null) return `${label}: enter the sale price`
   if (sale <= 0n) return `${label}: the sale price must be more than ₹0`
@@ -199,8 +226,8 @@ function parseSize(fields: SizeFields, label: string): ParsedSize | string {
     purchasePrice = parseRupeesToPaise(fields.buy)
     if (purchasePrice === null) return `${label}: enter the purchase price in rupees, or leave it empty`
   }
-  const caseSize = Number(fields.caseSize)
-  if (!/^\d+$/.test(fields.caseSize.trim()) || caseSize < 1 || caseSize > MAX_CASE_SIZE) {
+  const caseSize = department === 'KITCHEN' ? 1 : Number(fields.caseSize)
+  if (department !== 'KITCHEN' && (!/^\d+$/.test(fields.caseSize.trim()) || caseSize < 1 || caseSize > MAX_CASE_SIZE)) {
     return `${label}: case size must be 1 to ${MAX_CASE_SIZE} bottles`
   }
   const barcode = fields.barcode.trim()
@@ -210,7 +237,7 @@ function parseSize(fields: SizeFields, label: string): ParsedSize | string {
 
 function checkName(name: string): string | null {
   const text = name.trim()
-  if (text === '') return 'Enter the liquor name'
+  if (text === '') return 'Enter the item name'
   if (text.length > MAX_NAME) return `Name must be at most ${MAX_NAME} characters`
   return null
 }
@@ -231,15 +258,15 @@ function newProductPayloadOrError(form: NewProductForm): NewProductPayload | str
   if (nameError) return nameError
   const prefix = form.codePrefix.trim().toUpperCase()
   if (!/^[A-Z0-9]{2,10}$/.test(prefix)) return 'Code prefix must be 2–10 letters or digits, e.g. HWHS'
-  const on = SIZE_ORDER.filter((s) => form.sizes[s].on)
+  const on = sizesFor(form.department).filter((s) => form.sizes[s].on)
   if (on.length === 0) return 'Tick at least one size'
   const skus: NewSkuPayload[] = []
   for (const size of on) {
-    const parsed = parseSize(form.sizes[size], skuCodePreview(prefix, size))
+    const parsed = parseSize(form.sizes[size], skuCodePreview(prefix, size), form.department)
     if (typeof parsed === 'string') return parsed
     skus.push({ sizeCode: size, ...parsed })
   }
-  return { name: form.name.trim().replace(/\s+/g, ' '), category: form.category, codePrefix: prefix, skus }
+  return { name: form.name.trim().replace(/\s+/g, ' '), category: form.category, department: form.department, codePrefix: prefix, skus }
 }
 
 /** The changed fields of a liquor edit (empty when nothing changed), or an error. */
@@ -250,19 +277,20 @@ export function productPatch(form: EditProductForm): ProductPatch | string {
   const name = form.name.trim().replace(/\s+/g, ' ')
   if (name !== form.product.name) patch.name = name
   if (form.category !== form.product.category) patch.category = form.category
+  if (form.department !== form.product.department) patch.department = form.department
   if (form.isActive !== form.product.isActive) patch.isActive = form.isActive
   return patch
 }
 
 export function addSkuPayload(form: AddSkuForm): NewSkuPayload | string {
   if (!form.sizeCode) return 'Choose a size'
-  const parsed = parseSize(form, 'New size')
+  const parsed = parseSize(form, 'New size', form.product.department)
   return typeof parsed === 'string' ? parsed : { sizeCode: form.sizeCode, ...parsed }
 }
 
 /** The changed fields of a size edit (empty when nothing changed), or an error. */
 export function skuPatch(form: EditSkuForm): SkuPatchPayload | string {
-  const parsed = parseSize(form, form.sku.skuCode)
+  const parsed = parseSize(form, form.sku.skuCode, form.product.department)
   if (typeof parsed === 'string') return parsed
   const { sku } = form
   const patch: SkuPatchPayload = {}
@@ -319,16 +347,19 @@ function applyField(form: CatalogForm, change: FormField): CatalogForm {
         ? { ...form, codePrefix: change.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10), prefixTouched: true }
         : form
     case 'category':
-      return form.kind === 'newProduct' || form.kind === 'editProduct' ? { ...form, category: change.value } : form
+      if (form.kind !== 'newProduct' && form.kind !== 'editProduct') return form
+      return { ...form, category: change.value, department: form.departmentTouched ? form.department : departmentForCategory(change.value) }
+    case 'department':
+      return form.kind === 'newProduct' || form.kind === 'editProduct' ? { ...form, department: change.value, departmentTouched: true } : form
     case 'isActive':
       return form.kind === 'editProduct' || form.kind === 'editSku' ? { ...form, isActive: change.value } : form
     case 'sizeCode':
       // Choosing a size resets its case size to that size's default.
-      return form.kind === 'addSku' ? { ...form, sizeCode: change.value, caseSize: String(DEFAULT_CASE_SIZE[change.value]) } : form
+      return form.kind === 'addSku' ? { ...form, sizeCode: change.value, caseSize: String(defaultCaseSize(change.value, form.product.department)) } : form
     case 'sizeOn': {
       if (form.kind !== 'newProduct') return form
       const row = form.sizes[change.size]
-      const caseSize = change.value && row.caseSize === '' ? String(DEFAULT_CASE_SIZE[change.size]) : row.caseSize
+      const caseSize = change.value && row.caseSize === '' ? String(defaultCaseSize(change.size, form.department)) : row.caseSize
       return { ...form, sizes: { ...form.sizes, [change.size]: { ...row, on: change.value, caseSize } } }
     }
     case 'sale':
@@ -343,7 +374,7 @@ function applyField(form: CatalogForm, change: FormField): CatalogForm {
         if (!change.size) return form
         const row = form.sizes[change.size]
         // Typing into a size's fields ticks it, pre-filling its case size as ticking does.
-        const caseSize = row.on || row.caseSize !== '' ? row.caseSize : String(DEFAULT_CASE_SIZE[change.size])
+        const caseSize = row.on || row.caseSize !== '' ? row.caseSize : String(defaultCaseSize(change.size, form.department))
         return { ...form, sizes: { ...form.sizes, [change.size]: { ...row, on: true, caseSize, [change.field]: value } } }
       }
       return form.kind === 'addSku' || form.kind === 'editSku' ? { ...form, [change.field]: value } : form
@@ -385,18 +416,31 @@ export function catalogReducer(state: CatalogState, action: CatalogAction): Cata
     }
     case 'openEditProduct': {
       const { product } = action
-      return { ...state, form: { kind: 'editProduct', product, name: product.name, category: product.category, isActive: product.isActive }, conflict: null, saveError: null }
+      return {
+        ...state,
+        form: {
+          kind: 'editProduct',
+          product,
+          name: product.name,
+          category: product.category,
+          department: product.department,
+          departmentTouched: false,
+          isActive: product.isActive,
+        },
+        conflict: null,
+        saveError: null,
+      }
     }
     case 'openEditSku':
       return { ...state, form: { kind: 'editSku', product: action.product, sku: action.sku, isActive: action.sku.isActive, ...skuFields(action.sku) }, conflict: null, saveError: null }
     case 'openAddSku': {
       const taken = new Set(action.product.skus.map((s) => s.sizeCode))
-      const sizeCode = SIZE_ORDER.find((s) => !taken.has(s)) ?? null
+      const sizeCode = sizesFor(action.product.department).find((s) => !taken.has(s)) ?? null
       if (!action.product.isActive) return { ...state, flash: flash(state, 'error', `${action.product.name} is inactive — reactivate it first`) }
       if (sizeCode === null) return { ...state, flash: flash(state, 'error', `${action.product.name} already has every size`) }
       return {
         ...state,
-        form: { kind: 'addSku', product: action.product, sizeCode, ...EMPTY_SIZE, caseSize: String(DEFAULT_CASE_SIZE[sizeCode]) },
+        form: { kind: 'addSku', product: action.product, sizeCode, ...EMPTY_SIZE, caseSize: String(defaultCaseSize(sizeCode, action.product.department)) },
         conflict: null,
         saveError: null,
       }

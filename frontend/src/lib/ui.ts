@@ -1,4 +1,4 @@
-import type { SizeCode } from '../api/types'
+import type { DepartmentCode, SizeCode } from '../api/types'
 
 export const FOCUS_RING =
   'outline-none focus-visible:ring-4 focus-visible:ring-amber-300 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950'
@@ -10,10 +10,28 @@ export const SIZE_NAME: Readonly<Record<SizeCode, string>> = {
   QUARTER: 'Quarter 180ml',
   BEER_650: 'Beer 650ml',
   BEER_330: 'Beer 330ml',
+  UNIT: 'Unit (single size)',
+}
+
+/** Kitchen items are plates, not bottles: Full / Half plate, or a single size. */
+const KITCHEN_SIZE_NAME: Partial<Record<SizeCode, string>> = { FULL: 'Full plate', HALF: 'Half plate', UNIT: 'Single size' }
+
+/** The size name as the department reads it. */
+export function sizeNameFor(size: SizeCode, department: DepartmentCode): string {
+  return (department === 'KITCHEN' ? KITCHEN_SIZE_NAME[size] : undefined) ?? SIZE_NAME[size]
 }
 
 /** Catalog display order. */
-export const SIZE_ORDER: readonly SizeCode[] = ['FULL', 'HALF', 'QUARTER', 'BEER_650', 'BEER_330']
+export const SIZE_ORDER: readonly SizeCode[] = ['FULL', 'HALF', 'QUARTER', 'BEER_650', 'BEER_330', 'UNIT']
+
+/** Department labels and chip colours (Phase 19). */
+export const DEPARTMENT_NAME: Readonly<Record<DepartmentCode, string>> = { LIQUOR: 'Liquor', KITCHEN: 'Kitchen', ANCILLARY: 'Ancillary' }
+export const DEPARTMENT_ORDER: readonly DepartmentCode[] = ['LIQUOR', 'KITCHEN', 'ANCILLARY']
+export const DEPARTMENT_CHIP: Readonly<Record<DepartmentCode, string>> = {
+  LIQUOR: 'border-amber-700 bg-amber-950 text-amber-200',
+  KITCHEN: 'border-emerald-700 bg-emerald-950 text-emerald-200',
+  ANCILLARY: 'border-sky-700 bg-sky-950 text-sky-200',
+}
 
 export function formatTime(date: Date): string {
   return date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })

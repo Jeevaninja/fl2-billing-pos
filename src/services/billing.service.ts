@@ -341,15 +341,23 @@ function assertEditableNormalBill(bill: Bill, action: string, peakHint = 'peak b
   }
 }
 
-/** Pre-flight stock check for a friendly error before any write; the trigger re-checks under lock. */
+/**
+ * Pre-flight stock check for a friendly error before any write; the trigger re-checks under lock.
+ * Kitchen items (an untracked department) need no stock.
+ */
 async function assertStockAvailable(tx: SqlClient, skuId: string, quantity: number): Promise<void> {
-  const stock = await maybeOne<{ sku_code: string; on_hand_qty: number }>(
+  const stock = await maybeOne<{ sku_code: string; on_hand_qty: number; tracks_stock: boolean }>(
     tx,
-    `SELECT k.sku_code, s.on_hand_qty FROM skus k JOIN sku_stock s ON s.sku_id = k.id WHERE k.id = $1`,
+    `SELECT k.sku_code, s.on_hand_qty, d.tracks_stock
+       FROM skus k
+       JOIN sku_stock s ON s.sku_id = k.id
+       JOIN products p ON p.id = k.product_id
+       JOIN departments d ON d.code = p.department
+      WHERE k.id = $1`,
     [skuId],
   );
   if (!stock) throw new NotFoundError('sku', skuId);
-  if (stock.on_hand_qty < quantity) {
+  if (stock.tracks_stock && stock.on_hand_qty < quantity) {
     throw new PosError(
       PosErrorCode.INSUFFICIENT_STOCK,
       `insufficient stock for ${stock.sku_code}: ${stock.on_hand_qty} bottle(s) on hand, ${quantity} requested`,

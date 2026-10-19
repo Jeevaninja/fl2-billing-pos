@@ -2,7 +2,8 @@
  * Settings → Expense Categories (Phase 18): pure helpers behind the list and the add / edit modal.
  * The server is the judge (PS012 duplicate, PS002 last active); these catch the obvious early.
  */
-import type { ExpenseCategory, ExpenseCategoryPatch } from '../api/types'
+import type { DepartmentCode, ExpenseCategory, ExpenseCategoryPatch } from '../api/types'
+import { DEPARTMENT_NAME } from '../lib/ui'
 
 export const MAX_NAME = 40
 
@@ -12,12 +13,26 @@ export interface CategoryForm {
   name: string
   noteRequired: boolean
   isActive: boolean
+  /** Phase 19: the P&L its expenses go to; null = Shared (overheads). */
+  department: DepartmentCode | null
 }
 
-export const NEW_CATEGORY: CategoryForm = { id: null, name: '', noteRequired: false, isActive: true }
+export const NEW_CATEGORY: CategoryForm = { id: null, name: '', noteRequired: false, isActive: true, department: null }
 
 export function formFor(category: ExpenseCategory): CategoryForm {
-  return { id: category.id, name: category.name, noteRequired: category.noteRequired, isActive: category.isActive }
+  return { id: category.id, name: category.name, noteRequired: category.noteRequired, isActive: category.isActive, department: category.department }
+}
+
+/** "Liquor", "Kitchen", "Ancillary" or "Shared". */
+export function departmentLabel(department: DepartmentCode | null): string {
+  return department === null ? 'Shared' : DEPARTMENT_NAME[department]
+}
+
+/** The warning shown when a used category changes department (its past expenses follow), or null. */
+export function departmentMoveNote(original: ExpenseCategory | undefined, form: CategoryForm): string | null {
+  if (!original || original.department === form.department || original.usedCount === 0) return null
+  const n = original.usedCount
+  return `Moves its ${n} past expense${n === 1 ? '' : 's'} from ${departmentLabel(original.department)} to ${departmentLabel(form.department)}.`
 }
 
 /** Trimmed, inner runs of spaces collapsed — the server stores names the same way. */
@@ -47,6 +62,7 @@ export function categoryPatch(original: ExpenseCategory, form: CategoryForm): Ex
   if (name !== original.name) patch.name = name
   if (form.noteRequired !== original.noteRequired) patch.noteRequired = form.noteRequired
   if (form.isActive !== original.isActive) patch.isActive = form.isActive
+  if (form.department !== original.department) patch.department = form.department
   return patch
 }
 

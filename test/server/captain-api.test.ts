@@ -162,13 +162,13 @@ describe('Captain API (Wi-Fi server)', () => {
         creditLimitPaise: null,
       });
       expect(res.body.member).toEqual({ id: memberId, membershipNo: 'M-42', displayName: 'Anil Kumar' });
-      expect(res.body.kot).toMatchObject({ station: 'COUNTER', printed: true, error: null });
+      expect(res.body.kot).toMatchObject({ station: 'BAR', printed: true, error: null });
 
       expect(tickets).toHaveLength(1);
       expect(tickets[0]).toMatchObject({
         kotNo: res.body.bill.billNo,
         billId: res.body.bill.id,
-        station: 'COUNTER',
+        station: 'BAR',
         waiter: { code: 'W01', displayName: 'Trusted' },
         member: { membershipNo: 'M-42', displayName: 'Anil Kumar' },
         lines: [
@@ -226,7 +226,7 @@ describe('Captain API (Wi-Fi server)', () => {
       const res = await kot(call, { waiterId: fx.waiter.trusted, items: [{ skuId: fx.sku.quarter, quantity: 1 }] });
       expect(res).toMatchObject({
         status: 201,
-        body: { bill: { status: 'OPEN' }, kot: { station: 'COUNTER', printed: false, printedAt: null, error: 'printer 192.168.1.50:9100 unreachable' } },
+        body: { bill: { status: 'OPEN' }, kot: { station: 'BAR', printed: false, printedAt: null, error: 'printer 192.168.1.50:9100 unreachable' } },
       });
       expect((await counter('GET', `/api/bills/${res.body.bill.id}`)).status).toBe(200);
     });
@@ -237,7 +237,7 @@ describe('Captain API (Wi-Fi server)', () => {
       const res = await kot(call, { waiterId: fx.waiter.trusted, items: [{ skuId: fx.sku.beer650, quantity: 2 }] });
       expect(res.body.kot.printed).toBe(true);
       expect(log).toHaveBeenCalledTimes(1);
-      expect(String(log.mock.calls[0]?.[0])).toContain(`KOT #${res.body.bill.billNo} - COUNTER`);
+      expect(String(log.mock.calls[0]?.[0])).toContain(`KOT #${res.body.bill.billNo} - BAR`);
     });
 
     describe('idempotency (requestId)', () => {

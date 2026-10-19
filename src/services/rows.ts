@@ -14,6 +14,7 @@ import type {
   BillSource,
   BillStatus,
   CounterTender,
+  DepartmentCode,
   PeakSession,
   SizeCode,
   Tender,
@@ -59,6 +60,7 @@ export interface BillItemRow {
   line_total_paise: DbInt;
   reverses_item_id: string | null;
   restock: boolean;
+  department: DepartmentCode;
 }
 
 export interface BillPaymentRow {
@@ -140,6 +142,7 @@ export function mapBillItem(r: BillItemRow): BillItem {
     lineTotalPaise: toPaise(r.line_total_paise),
     reversesItemId: r.reverses_item_id,
     restock: r.restock,
+    department: r.department,
   };
 }
 

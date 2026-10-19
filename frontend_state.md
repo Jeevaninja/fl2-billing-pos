@@ -1,10 +1,10 @@
 # FL2 POS — Frontend State Reference
 
-As of Phase 11 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders, Phase 7 Day End, Phase 8 Expenses and peak controls, Phase 9 Purchase / GRN, Phase 10 Inventory Catalog and case-based GRN, Phase 11 peak start baseline and Day End sales breakdown, Phase 12 Enter → qty → pay, payment arrow keys and server-side peak undo; plan `docs/ui/phase12-billing-speed-plan.md`, Phase 13 peak end live split, Day End tally adjustments and Day End ⇄ Expenses; plan `docs/ui/phase13-peak-close-tally-plan.md`, Phase 14 bank deposits; plan `docs/ui/phase14-bank-deposits-plan.md`, Phase 15 multi-tab billing and the waiter sidebar; plan `docs/ui/phase15-billing-tabs-waiter-sidebar-plan.md`, Phase 16 Waiter Ledger (replaces the Captain Orders queue) and the strict Day End waiter-balance blocker; plan `docs/ui/phase16-waiter-ledger-plan.md`, Phase 17 Orders screen, the header Settings menu and Jump to bill; plan `docs/ui/phase17-orders-plan.md`, Phase 18 custom expense categories (Settings screen + Expense picker); plan `docs/ui/phase18-expense-categories-plan.md`). Upcoming phases (not built): `docs/roadmap.md`. Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
+As of Phase 11 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders, Phase 7 Day End, Phase 8 Expenses and peak controls, Phase 9 Purchase / GRN, Phase 10 Inventory Catalog and case-based GRN, Phase 11 peak start baseline and Day End sales breakdown, Phase 12 Enter → qty → pay, payment arrow keys and server-side peak undo; plan `docs/ui/phase12-billing-speed-plan.md`, Phase 13 peak end live split, Day End tally adjustments and Day End ⇄ Expenses; plan `docs/ui/phase13-peak-close-tally-plan.md`, Phase 14 bank deposits; plan `docs/ui/phase14-bank-deposits-plan.md`, Phase 15 multi-tab billing and the waiter sidebar; plan `docs/ui/phase15-billing-tabs-waiter-sidebar-plan.md`, Phase 16 Waiter Ledger (replaces the Captain Orders queue) and the strict Day End waiter-balance blocker; plan `docs/ui/phase16-waiter-ledger-plan.md`, Phase 17 Orders screen, the header Settings menu and Jump to bill; plan `docs/ui/phase17-orders-plan.md`, Phase 18 custom expense categories (Settings screen + Expense picker); plan `docs/ui/phase18-expense-categories-plan.md`, Phase 19 departments: catalog / expense-category departments, Kitchen KOTs (F6) and the Day End department split; plan `docs/ui/phase19-departments-plan.md`). Upcoming phases (not built): `docs/roadmap.md`. Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
 
 - **Stack:** Vite 8, React 19, TypeScript, Tailwind CSS 4 (`@tailwindcss/vite`), Lucide icons, Vitest. No router, no state library.
 - **Run:** `npm run api:dev` at the repo root (API on `127.0.0.1:4310`), then `npm run dev` in `frontend/` (http://localhost:5173). Vite proxies `/api` to the API.
-- **Check:** `npm test` (Vitest, 209 tests), `npx tsc -b`, `npx oxlint src`, `npm run build`.
+- **Check:** `npm test` (Vitest, 215 tests), `npx tsc -b`, `npx oxlint src`, `npm run build`.
 - **Money:** `bigint` paise end to end. The API client decodes every `…Paise` JSON string to `bigint` and encodes `bigint` back to strings. Display goes through `formatPaise`; cashier input goes through `parseRupeesToPaise`. No floats.
 - **Server is the source of truth:** bills enter screen state only as `BillDetail` responses, so the UI never adds up prices to get a total.
 
@@ -32,12 +32,14 @@ main.tsx                      StrictMode → <App/>, imports index.css (Tailwind
       │  ├─ BillTabs          Phase 15, Chrome-style held bills: "Bill n · #billNo · waiter code · total", × per tab, + (F3);
       │  │                    shown in NORMAL, and in PEAK while more than one tab exists
       │  ├─ ScanBar           scan buffer display, qty-prefix chip, FlashLine (ok / error)
-      │  ├─ ItemsGrid         NORMAL: rows grouped by SKU+price, pending "adding…" rows,
+      │  ├─ ItemsGrid         NORMAL: rows grouped by SKU+price, pending "adding…" rows, Phase 19 KITCHEN chip with
+      │  │                    "KOT pending n" / "Cancel pending n" / "KOT ✓" on Kitchen lines,
       │  │                    EmptyBill (hint or last-settled receipt with change)
       │  ├─ PeakTicker        PEAK: this visit's scans newest first, undone rows struck out
       │  └─ GridFooter        key legend for the current mode
       ├─ aside (right pane)
-      │  ├─ SidePanel         NORMAL: Card(Member F2), Card(Waiter F4, TrustBadge), totals, Start peak (F8), Pay F9
+      │  ├─ SidePanel         NORMAL: Card(Member F2), Card(Waiter F4, TrustBadge), totals, Send KOT to kitchen (F6; Phase 19,
+      │  │                    only while Kitchen lines are pending), Start peak (F8), Pay F9
       │  └─ PeakSide          PEAK: session card, expected drawer total, Undo last scan (Ctrl+Z)
       └─ dialogs (one at a time, all built on Modal)
          ├─ PaymentDialog     option radios C/U/S/P/L, rupee input, change / split / credit preview
@@ -124,7 +126,8 @@ Shared: components/peak/PeakControls.tsx: PeakBanner, StartPeakButton, PeakStart
         components/RupeeField.tsx: rupee input shared by Day End, Expenses and the peak dialogs.
         components/dayend/SalesBreakdownCard.tsx: Day End sales table (above the cash count on an open day, under the
         closed-day card otherwise). Phase 13: adjusted Normal cash / UPI with "system ₹X" notes, the day's tally
-        adjustments (void on an open day) and "Adjust Cash ⇄ UPI…" (F7).
+        adjustments (void on an open day) and "Adjust Cash ⇄ UPI…" (F7). Phase 19: a "By department" block
+        (Liquor / Kitchen / Ancillary, "On bills still open" when not ₹0, Total = Total sales), info only.
         components/dayend/TallyDialog.tsx: the tally modal (pure helpers in dayend/tallyForm.ts).
 ```
 
@@ -164,7 +167,7 @@ Shared: components/peak/PeakControls.tsx: PeakBanner, StartPeakButton, PeakStart
 | `billing/payment.ts` (Phase 12) | adds `moveOption` |
 | `peak/peakMath.ts` | `parseReadings`, `describeVariance`, `compareReading`, `describeBaseline`, `peakSplit` (Phase 13) |
 | `dayend/tallyForm.ts` | `EMPTY_TALLY`, `MAX_REASON`, `tallyResult`, `describeShift` |
-| `dayend/salesRows.ts` | `salesCard` (rows, repayments, warnings) |
+| `dayend/salesRows.ts` | `salesCard` (rows, departments (Phase 19), repayments, warnings) |
 | `dayend/dayEndReducer.ts` | `dayEndReducer`, `initialDayEndState`, `initialDayEndStateFrom` (Phase 13 count draft kept by App), `dayEndView`, `blockerCount`, `openCounterBills`, `countedPaise`, `variancePreview`, `lockBlock`, `waiterBalanceBlock` (Phase 16) |
 
 Only the Reports tile still calls `runStub`; every other tile (and F1/F2/F9, which open billing) opens its screen.
@@ -204,6 +207,7 @@ Only the Reports tile still calls `runStub`; every other tile (and F1/F2/F9, whi
 - **Selectors:** `dayEndView` → `LOADING | OFFLINE | NO_DAY | OPEN | CLOSED`. `blockerCount` counts each open bill, the running peak (its `PEAK_UNSETTLED` bills count once, with it) and each owing waiter. `variancePreview` = counted − expected, display only; the server freezes its own figure. `lockBlock` gives the reason Confirm & Lock is disabled. Phase 16: `waiterBalanceBlock` ("Waiters owe ₹X — All waiter balances must be settled to ₹0 before closing.") comes first while `blockers.waiterBalance.totalPaise > 0`.
 - The typed count survives polls of the same open day and is cleared when another day loads. Every checklist action re-reads the summary afterwards. A failed poll keeps the last summary and flashes the error.
 - **Sales breakdown (Phase 11):** Cash / UPI / Credit / Total for Normal bills, Peak sales (UPI from the readings, cash = sales − UPI; credit "—") and Total sales, plus Waiter repayments kept apart as credit collected. Amber notes for a still-running peak and for a negative derived peak cash; each ended peak in the checklist also shows its sales, with the same warning.
+- **By department (Phase 19):** the same sales split by each bill line's department, every department listed, then "On bills still open" (part-paid open bills / bills settled in a running peak; never at close) and the total, which equals Total sales. The cash count and Expected cash stay one combined figure.
 - **Keys:** type the count (the field is focused) · Enter or F9 asks to lock · Enter confirms in the modal · F6 add expense (Esc on Expenses returns here) · F7 tally adjustment · Esc dashboard. The repayment dialog takes C/U for the tender; Enter records it.
 
 **Expense screen** (`expenseReducer`, pure and unit-tested):
@@ -228,10 +232,14 @@ Only the Reports tile still calls `runStub`; every other tile (and F1/F2/F9, whi
   - A rename warns that it relabels the category's history.
   - `categoryFormError` catches a blank, too-long or duplicate name (with a "disabled — enable it instead" hint) and
     the last active category. The server's refusal is shown and outlines the field.
+- **Department (Phase 19):** each row shows its department badge (Liquor / Kitchen / Ancillary / Shared). The modal has a
+  four-way switch (Shared = overheads, the default for a new category). Changing a used category's department warns
+  "Moves its n past expenses from X to Y" (`departmentMoveNote`): expenses follow their category.
 - **Keys:** ↑/↓ select · Alt+↑ / Alt+↓ reorder · Enter edit · Ins new · Esc dashboard.
 
 **Purchase screen (GRN)** (`purchaseReducer`, pure and unit-tested):
 - **State:** `load` (`loading` / `ready` / `offline` / `noDay`), `till`, `receipts` (today's, newest first), `invoiceNo`, `vendorName`, `invoiceError` (set by a PS011 duplicate, cleared on edit), the picker (`query`, `results`, `highlighted`, `picked`), `cases`, `loose` (digits; empty = 0), `cost`, `lines: StagedLine[]` (`sku`, `cases`, `looseBottles`, `caseSize`, `quantity`, `unitCostPaise`), `selectedLine`, `confirming`, `submitting`, `flash`.
+- **Picker:** Kitchen SKUs (`tracksStock: false`) are filtered out of the results (Phase 19); the server refuses them too.
 - **Picking** a SKU pre-fills `cost` from its `purchasePricePaise` ("210", "1100.50"); with none the field is left empty.
 - **Selectors:**
   - `entryCount` = `{ cases, loose, total: cases × sku.caseSize + loose }`.
@@ -245,10 +253,18 @@ Only the Reports tile still calls `runStub`; every other tile (and F1/F2/F9, whi
 **Inventory Catalog screen** (`catalogReducer`, pure and unit-tested):
 - **State:** `load` (`loading` / `ready` / `offline`), `products`, `query`, `includeInactive`, `selected` (index into `catalogRows`: each liquor followed by its sizes), `form` (`newProduct` / `editProduct` / `addSku` / `editSku`), `conflict` (`name` / `codePrefix` / `barcode` / `size`), `saveError`, `submitting`, `flash`.
 - **Forms:** prices are typed rupees parsed with `parseRupeesToPaise` (sale > ₹0, purchase optional ≥ ₹0), case size digits 1–1000, barcode no spaces. `formError` gives the first problem (prefixed with the SKU code for a size row). Edits send only the changed fields (`productPatch` / `skuPatch`; an empty purchase price or barcode sends `null` to clear it); no change just closes.
+- **Departments (Phase 19):** new and edit forms carry `department` with a large three-way switch (Liquor · Kitchen ·
+  Ancillary). `departmentForCategory` pre-selects it from the category (FOOD → Kitchen, BEVERAGE / TOBACCO → Ancillary,
+  the rest Liquor) until the operator picks one (`departmentTouched`). `sizesFor('KITCHEN')` offers only Full plate /
+  Half plate / Single size (`UNIT`), with no case size (sent as 1); other departments get every size. Rows show a
+  department chip, and Kitchen sizes read "not tracked" for stock and "—" for case. An edit that changes the
+  department warns it applies to new sales only.
 - **Results:** `saved` upserts the server's copy of the liquor in name order and selects it; `conflict` keeps the form open with the reason in `saveError` (cleared by the next edit) and the clashing field outlined until it's edited. Results for a stale search are dropped. New sizes start at 0 stock.
 - **Keys:** ↑/↓ select · Enter edits the selected liquor or size · Ins new liquor · Esc clears the search, else back to the dashboard · in the form: Enter / F9 save, Esc cancel.
 
-**Billing scan stock note:** each scan's flash now ends with the bottles left (`stockLeft`: "57 left", or "last in stock"), computed from the `lookupSku` taken just before the sale. Stock received in Purchase shows on the very next scan.
+**Billing scan stock note:** each scan's flash now ends with the bottles left (`stockLeft`: "57 left", or "last in stock"), computed from the `lookupSku` taken just before the sale. Stock received in Purchase shows on the very next scan. A Kitchen item's flash says "Kitchen — F6 sends the KOT" instead.
+
+**Kitchen KOTs (Phase 19):** `kitchenKotPending(items)` = `{ send, cancel }` from each Kitchen line's `remainingQuantity − kotSentQuantity`; `groupItems` carries `department` and `kotPending` per row. F6 (`api.sendKot`) prints them, and is refused with a hint when nothing is pending or in peak. Settling (counter or waiter), a peak scan, cancelling a sent dish and Ctrl+Z all print server-side; `kotMessage(kots, billNo)` appends "Kitchen KOT #12/2 sent · 3 items, 1 cancelled" to the flash, or an error ("not printed (…) — F6 retries").
 
 **Peak controls:** F8 toggles on the Dashboard and the Billing screen: it starts a session when none is running and ends the running one otherwise. Both screens disable their other shortcuts while a peak dialog is open, and re-read `/api/context` once a session starts or ends. `parseReadings` needs both readings (₹0 allowed); `describeVariance` words the result as short, over or exact. The start dialog fetches `api.peakBaseline()` on open: "Expected cash in drawer" and "Expected UPI so far" with `describeBaseline` terms (₹0 terms dropped), and `compareReading` under each field (display only). A failed fetch shows "Expected figures unavailable" and the peak can still start.
 
@@ -341,16 +357,17 @@ No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDow
 
 | File | Contents |
 |---|---|
-| `api/client.ts` | `api.*` (`context`, `lookupSku`, `searchMembers`, `listWaiters`, `getBill`, `captainOrders`, `createBill`, `addItem`, `cancelItem` (optional `restock`), `setMember`, `tagWaiter`, `settle`, `settleWaiter`, `closeEmpty`, `reverse`, `peakSale`, `searchSkus`, `listPurchases`, `postPurchase`, `listCatalog`, `createProduct`, `updateProduct`, `addSku`, `updateSku`, `peakBaseline`, `undoLastPeak`, `listBankDeposits`, `addBankDeposit`, `voidBankDeposit`, `waiterStats` (Phase 15), `waiterLedger`, `waiterLedgerDetail`, `settleWaiterBills`, `receiveWaiterPayment` (Phase 16), `orders`, `order`, `reprintOrder` (Phase 17)), `ApiError` (`status`, `code`, `constraint` on a 409; `NETWORK` when unreachable or the proxy answers non-JSON 5xx), `reviveJson`, `encodeJson` |
+| `api/client.ts` | `api.*` (`context`, `lookupSku`, `searchMembers`, `listWaiters`, `getBill`, `captainOrders`, `createBill`, `addItem`, `cancelItem` (optional `restock`), `setMember`, `tagWaiter`, `settle` (returns `kots`), `sendKot` (Phase 19), `settleWaiter`, `closeEmpty`, `reverse`, `peakSale`, `searchSkus`, `listPurchases`, `postPurchase`, `listDepartments` (Phase 19), `listCatalog`, `createProduct`, `updateProduct`, `addSku`, `updateSku`, `peakBaseline`, `undoLastPeak`, `listBankDeposits`, `addBankDeposit`, `voidBankDeposit`, `waiterStats` (Phase 15), `waiterLedger`, `waiterLedgerDetail`, `settleWaiterBills`, `receiveWaiterPayment` (Phase 16), `orders`, `order`, `reprintOrder` (Phase 17)), `ApiError` (`status`, `code`, `constraint` on a 409; `NETWORK` when unreachable or the proxy answers non-JSON 5xx), `reviveJson`, `encodeJson` |
 | `api/types.ts` | Frontend mirrors of the API DTOs (`Bill`, `BillDetail`, `CounterContext`, `SkuLookup`, …) with `Paise = bigint`; dates stay ISO strings |
 | `billing/payment.ts` | `payOptions(detail)`, `planPayment(detail, input)` → counter tenders or waiter settle steps plus change, credit-limit pre-check, `describePlan` |
 | `billing/errors.ts` | `CounterError` (screen-raised), `counterErrorMessage(err)` (PS code → cashier wording) |
 | `hooks/scanBuffer.ts` | `scanKey(state, input)` pure state machine; `IDLE_RESET_MS` = 2 s; max 64 chars |
 | `lib/money.ts` | `formatPaise` (₹1,00,000.00 Indian grouping, bigint), `parseRupeesToPaise`, `paiseToRupeeInput` (editable "1100.50") |
-| `lib/ui.ts` | `FOCUS_RING`, `formatTime`, `keepFocus`, `SIZE_NAME` (Full 750ml, Half 375ml, Quarter 180ml, Beer 650ml / 330ml — labels only), `SIZE_ORDER` |
+| `lib/ui.ts` | `FOCUS_RING`, `formatTime`, `keepFocus`, `SIZE_NAME` (Full 750ml, Half 375ml, Quarter 180ml, Beer 650ml / 330ml, Unit — labels only), `sizeNameFor` (Kitchen: Full plate / Half plate / Single size), `SIZE_ORDER`, `DEPARTMENT_NAME` / `DEPARTMENT_ORDER` / `DEPARTMENT_CHIP` (Phase 19) |
 | `lib/beep.ts` | WebAudio scan feedback; silent if audio is unavailable |
 
 **Tests** (`*.test.ts`, Node environment, no DOM):
+- Phase 19: catalog departments and Kitchen sizes (`catalogReducer.test.ts`), expense-category departments and the move warning, `kitchenKotPending` / `kotMessage` / row `kotPending` (`billingReducer.test.ts`), and the Day End department rows (`salesRows.test.ts`)
 - `expense/expenseReducer.test.ts` (Phase 18: server categories, picker filter and highlight, quick keys 1–9, note rule, disabled-meanwhile) and `settings/expenseCategoryForm.test.ts`
 - `orders/ordersView.test.ts` (Phase 17: filters and waiter filter, chip counts, peak grouping and expansion, moves, labels, jump targets, settlement wording)
 - `captain/waiterLedgerReducer.test.ts` (Phase 16: selection, ticks across refreshes, panes, new-order flag, `allocate`, `receiveError`; Phase 17 jump focus)
@@ -363,7 +380,7 @@ No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDow
 ## 6. Known gaps
 
 - The peak ticker holds only this visit's scans, so Ctrl+Z can't undo a scan made before a reload. Server totals are always complete.
-- No receipt printing or KOT reprint. No Reports screen (dashboard stub).
+- No receipt printing on settle (reprints only) and no KOT reprint. The real ESC/POS bar and kitchen printers are still console stubs. No Reports screen (dashboard stub).
 - A posted GRN is final: there's no return-to-vendor / void receipt yet, and no stock-adjustment UI.
 - The peak banner, the Billing peak side panel, the end dialog and Day End show the **expected drawer total** (`expectedDrawerCashPaise`: start cash + peak sales + in-peak cash − in-peak expenses). Peak bills carry no tender, so a peak sale paid by UPI makes the real drawer lower than this figure; the end-of-session variance still reconciles cash + UPI together.
 - Expense entries are stamped with the till's `FL2_CASHIER_ID`; there's no per-person attribution until staff login exists.

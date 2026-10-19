@@ -11,7 +11,9 @@ import {
   CatalogService,
   CounterQueries,
   DayEndService,
+  DEPARTMENT_CODES,
   ExpenseCategoryService,
+  KotService,
   NotFoundError,
   OrdersQueries,
   PeakSessionService,
@@ -23,6 +25,7 @@ import {
   WaiterService,
   type CounterPayment,
   type ExpenseCategoryPatch,
+  type KotPrinter,
   type NewSkuInput,
   type ReceiptLineInput,
   type ReceiptPrinter,
@@ -50,12 +53,20 @@ export interface ApiConfig {
   cashierId: string;
   /** Receipt printer for Orders reprints; defaults to the console stub. */
   printer?: ReceiptPrinter;
+  /** KOT printer (BAR / KITCHEN stations); defaults to the console stub. */
+  kotPrinter?: KotPrinter;
 }
 
 const COUNTER_TENDERS = ['CASH', 'UPI'] as const satisfies readonly CounterTender[];
 const TENDERS = ['CASH', 'UPI', 'WAITER_CREDIT'] as const satisfies readonly Tender[];
 /** Loopback names only: blocks DNS-rebinding pages from reaching the till through a foreign Host. */
 const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
+
+/** Optional department; `null` is allowed only where it means Shared (expense categories). */
+function optDepartment(value: unknown, name: string, { nullable = false } = {}) {
+  if (value === null && nullable) return null;
+  return optOneOf(value, name, DEPARTMENT_CODES);
+}
 
 /** Optional, nullable text: undefined = unchanged, null = clear. */
 function optNullableStr(value: unknown, name: string): string | null | undefined {
@@ -87,7 +98,7 @@ function receiptLine(value: unknown, i: number): ReceiptLineInput {
   };
 }
 
-function buildRoutes({ db, cashierId, printer = new PrinterService() }: ApiConfig): Route[] {
+function buildRoutes({ db, cashierId, printer = new PrinterService(), kotPrinter = new PrinterService() }: ApiConfig): Route[] {
   const billing = new BillingService(db);
   const peak = new PeakSessionService(db);
   const waiters = new WaiterService(db);
@@ -97,6 +108,10 @@ function buildRoutes({ db, cashierId, printer = new PrinterService() }: ApiConfi
   const catalog = new CatalogService(db);
   const orders = new OrdersQueries(db);
   const expenseCategories = new ExpenseCategoryService(db);
+  const kot = new KotService(db, kotPrinter);
+  /** Sends a bill's pending Kitchen lines after the sale committed (the counter is the bar). */
+  const sendKitchen = (billId: string, includeReversals = false) =>
+    kot.sendPending(billId, { staffId: cashierId }, { stations: ['KITCHEN'], includeReversals });
 
   return [
     route('GET', '/api/health', async () => ok({ ok: true })),
@@ -132,15 +147,13 @@ function buildRoutes({ db, cashierId, printer = new PrinterService() }: ApiConfi
     ),
     route('POST', '/api/bills/:billId/items/:itemId/cancel', async ({ params, body }) => {
       const restock = optBool(body.restock, 'restock');
-      return created(
-        await billing.cancelBillItem(
-          id(params.billId, 'billId'),
-          id(params.itemId, 'itemId'),
-          int(body.quantity, 'quantity'),
-          restock === undefined ? {} : { restock },
-        ),
-      );
+      const billId = id(params.billId, 'billId');
+      const line = await billing.cancelBillItem(billId, id(params.itemId, 'itemId'), int(body.quantity, 'quantity'), restock === undefined ? {} : { restock });
+      // A dish already sent to the kitchen gets a CANCEL ticket; unsent lines print nothing.
+      const kots = line.item.department === 'KITCHEN' ? await sendKitchen(billId) : [];
+      return created({ ...line, kots });
     }),
+    route('POST', '/api/bills/:billId/kot', async ({ params }) => created({ kots: await sendKitchen(id(params.billId, 'billId')) })),
     route('PUT', '/api/bills/:billId/member', async ({ params, body }) => {
       if (!('memberId' in body)) throw new BadRequestError('memberId is required (null to clear)');
       return ok(await billing.setBillMember(id(params.billId, 'billId'), body.memberId === null ? null : id(body.memberId, 'memberId')));
@@ -157,18 +170,16 @@ function buildRoutes({ db, cashierId, printer = new PrinterService() }: ApiConfi
           amount: paise(tender.amount, `payments[${i}].amount`),
         };
       });
-      return ok(await billing.settleNormalBill(id(params.billId, 'billId'), payments));
+      const billId = id(params.billId, 'billId');
+      const settled = await billing.settleNormalBill(billId, payments);
+      return ok({ ...settled, kots: await sendKitchen(billId) });
     }),
-    route('POST', '/api/bills/:billId/settle-waiter', async ({ params, body }) =>
-      ok(
-        await waiters.settleWaiterBill(
-          id(params.billId, 'billId'),
-          id(body.waiterId, 'waiterId'),
-          oneOf(body.tender, 'tender', TENDERS),
-          optPaise(body.amount, 'amount'),
-        ),
-      ),
-    ),
+    route('POST', '/api/bills/:billId/settle-waiter', async ({ params, body }) => {
+      const billId = id(params.billId, 'billId');
+      const settlement = await waiters.settleWaiterBill(billId, id(body.waiterId, 'waiterId'), oneOf(body.tender, 'tender', TENDERS), optPaise(body.amount, 'amount'));
+      // Paying a waiter bill at the counter sends its pending Kitchen lines, as F9 does.
+      return ok({ ...settlement, kots: await sendKitchen(billId) });
+    }),
     route('POST', '/api/bills/:billId/close-empty', async ({ params }) => ok(await billing.closeEmptyBill(id(params.billId, 'billId')))),
     route('POST', '/api/bills/:billId/reverse', async ({ params, body }) => {
       const restock = optBool(body.restock, 'restock');
@@ -184,17 +195,20 @@ function buildRoutes({ db, cashierId, printer = new PrinterService() }: ApiConfi
     }),
 
     // ── Peak ──
-    route('POST', '/api/peak/undo-last', async () => created(await billing.undoLastPeakSale(cashierId))),
+    route('POST', '/api/peak/undo-last', async () => {
+      const result = await billing.undoLastPeakSale(cashierId);
+      // A Kitchen scan already sent is cancelled at the kitchen too.
+      return created({ ...result, kots: await sendKitchen(result.undone.billId, true) });
+    }),
     route('GET', '/api/peak/baseline', async () => {
       const day = await queries.getCounterContext(cashierId);
       if (!day.businessDay) throw new NotFoundError('business day', 'open');
       return ok(await peak.getStartBaseline(day.businessDay.id));
     }),
-    route('POST', '/api/peak/sales', async ({ body }) =>
-      created(
-        await billing.recordPeakSale(id(body.sessionId, 'sessionId'), id(body.skuId, 'skuId'), int(body.quantity, 'quantity'), cashierId),
-      ),
-    ),
+    route('POST', '/api/peak/sales', async ({ body }) => {
+      const line = await billing.recordPeakSale(id(body.sessionId, 'sessionId'), id(body.skuId, 'skuId'), int(body.quantity, 'quantity'), cashierId);
+      return created({ ...line, kots: await sendKitchen(line.bill.id) });
+    }),
     route('POST', '/api/peak/sessions', async ({ body }) =>
       created(
         await peak.startPeakSession(
@@ -252,7 +266,13 @@ function buildRoutes({ db, cashierId, printer = new PrinterService() }: ApiConfi
       ok(await expenseCategories.listCategories({ includeInactive: query.get('includeInactive') === '1' })),
     ),
     route('POST', '/api/expense-categories', async ({ body }) =>
-      created(await expenseCategories.createCategory({ name: str(body.name, 'name'), noteRequired: optBool(body.noteRequired, 'noteRequired') ?? false })),
+      created(
+        await expenseCategories.createCategory({
+          name: str(body.name, 'name'),
+          noteRequired: optBool(body.noteRequired, 'noteRequired') ?? false,
+          department: optDepartment(body.department, 'department', { nullable: true }) ?? null,
+        }),
+      ),
     ),
     route('PATCH', '/api/expense-categories/:categoryId', async ({ params, body }) => {
       const patch: ExpenseCategoryPatch = {};
@@ -261,6 +281,8 @@ function buildRoutes({ db, cashierId, printer = new PrinterService() }: ApiConfi
       if (noteRequired !== undefined) patch.noteRequired = noteRequired;
       const isActive = optBool(body.isActive, 'isActive');
       if (isActive !== undefined) patch.isActive = isActive;
+      const department = optDepartment(body.department, 'department', { nullable: true });
+      if (department !== undefined) patch.department = department;
       const move = optOneOf(body.move, 'move', ['up', 'down'] as const);
       if (move !== undefined) patch.move = move;
       return ok(await expenseCategories.updateCategory(id(params.categoryId, 'categoryId'), patch));
@@ -301,6 +323,7 @@ function buildRoutes({ db, cashierId, printer = new PrinterService() }: ApiConfi
     }),
 
     // ── Inventory catalog ──
+    route('GET', '/api/departments', async () => ok(await catalog.listDepartments())),
     route('GET', '/api/catalog', async ({ query }) =>
       ok(await catalog.listCatalog({ q: query.get('q') ?? '', includeInactive: query.get('includeInactive') === 'true' })),
     ),
@@ -310,6 +333,7 @@ function buildRoutes({ db, cashierId, printer = new PrinterService() }: ApiConfi
         await catalog.createProduct({
           name: str(body.name, 'name'),
           category: oneOf(body.category, 'category', PRODUCT_CATEGORIES),
+          department: optDepartment(body.department, 'department') ?? 'LIQUOR',
           codePrefix: str(body.codePrefix, 'codePrefix'),
           skus: body.skus.map((s: unknown, i) => newSku(s, `skus[${i}]`)),
         }),
@@ -320,6 +344,7 @@ function buildRoutes({ db, cashierId, printer = new PrinterService() }: ApiConfi
         await catalog.updateProduct(id(params.productId, 'productId'), {
           name: body.name === undefined ? undefined : str(body.name, 'name'),
           category: optOneOf(body.category, 'category', PRODUCT_CATEGORIES),
+          department: optDepartment(body.department, 'department') ?? undefined,
           isActive: optBool(body.isActive, 'isActive'),
         }),
       ),

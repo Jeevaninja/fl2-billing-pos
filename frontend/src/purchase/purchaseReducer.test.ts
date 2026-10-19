@@ -29,6 +29,8 @@ function sku(over: Partial<SkuLookup> = {}): SkuLookup {
     caseSize: 12,
     onHandQty: 48,
     isActive: true,
+    department: 'LIQUOR',
+    tracksStock: true,
     ...over,
   }
 }

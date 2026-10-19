@@ -134,6 +134,8 @@ describe('CounterQueries', () => {
         caseSize: 12,
         onHandQty: OPENING_QTY - 2,
         isActive: true,
+        department: 'LIQUOR',
+        tracksStock: true,
       });
       expect((await queries.lookupSku('hlag-330'))?.id).toBe(fx.sku.beer330);
     });

@@ -1,12 +1,23 @@
 import { describe, expect, it } from 'vitest'
 import type { ExpenseCategory } from '../api/types'
-import { categoryFormError, categoryPatch, cleanName, formFor, NEW_CATEGORY, quickKeyFor, visibleCategories } from './expenseCategoryForm'
+import {
+  categoryFormError,
+  categoryPatch,
+  cleanName,
+  departmentLabel,
+  departmentMoveNote,
+  formFor,
+  NEW_CATEGORY,
+  quickKeyFor,
+  visibleCategories,
+} from './expenseCategoryForm'
 
 const cat = (id: string, name: string, sortOrder: number, over: Partial<ExpenseCategory> = {}): ExpenseCategory => ({
   id,
   name,
   isActive: true,
   noteRequired: false,
+  department: null,
   sortOrder,
   legacyCode: null,
   usedCount: 0,
@@ -50,5 +61,20 @@ describe('visibleCategories and quick keys', () => {
     expect(quickKeyFor(LIST, 'ice')).toBe('1')
     expect(quickKeyFor(LIST, 'other')).toBe('2') // the disabled Soda in between takes no key
     expect(quickKeyFor(LIST, 'soda')).toBeNull()
+  })
+})
+
+describe('departments (Phase 19)', () => {
+  it('patch a department change (null = Shared) and warn when used expenses move with it', () => {
+    const ice = cat('ice', 'Ice', 1, { department: 'LIQUOR', usedCount: 4 })
+    expect(formFor(ice).department).toBe('LIQUOR')
+    expect(NEW_CATEGORY.department).toBeNull()
+    expect(categoryPatch(ice, { ...formFor(ice), department: null })).toEqual({ department: null })
+    expect(categoryPatch(ice, formFor(ice))).toEqual({})
+    expect(departmentMoveNote(ice, { ...formFor(ice), department: 'KITCHEN' })).toBe('Moves its 4 past expenses from Liquor to Kitchen.')
+    expect(departmentMoveNote(ice, { ...formFor(ice), department: null })).toBe('Moves its 4 past expenses from Liquor to Shared.')
+    expect(departmentMoveNote({ ...ice, usedCount: 0 }, { ...formFor(ice), department: null })).toBeNull()
+    expect(departmentMoveNote(undefined, NEW_CATEGORY)).toBeNull()
+    expect(departmentLabel('ANCILLARY')).toBe('Ancillary')
   })
 })

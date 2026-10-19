@@ -17,7 +17,10 @@ export function line(over: Partial<BillDetailItem> & Pick<BillDetailItem, 'skuId
     lineTotalPaise: BigInt(quantity) * unitPricePaise,
     reversesItemId: null,
     restock: true,
+    department: 'LIQUOR',
     remainingQuantity: quantity > 0 ? quantity : 0,
+    kotStation: 'BAR',
+    kotSentQuantity: 0,
     ...over,
   }
 }

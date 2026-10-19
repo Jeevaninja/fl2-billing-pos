@@ -5,7 +5,7 @@
 import type { SqlClient } from '../db/client.js';
 import { NotFoundError } from '../db/errors.js';
 import { type DbInt, type Paise, toPaise, toPaiseOrNull } from '../domain/money.js';
-import type { Bill, BillItem, BillPayment, PeakSession, SizeCode } from '../domain/types.js';
+import type { Bill, BillItem, BillPayment, DepartmentCode, KotStation, PeakSession, SizeCode } from '../domain/types.js';
 import {
   type BillItemRow,
   type BillPaymentRow,
@@ -89,11 +89,19 @@ export interface SkuLookup {
   caseSize: number;
   onHandQty: number;
   isActive: boolean;
+  /** The product's department (0013). */
+  department: DepartmentCode;
+  /** false for Kitchen items: no stock is counted and none is needed to sell them. */
+  tracksStock: boolean;
 }
 
 export interface BillDetailItem extends BillItem {
   /** Bottles still sold on a positive line after cancellations and reversals; 0 for negative lines. */
   remainingQuantity: number;
+  /** Where the line's KOT prints (its department's station). */
+  kotStation: KotStation;
+  /** Net quantity already sent to that station on KOTs (0 for negative lines). */
+  kotSentQuantity: number;
 }
 
 export interface BillDetail {
@@ -201,7 +209,13 @@ export interface SkuLookupRow {
   case_size: number;
   on_hand_qty: number;
   is_active: boolean;
+  department: DepartmentCode;
+  tracks_stock: boolean;
 }
+
+/** SkuLookupRow columns over `skus k JOIN products p JOIN departments d LEFT JOIN sku_stock s`. */
+export const SKU_COLUMNS = `k.id, k.sku_code, k.barcode, k.display_name, k.size_code, k.price_paise, k.purchase_price_paise, k.case_size,
+       k.is_active, coalesce(s.on_hand_qty, 0) AS on_hand_qty, p.department, d.tracks_stock`;
 
 export function mapSkuLookup(row: SkuLookupRow): SkuLookup {
   return {
@@ -215,6 +229,8 @@ export function mapSkuLookup(row: SkuLookupRow): SkuLookup {
     caseSize: row.case_size,
     onHandQty: row.on_hand_qty,
     isActive: row.is_active,
+    department: row.department,
+    tracksStock: row.tracks_stock,
   };
 }
 
@@ -338,9 +354,10 @@ export class CounterQueries {
     if (text === '') return null;
     const row = await maybeOne<SkuLookupRow>(
       this.db,
-      `SELECT k.id, k.sku_code, k.barcode, k.display_name, k.size_code, k.price_paise, k.purchase_price_paise, k.case_size, k.is_active,
-              coalesce(s.on_hand_qty, 0) AS on_hand_qty
+      `SELECT ${SKU_COLUMNS}
          FROM skus k
+         JOIN products p ON p.id = k.product_id
+         JOIN departments d ON d.code = p.department
          LEFT JOIN sku_stock s ON s.sku_id = k.id
         WHERE k.barcode = $1 OR upper(k.sku_code) = upper($1)
         ORDER BY (k.barcode = $1) IS TRUE DESC
@@ -358,14 +375,14 @@ export class CounterQueries {
     const text = query.trim();
     if (text === '') return [];
     const { rows } = await this.db.query<SkuLookupRow>(
-      `SELECT k.id, k.sku_code, k.barcode, k.display_name, k.size_code, k.price_paise, k.purchase_price_paise, k.case_size, k.is_active,
-              coalesce(s.on_hand_qty, 0) AS on_hand_qty
+      `SELECT ${SKU_COLUMNS}
          FROM skus k
          JOIN products p ON p.id = k.product_id
+         JOIN departments d ON d.code = p.department
          LEFT JOIN sku_stock s ON s.sku_id = k.id
         WHERE k.barcode = $2 OR k.sku_code ILIKE $1 || '%' OR k.display_name ILIKE '%' || $1 || '%'
         ORDER BY (k.barcode = $2) IS TRUE DESC, k.is_active DESC, lower(p.name),
-                 array_position(ARRAY['FULL', 'HALF', 'QUARTER', 'BEER_650', 'BEER_330'], k.size_code),
+                 array_position(ARRAY['FULL', 'HALF', 'QUARTER', 'BEER_650', 'BEER_330', 'UNIT'], k.size_code),
                  k.sku_code
         LIMIT $3`,
       [likeLiteral(text), text, limit],
@@ -513,12 +530,15 @@ export class CounterQueries {
 
   async getBillDetail(billId: string): Promise<BillDetail> {
     const bill = await getBill(this.db, billId);
-    const { rows: itemRows } = await this.db.query<BillItemRow & { remaining_qty: number }>(
+    const { rows: itemRows } = await this.db.query<BillItemRow & { remaining_qty: number; kot_station: KotStation; kot_sent: number }>(
       `SELECT i.*,
               CASE WHEN i.qty > 0
                    THEN (i.qty + coalesce((SELECT sum(c.qty) FROM bill_items c WHERE c.reverses_item_id = i.id), 0))::int
-                   ELSE 0 END AS remaining_qty
+                   ELSE 0 END AS remaining_qty,
+              d.kot_station,
+              coalesce((SELECT sum(k.qty) FROM kot_ticket_lines k WHERE k.bill_item_id = i.id), 0)::int AS kot_sent
          FROM bill_items i
+         JOIN departments d ON d.code = i.department
         WHERE i.bill_id = $1
         ORDER BY i.line_no`,
       [billId],
@@ -542,7 +562,7 @@ export class CounterQueries {
     const tenderedPaise = payments.reduce((sum, p) => sum + p.amountPaise, 0n);
     return {
       bill,
-      items: itemRows.map((r) => ({ ...mapBillItem(r), remainingQuantity: r.remaining_qty })),
+      items: itemRows.map((r) => ({ ...mapBillItem(r), remainingQuantity: r.remaining_qty, kotStation: r.kot_station, kotSentQuantity: r.kot_sent })),
       payments,
       member: member ? { id: member.id, membershipNo: member.membership_no, displayName: member.display_name } : null,
       waiter: waiter ? mapWaiter(waiter) : null,

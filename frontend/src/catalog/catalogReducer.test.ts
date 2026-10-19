@@ -17,6 +17,8 @@ import {
   type EditProductForm,
   type EditSkuForm,
   type NewProductForm,
+  departmentForCategory,
+  sizesFor,
 } from './catalogReducer'
 
 const run = (state: CatalogState, ...actions: CatalogAction[]) => actions.reduce(catalogReducer, state)
@@ -34,6 +36,8 @@ function sku(over: Partial<CatalogSku> = {}): CatalogSku {
     caseSize: 12,
     onHandQty: 48,
     isActive: true,
+    department: 'LIQUOR',
+    tracksStock: true,
     ...over,
   }
 }
@@ -42,6 +46,7 @@ const WHISKY: CatalogProduct = {
   id: 'p-hw',
   name: 'House Whisky',
   category: 'WHISKY',
+  department: 'LIQUOR',
   isActive: true,
   skus: [sku(), sku({ id: 'sku-q', skuCode: 'HWHS-Q', barcode: null, displayName: 'House Whisky — Quarter', sizeCode: 'QUARTER', pricePaise: 500_00n, purchasePricePaise: null, caseSize: 64 })],
 }
@@ -49,6 +54,7 @@ const LAGER: CatalogProduct = {
   id: 'p-lg',
   name: 'House Lager',
   category: 'BEER',
+  department: 'LIQUOR',
   isActive: true,
   skus: [sku({ id: 'sku-650', productId: 'p-lg', skuCode: 'HLAG-650', barcode: null, displayName: 'House Lager — 650', sizeCode: 'BEER_650', caseSize: 12 })],
 }
@@ -132,7 +138,7 @@ describe('new liquor', () => {
 
   it('validates and builds the payload in paise, only for ticked sizes', () => {
     let state = run(ready, { type: 'openNew' })
-    expect(formError(state.form!)).toBe('Enter the liquor name')
+    expect(formError(state.form!)).toBe('Enter the item name')
     state = run(state, { type: 'field', field: 'name', value: '  Royal   Stag ' })
     expect(formError(state.form!)).toBe('Tick at least one size')
     state = run(state, { type: 'field', field: 'sale', size: 'QUARTER', value: '260' })
@@ -153,6 +159,7 @@ describe('new liquor', () => {
     expect(newProductPayload(newForm(state))).toEqual({
       name: 'Royal Stag',
       category: 'WHISKY',
+      department: 'LIQUOR',
       codePrefix: 'ROST',
       skus: [
         { sizeCode: 'FULL', salePrice: 1_000_00n, purchasePrice: null, caseSize: 12, barcode: null },
@@ -172,6 +179,54 @@ describe('new liquor', () => {
   })
 })
 
+describe('departments (Phase 19)', () => {
+  it('the category pre-selects the department until the operator picks one; Kitchen needs no case size', () => {
+    const base = run(ready, { type: 'openNew' }, { type: 'field', field: 'name', value: 'Chicken 65' })
+    expect(newForm(base).department).toBe('LIQUOR')
+    const food = run(base, { type: 'field', field: 'category', value: 'FOOD' })
+    expect(newForm(food).department).toBe('KITCHEN')
+    expect(newForm(run(food, { type: 'field', field: 'category', value: 'BEVERAGE' })).department).toBe('ANCILLARY')
+    expect(newForm(run(food, { type: 'field', field: 'category', value: 'TOBACCO' })).department).toBe('ANCILLARY')
+
+    // A Kitchen dish: plates tick with case size 1, and a typed case size is ignored.
+    const plates = run(
+      food,
+      { type: 'field', field: 'sizeOn', size: 'HALF', value: true },
+      { type: 'field', field: 'sale', size: 'HALF', value: '180' },
+      { type: 'field', field: 'sale', size: 'UNIT', value: '120' },
+      { type: 'field', field: 'caseSize', size: 'UNIT', value: '' },
+    )
+    expect(newForm(plates).sizes.HALF.caseSize).toBe('1')
+    expect(newProductPayload(newForm(plates))).toEqual({
+      name: 'Chicken 65',
+      category: 'FOOD',
+      department: 'KITCHEN',
+      codePrefix: 'CH65',
+      skus: [
+        { sizeCode: 'HALF', salePrice: 180_00n, purchasePrice: null, caseSize: 1, barcode: null },
+        { sizeCode: 'UNIT', salePrice: 120_00n, purchasePrice: null, caseSize: 1, barcode: null },
+      ],
+    })
+
+    // Once picked, the department no longer follows the category.
+    const picked = run(base, { type: 'field', field: 'department', value: 'ANCILLARY' }, { type: 'field', field: 'category', value: 'FOOD' })
+    expect(newForm(picked).department).toBe('ANCILLARY')
+    expect(departmentForCategory('RUM')).toBe('LIQUOR')
+
+    // A ticked bottle size is dropped once the item is a Kitchen dish (plates and single size only).
+    const switched = run(base, { type: 'field', field: 'sale', size: 'QUARTER', value: '300' }, { type: 'field', field: 'sale', size: 'UNIT', value: '90' }, { type: 'field', field: 'category', value: 'FOOD' })
+    expect(newProductPayload(newForm(switched))?.skus.map((k) => k.sizeCode)).toEqual(['UNIT'])
+    expect(sizesFor('KITCHEN')).toEqual(['FULL', 'HALF', 'UNIT'])
+  })
+
+  it('an item patch carries a department change', () => {
+    const state = run(ready, { type: 'openEditProduct', product: WHISKY }, { type: 'field', field: 'department', value: 'ANCILLARY' })
+    expect(productPatch(state.form as EditProductForm)).toEqual({ department: 'ANCILLARY' })
+    const back = run(state, { type: 'field', field: 'department', value: 'LIQUOR' })
+    expect(productPatch(back.form as EditProductForm)).toEqual({})
+  })
+})
+
 describe('editing', () => {
   it('a liquor patch carries only what changed, and flags deactivation', () => {
     const state = run(ready, { type: 'openEditProduct', product: WHISKY })
@@ -180,7 +235,7 @@ describe('editing', () => {
     const renamed = run(state, { type: 'field', field: 'name', value: ' Royal  Whisky ' }, { type: 'field', field: 'isActive', value: false })
     expect(productPatch(renamed.form as EditProductForm)).toEqual({ name: 'Royal Whisky', isActive: false })
     expect(deactivates(renamed.form!)).toBe(true)
-    expect(formError(run(state, { type: 'field', field: 'name', value: ' ' }).form!)).toBe('Enter the liquor name')
+    expect(formError(run(state, { type: 'field', field: 'name', value: ' ' }).form!)).toBe('Enter the item name')
   })
 
   it('a size patch carries only what changed; empty purchase price and barcode clear them', () => {

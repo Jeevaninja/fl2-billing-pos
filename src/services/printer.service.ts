@@ -3,20 +3,24 @@
  * written to a sink (console.log by default). The real ESC/POS network printer replaces the sink
  * with a TCP socket to the printer (port 9100) and adds the ESC/POS framing (init, cut).
  *
- * KOTs carry quantities, not prices: they tell the counter what to hand over.
+ * KOTs carry quantities, not prices: they tell the bar or the kitchen what to hand over. Phase 19
+ * routes each line by its department: liquor and ancillary to the BAR, kitchen to the KITCHEN.
  */
-import type { SizeCode } from '../domain/types.js';
+import type { KotStation, SizeCode } from '../domain/types.js';
 
-/** Where a ticket prints. Every category is liquor, and liquor routes to the counter printer. */
-export type KotStation = 'COUNTER';
+export type { KotStation } from '../domain/types.js';
 
 export interface KotTicket {
   /** The bill number doubles as the KOT number. */
   kotNo: number;
+  /** 1 for the bill's first ticket at this station; later sends print as `#12/2`. */
+  ticketNo: number;
   billId: string;
   station: KotStation;
-  waiter: { code: string; displayName: string };
+  /** null on a counter bill without a waiter. */
+  waiter: { code: string; displayName: string } | null;
   member: { membershipNo: string; displayName: string } | null;
+  /** A negative quantity cancels what an earlier ticket sent. */
   lines: Array<{ skuCode: string; displayName: string; sizeCode: SizeCode; quantity: number }>;
   createdAt: Date;
 }
@@ -39,7 +43,7 @@ export interface KotFormat {
   timeZone?: string;
 }
 
-const SIZE_LABEL: Record<SizeCode, string> = { FULL: 'FULL', HALF: 'HALF', QUARTER: 'QTR', BEER_650: '650ML', BEER_330: '330ML' };
+const SIZE_LABEL: Record<SizeCode, string> = { FULL: 'FULL', HALF: 'HALF', QUARTER: 'QTR', BEER_650: '650ML', BEER_330: '330ML', UNIT: '' };
 
 function fit(text: string, width: number): string {
   return text.length <= width ? text.padEnd(width) : `${text.slice(0, width - 1)}.`; // ASCII: printer code pages
@@ -65,24 +69,28 @@ export function formatKot(ticket: KotTicket, { width = 48, timeZone = 'Asia/Kolk
   const qtyWidth = 4;
   const sizeWidth = 6;
   const nameWidth = width - qtyWidth - sizeWidth - 2;
-  const bottles = ticket.lines.reduce((n, l) => n + l.quantity, 0);
+  const sent = ticket.lines.reduce((n, l) => n + Math.max(l.quantity, 0), 0);
+  const cancelled = ticket.lines.reduce((n, l) => n + Math.max(-l.quantity, 0), 0);
+  const unit = ticket.station === 'BAR' ? 'Bottles' : 'Items';
 
-  const header = `KOT #${ticket.kotNo} - ${ticket.station}`;
+  const header = `KOT #${ticket.kotNo}${ticket.ticketNo > 1 ? `/${ticket.ticketNo}` : ''} - ${ticket.station}`;
   const meta = `Bill #${ticket.kotNo}`;
   return [
     rule('='),
     center(header, width),
+    ...(sent === 0 ? [center('*** CANCEL ***', width)] : []),
     rule('='),
     `${meta}${when.padStart(width - meta.length)}`,
-    fit(asciiText(`Waiter: ${ticket.waiter.code} ${ticket.waiter.displayName}`), width),
+    fit(asciiText(ticket.waiter ? `Waiter: ${ticket.waiter.code} ${ticket.waiter.displayName}` : 'Counter'), width),
     ...(ticket.member ? [fit(asciiText(`Member: ${ticket.member.membershipNo} ${ticket.member.displayName}`), width)] : []),
     rule('-'),
     `${'QTY'.padStart(qtyWidth - 1)}  ${fit('ITEM', nameWidth)}${'SIZE'.padStart(sizeWidth)}`,
-    ...ticket.lines.map(
-      (l) => `${String(l.quantity).padStart(qtyWidth - 1)}  ${fit(asciiText(l.displayName), nameWidth)}${SIZE_LABEL[l.sizeCode].padStart(sizeWidth)}`,
-    ),
+    ...ticket.lines.map((l) => {
+      const name = asciiText(l.quantity < 0 ? `CANCEL ${l.displayName}` : l.displayName);
+      return `${String(Math.abs(l.quantity)).padStart(qtyWidth - 1)}  ${fit(name, nameWidth)}${SIZE_LABEL[l.sizeCode].padStart(sizeWidth)}`;
+    }),
     rule('-'),
-    `Lines: ${ticket.lines.length}   Bottles: ${bottles}`,
+    `Lines: ${ticket.lines.length}   ${unit}: ${sent}${cancelled > 0 ? `   Cancelled: ${cancelled}` : ''}`,
     rule('='),
   ]
     .map((line) => line.trimEnd())
@@ -157,7 +165,7 @@ export function formatReceipt(ticket: ReceiptTicket, { width = 48, timeZone = 'A
   const amountWidth = 13;
   const qtyWidth = 4;
   const nameWidth = width - (qtyWidth - 1) - 2 - amountWidth;
-  const bottles = ticket.lines.reduce((n, l) => n + l.quantity, 0);
+  const items = ticket.lines.reduce((n, l) => n + l.quantity, 0);
   const meta = `Bill #${ticket.billNo}`;
   const when = stamp(ticket.createdAt);
 
@@ -177,7 +185,8 @@ export function formatReceipt(ticket: ReceiptTicket, { width = 48, timeZone = 'A
       ...(l.quantity > 1 ? [`${' '.repeat(qtyWidth + 1)}@ ${receiptMoney(l.unitPricePaise)}`] : []),
     ]),
     rule('-'),
-    pair(`TOTAL  (${bottles} btl)`, receiptMoney(ticket.totalPaise)),
+    // One unified bill: liquor, kitchen and ancillary lines together.
+    pair(`TOTAL  (${items} item${items === 1 ? '' : 's'})`, receiptMoney(ticket.totalPaise)),
     ...ticket.payments.map((p) => pair(`  ${TENDER_LABEL[p.tender]}`, receiptMoney(p.amountPaise))),
     ...(ticket.duePaise > 0n ? [pair('  DUE', receiptMoney(ticket.duePaise))] : []),
     ...(ticket.note ? [rule('-'), fit(asciiText(ticket.note), width)] : []),
@@ -189,20 +198,25 @@ export function formatReceipt(ticket: ReceiptTicket, { width = 48, timeZone = 'A
     .join('\n');
 }
 
-/** Stub ESC/POS printer: formats the ticket and writes it to `sink`. */
+/**
+ * Stub ESC/POS printer: formats the ticket and writes it to `sink`. `stationSinks` sends a station's
+ * KOTs elsewhere (one printer at the bar, one in the kitchen); receipts always go to `sink`.
+ */
 export class PrinterService implements KotPrinter, ReceiptPrinter {
   private readonly sink: (text: string) => void;
+  private readonly stationSinks: Partial<Record<KotStation, (text: string) => void>>;
   private readonly format: KotFormat;
 
-  constructor(options: { sink?: (text: string) => void } & KotFormat = {}) {
-    const { sink = (text: string) => console.log(text), ...format } = options;
+  constructor(options: { sink?: (text: string) => void; stationSinks?: Partial<Record<KotStation, (text: string) => void>> } & KotFormat = {}) {
+    const { sink = (text: string) => console.log(text), stationSinks = {}, ...format } = options;
     this.sink = sink;
+    this.stationSinks = stationSinks;
     this.format = format;
   }
 
   async printKOT(ticket: KotTicket): Promise<KotPrintResult> {
     const text = formatKot(ticket, this.format);
-    this.sink(text);
+    (this.stationSinks[ticket.station] ?? this.sink)(text);
     return { station: ticket.station, printedAt: new Date(), text };
   }
 

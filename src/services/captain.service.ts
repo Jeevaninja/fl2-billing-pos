@@ -1,6 +1,7 @@
 /**
  * Captain (waiter) app flows: the waiter's profile, their open bills, and placing an order — a new
- * WAITER_APP bill tagged to the waiter, its lines, and a KOT routed to the counter printer.
+ * WAITER_APP bill tagged to the waiter, its lines, and KOTs split by station (Phase 19): liquor and
+ * ancillary lines to the BAR printer, kitchen lines to the KITCHEN printer.
  *
  * Orders are idempotent (migration 0004): each carries a client-generated requestId. A retry with
  * the same key and the same order replays the original bill; the same key with a different order
@@ -13,7 +14,8 @@ import { assertQuantity, type DbInt, type Paise, toPaise, toPaiseOrNull } from '
 import type { Bill, BillItem } from '../domain/types.js';
 import { insertSaleLine } from './billing.service.js';
 import { type BillDetail, CounterQueries, type MemberSummary, type WaiterSummary } from './counter-queries.js';
-import type { KotPrinter, KotStation, KotTicket } from './printer.service.js';
+import { KotService, type KotStatus } from './kot.service.js';
+import type { KotPrinter } from './printer.service.js';
 import { type BillItemRow, type BillRow, mapBill, mapBillItem, maybeOne, one } from './rows.js';
 
 export interface WaiterProfile extends WaiterSummary {
@@ -27,13 +29,7 @@ export interface OrderLine {
   quantity: number;
 }
 
-export interface KotStatus {
-  station: KotStation;
-  printed: boolean;
-  printedAt: Date | null;
-  /** Why printing failed; the order itself is already saved. */
-  error: string | null;
-}
+export type { KotStatus } from './kot.service.js';
 
 export interface OrderRequest {
   /** Client-generated UUID, reused on every retry of the same order. */
@@ -51,7 +47,9 @@ export interface PlacedOrder {
   items: BillItem[];
   waiter: WaiterSummary;
   member: MemberSummary | null;
-  /** Print outcome; null on a replay, which never reprints. */
+  /** One print outcome per station that had lines; empty on a replay, which never reprints. */
+  kots: KotStatus[];
+  /** Kept for older handsets: the BAR ticket, else the KITCHEN one; null on a replay. */
   kot: KotStatus | null;
   /** True when this request repeated an order that already exists. */
   replayed: boolean;
@@ -111,12 +109,14 @@ function mapProfile(r: WaiterRow): WaiterProfile {
 
 export class CaptainService {
   private readonly queries: CounterQueries;
+  private readonly kots: KotService;
 
   constructor(
     private readonly db: SqlDatabase,
-    private readonly printer: KotPrinter,
+    printer: KotPrinter,
   ) {
     this.queries = new CounterQueries(db);
+    this.kots = new KotService(db, printer);
   }
 
   async getWaiterProfile(waiterId: string): Promise<WaiterProfile> {
@@ -158,7 +158,7 @@ export class CaptainService {
     const earlier = await this.findOrder(this.db, requestId, fingerprint, lines.length);
     if (earlier) return earlier;
 
-    let order: Omit<PlacedOrder, 'kot' | 'replayed'>;
+    let order: Omit<PlacedOrder, 'kot' | 'kots' | 'replayed'>;
     try {
       order = await withPosErrors(() =>
         this.db.transaction(async (tx) => {
@@ -211,23 +211,8 @@ export class CaptainService {
       throw err;
     }
 
-    const ticket: KotTicket = {
-      kotNo: order.bill.billNo,
-      billId: order.bill.id,
-      station: 'COUNTER',
-      waiter: { code: order.waiter.code, displayName: order.waiter.displayName },
-      member: order.member && { membershipNo: order.member.membershipNo, displayName: order.member.displayName },
-      lines: order.items.map((i) => ({ skuCode: i.skuCode, displayName: i.displayName, sizeCode: i.sizeCode, quantity: i.quantity })),
-      createdAt: order.bill.createdAt,
-    };
-    let kot: KotStatus;
-    try {
-      const printed = await this.printer.printKOT(ticket);
-      kot = { station: printed.station, printed: true, printedAt: printed.printedAt, error: null };
-    } catch (err) {
-      kot = { station: ticket.station, printed: false, printedAt: null, error: err instanceof Error ? err.message : String(err) };
-    }
-    return { ...order, kot, replayed: false };
+    const kots = await this.kots.sendPending(order.bill.id, { deviceId }, { stations: ['BAR', 'KITCHEN'] });
+    return { ...order, kots, kot: kots.find((k) => k.station === 'BAR') ?? kots[0] ?? null, replayed: false };
   }
 
   /** The order already saved under `requestId`, as a replay; null if the key is unused. */
@@ -254,6 +239,7 @@ export class CaptainService {
       items: itemRows.map(mapBillItem),
       waiter: waiterSummary(waiter),
       member: member && { id: member.id, membershipNo: member.membership_no, displayName: member.display_name },
+      kots: [],
       kot: null,
       replayed: true,
     };

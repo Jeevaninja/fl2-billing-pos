@@ -328,6 +328,12 @@ describe('local HTTP API', () => {
       peak: { salesPaise: '0', cashPaise: '0', upiPaise: '0', sessionCount: 0, runningSessionNo: null },
       waiterRepayments: { cashPaise: '0', upiPaise: '0' },
       total: { cashPaise: '0', upiPaise: String(PRICE.half), creditPaise: '0', salesPaise: String(PRICE.half) },
+      byDepartment: [
+        { code: 'LIQUOR', name: 'Liquor', salesPaise: String(PRICE.half) },
+        { code: 'KITCHEN', name: 'Kitchen', salesPaise: '0' },
+        { code: 'ANCILLARY', name: 'Ancillary', salesPaise: '0' },
+      ],
+      unallocatedPaise: '0',
     });
 
     await call('POST', `/api/days/${fx.dayId}/close`, { countedCash: '0' });
@@ -386,6 +392,67 @@ describe('local HTTP API', () => {
       status: 409,
       body: { error: { code: 'PS002' } },
     });
+  });
+
+  it('Phase 19: departments on the catalog and expense categories, Kitchen KOTs on F6, settle, cancel and peak scans', async () => {
+    const tickets: Array<{ station: string; ticketNo: number; lines: Array<{ skuCode: string; quantity: number }> }> = [];
+    const { fx, call } = await start({
+      kotPrinter: {
+        printKOT: async (t) => {
+          tickets.push(t);
+          return { station: t.station, printedAt: new Date(), text: '' };
+        },
+      },
+    });
+    expect((await call('GET', '/api/departments')).body.map((d: { code: string; kotStation: string }) => [d.code, d.kotStation])).toEqual([
+      ['LIQUOR', 'BAR'],
+      ['KITCHEN', 'KITCHEN'],
+      ['ANCILLARY', 'BAR'],
+    ]);
+
+    const dish = await call('POST', '/api/catalog/products', {
+      name: 'Paneer Tikka',
+      category: 'FOOD',
+      department: 'KITCHEN',
+      codePrefix: 'PTKA',
+      skus: [{ sizeCode: 'UNIT', salePrice: '26000', caseSize: 1 }],
+    });
+    expect(dish).toMatchObject({ status: 201, body: { department: 'KITCHEN', skus: [{ skuCode: 'PTKA-U', displayName: 'Paneer Tikka', tracksStock: false }] } });
+    expect(await call('POST', '/api/catalog/products', { name: 'X', category: 'FOOD', department: 'BAR', codePrefix: 'XX', skus: [] })).toMatchObject({ status: 400 });
+    const dishSku = dish.body.skus[0].id;
+
+    // Counter bill: rum + 2 dishes. F6 sends the dishes only; settle sends nothing more.
+    const bill = (await call('POST', '/api/bills', { mode: 'NORMAL' })).body;
+    await call('POST', `/api/bills/${bill.id}/items`, { skuId: fx.sku.full, quantity: 1 });
+    const line = (await call('POST', `/api/bills/${bill.id}/items`, { skuId: dishSku, quantity: 2 })).body;
+    expect(line.item.department).toBe('KITCHEN');
+    const sent = await call('POST', `/api/bills/${bill.id}/kot`, {});
+    expect(sent).toMatchObject({ status: 201, body: { kots: [{ station: 'KITCHEN', ticketNo: 1, printed: true, sentQuantity: 2 }] } });
+    const cancelled = await call('POST', `/api/bills/${bill.id}/items/${line.item.id}/cancel`, { quantity: 1 });
+    expect(cancelled.body.kots).toMatchObject([{ ticketNo: 2, cancelledQuantity: 1 }]);
+    const detail = (await call('GET', `/api/bills/${bill.id}`)).body;
+    expect(detail.items.find((i: { id: string }) => i.id === line.item.id)).toMatchObject({ kotStation: 'KITCHEN', kotSentQuantity: 1 });
+    const settled = await call('POST', `/api/bills/${bill.id}/settle`, { payments: [{ mode: 'CASH', amount: String(PRICE.full + 26000) }] });
+    expect(settled).toMatchObject({ status: 200, body: { bill: { status: 'SETTLED' }, kots: [] } });
+
+    // A peak scan of a dish prints straight away; undoing it cancels at the kitchen.
+    const session = (await call('POST', '/api/peak/sessions', { businessDayId: fx.dayId, declaredCash: '0', declaredUpi: '0' })).body;
+    const scan = await call('POST', '/api/peak/sales', { sessionId: session.id, skuId: dishSku, quantity: 1 });
+    expect(scan.body.kots).toMatchObject([{ station: 'KITCHEN', ticketNo: 1, sentQuantity: 1 }]);
+    const undo = await call('POST', '/api/peak/undo-last', {});
+    expect(undo.body.kots).toMatchObject([{ ticketNo: 2, cancelledQuantity: 1 }]);
+    expect(tickets.map((t) => [t.station, t.ticketNo, t.lines.map((l) => l.quantity)])).toEqual([
+      ['KITCHEN', 1, [2]],
+      ['KITCHEN', 2, [-1]],
+      ['KITCHEN', 1, [1]],
+      ['KITCHEN', 2, [-1]],
+    ]);
+
+    // Expense categories take a department; null = Shared.
+    const veg = await call('POST', '/api/expense-categories', { name: 'Vegetables', department: 'KITCHEN' });
+    expect(veg).toMatchObject({ status: 201, body: { department: 'KITCHEN' } });
+    expect(await call('PATCH', `/api/expense-categories/${veg.body.id}`, { department: null })).toMatchObject({ status: 200, body: { department: null } });
+    expect(await call('PATCH', `/api/expense-categories/${veg.body.id}`, { department: 'BAR' })).toMatchObject({ status: 400 });
   });
 
   it('searches members and returns 404 for unknown SKUs and bills', async () => {

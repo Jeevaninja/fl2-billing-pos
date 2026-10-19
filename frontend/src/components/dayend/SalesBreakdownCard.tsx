@@ -79,6 +79,18 @@ export function SalesBreakdownCard({ sales, adjustments, onAdjust, onVoid }: Sal
           </tr>
         </tbody>
       </table>
+      <div className="mt-3 border-t border-zinc-800 pt-2">
+        <h3 className="text-xs font-bold tracking-widest text-zinc-500 uppercase">By department</h3>
+        <dl className="mt-1 grid grid-cols-[1fr_auto] gap-x-4 font-mono text-sm tabular-nums">
+          {card.departments.map((d) => (
+            <div key={d.key} className={`contents ${d.key === 'total' ? 'text-base font-black' : d.key === 'open' ? 'text-amber-300' : ''}`}>
+              <dt className={`py-0.5 font-sans ${d.key === 'total' ? 'border-t border-zinc-700 font-bold' : 'text-zinc-300'}`}>{d.label}</dt>
+              <dd className={`py-0.5 text-right ${d.key === 'total' ? 'border-t border-zinc-700' : ''}`}>{formatPaise(d.amount)}</dd>
+            </div>
+          ))}
+        </dl>
+        <p className="mt-1 text-xs text-zinc-500">For the P&amp;L only — every department&rsquo;s cash goes to the one drawer and one Expected cash.</p>
+      </div>
       {adjustments.length > 0 && (
         <div className="mt-3 border-t border-zinc-800 pt-2">
           <h3 className="text-xs font-bold tracking-widest text-zinc-500 uppercase">Tally adjustments</h3>

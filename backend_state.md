@@ -1,10 +1,10 @@
 # FL2 POS — Backend State Reference
 
-Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`), Phase 10 master catalog and case-based inwarding (`0009_catalog_case_size`, `CatalogService`; plan `docs/ui/phase10-catalog-case-grn-plan.md`), Phase 11 peak start baseline and Day End sales breakdown (no migration; plan `docs/ui/phase11-peak-day-end-visibility-plan.md`), Phase 12 server-side peak undo (no migration; plan `docs/ui/phase12-billing-speed-plan.md`), Phase 13 Day End tally adjustments and running peak analytics (`0010_tender_adjustments`; plan `docs/ui/phase13-peak-close-tally-plan.md`), Phase 14 bank deposits / cash drops (`0011_bank_deposits`; plan `docs/ui/phase14-bank-deposits-plan.md`), Phase 15 held bills in `/api/context` and per-waiter day stats (no migration; plan `docs/ui/phase15-billing-tabs-waiter-sidebar-plan.md`), Phase 16 waiter ledger, multi-bill and lump-sum waiter settlement and the Day End waiter-balance blocker (no migration; plan `docs/ui/phase16-waiter-ledger-plan.md`), Phase 17 Orders (bill-wise tracking) and DUPLICATE receipt reprints (no migration; plan `docs/ui/phase17-orders-plan.md`), and Phase 18 custom expense categories (`0012_expense_categories`; plan `docs/ui/phase18-expense-categories-plan.md`). Upcoming phases, not built: `docs/roadmap.md`. Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
+Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`), Phase 10 master catalog and case-based inwarding (`0009_catalog_case_size`, `CatalogService`; plan `docs/ui/phase10-catalog-case-grn-plan.md`), Phase 11 peak start baseline and Day End sales breakdown (no migration; plan `docs/ui/phase11-peak-day-end-visibility-plan.md`), Phase 12 server-side peak undo (no migration; plan `docs/ui/phase12-billing-speed-plan.md`), Phase 13 Day End tally adjustments and running peak analytics (`0010_tender_adjustments`; plan `docs/ui/phase13-peak-close-tally-plan.md`), Phase 14 bank deposits / cash drops (`0011_bank_deposits`; plan `docs/ui/phase14-bank-deposits-plan.md`), Phase 15 held bills in `/api/context` and per-waiter day stats (no migration; plan `docs/ui/phase15-billing-tabs-waiter-sidebar-plan.md`), Phase 16 waiter ledger, multi-bill and lump-sum waiter settlement and the Day End waiter-balance blocker (no migration; plan `docs/ui/phase16-waiter-ledger-plan.md`), Phase 17 Orders (bill-wise tracking) and DUPLICATE receipt reprints (no migration; plan `docs/ui/phase17-orders-plan.md`), Phase 18 custom expense categories (`0012_expense_categories`; plan `docs/ui/phase18-expense-categories-plan.md`), and Phase 19 departments — unified billing, split ledger (`0013_departments`; plan `docs/ui/phase19-departments-plan.md`). Upcoming phases, not built: `docs/roadmap.md`. Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
 
-- **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`, `0006_expense_category`, `0007_peak_drawer_cash`, `0008_stock_receipts`, `0009_catalog_case_size`, `0010_tender_adjustments`, `0011_bank_deposits`, `0012_expense_categories`.
+- **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`, `0006_expense_category`, `0007_peak_drawer_cash`, `0008_stock_receipts`, `0009_catalog_case_size`, `0010_tender_adjustments`, `0011_bank_deposits`, `0012_expense_categories`, `0013_departments`.
 - **Money:** `BIGINT` whole paise in SQL, `bigint` in TypeScript (`type Paise = bigint`). No floats anywhere.
-- **Quantities:** `INTEGER` whole sealed bottles. No ml / peg columns.
+- **Quantities:** `INTEGER` whole sealed bottles (whole units for Ancillary items; Kitchen dishes are not stock-tracked). No ml / peg columns.
 - **Append-only:** DELETE and TRUNCATE are blocked on every domain table. Ledger tables also block UPDATE. Corrections are made with reversing records.
 
 ---
@@ -15,24 +15,27 @@ Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local 
 |---|---|---|
 | `staff` | Cashiers, managers, admins | — |
 | `members` | Member register (optional on bills, no KYC gate) | — |
-| `products` | Brand family (category: WHISKY, RUM, BEER…) | — |
-| `skus` | One row per sealed size: `FULL`, `HALF`, `QUARTER`, `BEER_650`, `BEER_330`. `price_paise` = default sale price; `case_size` (1–1000, required) and optional `purchase_price_paise` ≥ 0 (0009) | `product_id → products` |
+| `products` | An item: a liquor brand, a kitchen dish or an ancillary good (category: WHISKY, RUM, BEER… FOOD, BEVERAGE, TOBACCO). Phase 19 (0013): `department` (default `LIQUOR`; every size shares it) | `department → departments` |
+| `departments` | Phase 19 (0013). Fixed, read-only list (`code` PK): LIQUOR (BAR, stock-tracked), KITCHEN (KITCHEN station, **not** stock-tracked), ANCILLARY (BAR, stock-tracked). `kot_station`, `tracks_stock`, `sort_order`. UPDATE / DELETE / TRUNCATE → `PS001`; no outbox (seeded on every database) | — |
+| `skus` | One row per size: `FULL`, `HALF`, `QUARTER`, `BEER_650`, `BEER_330`, and `UNIT` (0013, a single-size item; Kitchen items use `FULL` / `HALF` plates or `UNIT`). `price_paise` = default sale price; `case_size` (1–1000, required) and optional `purchase_price_paise` ≥ 0 (0009) | `product_id → products` |
 | `sku_stock` | Cached on-hand bottles, `≥ 0` (trigger-maintained) | `sku_id → skus` (PK) |
 | `stock_movements` | Stock ledger: OPENING, PURCHASE_RECEIPT, SALE, SALE_REVERSAL, ADJUSTMENT. SALE / SALE_REVERSAL are posted only by `bill_items`, PURCHASE_RECEIPT only by `stock_receipt_lines` (0008) | `sku_id → skus`, `business_day_id → business_days`, `bill_item_id → bill_items` (unique), `receipt_line_id → stock_receipt_lines` (unique, set exactly on PURCHASE_RECEIPT rows; 0008) |
 | `stock_receipts` | GRN header: one supplier invoice received on the open day (append-only). `invoice_no` required, `vendor_name` optional; unique per (invoice no, vendor), case- and space-insensitive (0008) | `business_day_id → business_days` (stamped), `received_by_staff_id → staff` |
 | `stock_receipt_lines` | GRN lines: `qty` whole bottles > 0 of one SKU at `unit_cost_paise` ≥ 0 (₹0 = scheme / free); one line per SKU per receipt; append-only (0008). `cases` ≥ 0 and the `case_size` snapshot record how the line was counted (NULL / 0 = loose only); `cases × case_size ≤ qty` (0009) | `receipt_id → stock_receipts`, `sku_id → skus` |
 | `business_days` | Trading day; one OPEN at a time; bill-number counter; `opening_float_paise` (immutable); on close: `counted_cash_paise`, and trigger-computed `expected_cash_paise` / `cash_variance_paise` (0005) | `opened_by_staff_id`, `closed_by_staff_id → staff` |
 | `peak_sessions` | Peak windows (several per day, one running); start/end cash and UPI; frozen expected and variance | `business_day_id → business_days`, `started_by_staff_id`, `ended_by_staff_id → staff` |
-| `expense_categories` | Phase 18 (0012). Managed petty-cash categories: `name` (unique, case-insensitive), `is_active`, `note_required`, `sort_order` (Expense picker order), `legacy_code` (the 0006 code it stands for; immutable). Editable master data, no DELETE (disable instead), outbox on change. Seeds: Ice, Staff food, Transport, Cleaning, Repairs & Maintenance (`REPAIRS`), Bata / Daily Wages, Other (`OTHER`, note required) | — |
+| `expense_categories` | Phase 18 (0012). Phase 19 (0013): `department` (NULL = Shared overheads; seeded Ice = LIQUOR, the rest Shared) — expenses follow their category's department, as they follow its name. Managed petty-cash categories: `name` (unique, case-insensitive), `is_active`, `note_required`, `sort_order` (Expense picker order), `legacy_code` (the 0006 code it stands for; immutable). Editable master data, no DELETE (disable instead), outbox on change. Seeds: Ice, Staff food, Transport, Cleaning, Repairs & Maintenance (`REPAIRS`), Bata / Daily Wages, Other (`OTHER`, note required) | — |
 | `waiters` | `is_trusted`, `outstanding_balance` (paise, `≥ 0`, trigger-maintained), optional `credit_limit_paise` | — |
 | `waiter_payments` | Repayments against a waiter's account (append-only) | `waiter_id → waiters`, `business_day_id → business_days`, `peak_session_id → peak_sessions`, `reverses_waiter_payment_id → waiter_payments`, `received_by_staff_id → staff` |
 | `waiter_ledger_entries` | Waiter running account: BILL_CREDIT, BILL_CREDIT_REVERSAL, PAYMENT, PAYMENT_REVERSAL, MANUAL_ADJUSTMENT | `waiter_id → waiters`, `business_day_id → business_days`, `bill_payment_id → bill_payments`, `waiter_payment_id → waiter_payments`, `created_by_staff_id → staff` |
 | `bills` | `billing_mode` NORMAL / PEAK; `status` OPEN → SETTLED or PEAK_UNSETTLED → PEAK_RECONCILED; `bill_kind` SALE / REVERSAL; Captain orders carry `request_id` (unique idempotency key), `request_fingerprint` and `captain_device_id` (0004) | `business_day_id → business_days`, `peak_session_id → peak_sessions`, `waiter_id → waiters`, `member_id → members`, `reverses_bill_id → bills` (unique), `replaces_bill_id → bills` (unique), `created_by_staff_id`, `settled_by_staff_id → staff` |
-| `bill_items` | Lines with SKU / price snapshots; negative lines cancel or reverse | `bill_id → bills`, `sku_id → skus`, `reverses_item_id → bill_items`, `waiter_id → waiters`, `created_by_staff_id → staff` |
+| `bill_items` | Lines with SKU / price snapshots; negative lines cancel or reverse. Phase 19 (0013): `department` snapshot (from the product on a positive line, copied by cancellation / reversal lines; pre-0013 lines are LIQUOR); a line of an untracked department posts no stock movement | `bill_id → bills`, `sku_id → skus`, `reverses_item_id → bill_items`, `waiter_id → waiters`, `created_by_staff_id → staff` |
 | `bill_payments` | Tenders: CASH, UPI, WAITER_CREDIT; negative amounts are refunds | `bill_id → bills`, `business_day_id → business_days`, `peak_session_id → peak_sessions`, `reverses_payment_id → bill_payments` (unique), `received_by_staff_id → staff` |
 | `cash_expenses` | Petty-cash payments from the drawer (append-only; a negative row with `reverses_expense_id` voids one); tagged to the open day and running peak by trigger (0005). Phase 18 (0012): new rows carry `category_id → expense_categories` (active category, note when `note_required`); pre-0012 rows keep their legacy text `category` (ICE … OTHER) and are never back-filled — exactly one of the two is set (`cash_expenses_one_category`); a void copies the original's | `business_day_id → business_days`, `peak_session_id → peak_sessions`, `reverses_expense_id → cash_expenses` (unique), `created_by_staff_id → staff` |
 | `tender_adjustments` | Day-level Cash ⇄ UPI reclassification of normal-bill revenue (append-only; a negating row with `reverses_adjustment_id` voids one). `cash_delta_paise + upi_delta_paise = 0`; `system_cash_paise` / `system_upi_paise` are the normal-bill tenders when the row was written (trigger-set); `reason` required (0010) | `business_day_id → business_days`, `reverses_adjustment_id → tender_adjustments` (unique), `created_by_staff_id → staff` |
 | `bank_deposits` | Cash taken out of the drawer to be banked, e.g. RTGS (append-only; a negative row with `reverses_deposit_id` voids one). Not an expense, not revenue. `reference` optional (0011) | `business_day_id → business_days`, `reverses_deposit_id → bank_deposits` (unique), `created_by_staff_id → staff` |
+| `kot_tickets` | Phase 19 (0013). One printed KOT: `station` BAR / KITCHEN, `ticket_no` per bill and station (`#12`, `#12/2`), `printed_at`, sent by `created_by_staff_id` or `captain_device_id` (append-only, outbox) | `bill_id → bills`, `created_by_staff_id → staff` |
+| `kot_ticket_lines` | Phase 19 (0013). What a ticket carried per original bill line: `qty` (negative = CANCEL). Trigger: the line must be an original line of the ticket's bill, and its department must print at the ticket's station (`PS002`). Append-only, outbox | `ticket_id → kot_tickets`, `bill_item_id → bill_items` |
 | `sync_outbox` | Transactional outbox for cloud sync (written by trigger) | — |
 | `schema_migrations` | Applied migration versions | — |
 
@@ -72,6 +75,12 @@ UPI is excluded. A peak sale actually paid by UPI makes the drawer lower by that
 - GRN line trigger (extended): a supplied `case_size` must equal the SKU's current one, else `PS002` ("case size for X is now N — re-check the line"). `PurchaseService` also share-locks the SKUs, so a catalog edit can't land mid-receipt.
 - Loose bottles are not stored: `qty − cases × case_size`. `qty` stays the only number the ledger sees.
 - Duplicate product name (case-insensitive), SKU code, barcode or size per product → `PS012`.
+
+**Departments (0013):** design in `docs/ui/phase19-departments-plan.md`.
+- **One drawer:** bills, tenders, `pos_day_expected_cash`, the peak functions and the close trigger are untouched. Departments only label lines (and expense categories).
+- **Stock (D2):** `pos_sku_tracks_stock(sku)` reads the product's department. For Kitchen SKUs `bill_items` posts no SALE / SALE_REVERSAL movement, sales need no stock, and any direct movement (OPENING / ADJUSTMENT) or GRN line is refused (`PS002`). Moving a product with stock on hand into an untracked department is `PS002` (`products_department_guard`).
+- **Upgrade:** `products.department` and `bill_items.department` are added with `DEFAULT 'LIQUOR'` by DDL (every existing row was liquor), so no append-only row is updated and totals / expected cash are unchanged (tested from a 0012 database).
+- **KOT ledger:** `kot_tickets` / `kot_ticket_lines` record what each station was sent; `KotService` prints only the pending difference.
 
 **Captain orders (0004):**
 - `bills_request_id_unique` (partial unique index) is the idempotency guarantee.
@@ -289,11 +298,14 @@ interface SalesBreakdown {                    // ended peak sessions only; a run
   peak: { salesPaise; cashPaise; upiPaise; sessionCount; runningSessionNo: number | null };
   waiterRepayments: { cashPaise; upiPaise };                     // credit collected, not sales
   total: { cashPaise; upiPaise; creditPaise; salesPaise };
+  byDepartment: Array<{ code: DepartmentCode; name: string; salesPaise }>;   // Phase 19, info only: every department, display order
+  unallocatedPaise: Paise;                                               // counted tenders on bills not split yet (part-paid open, or settled in a running peak)
 }
 interface BankDeposit { id; businessDayId; amountPaise /* negative on a void */; reference: string | null; reversesDepositId: string | null; createdByStaffId; createdAt; }
 interface CashExpense { id; businessDayId; peakSessionId: string | null; amountPaise; reversesExpenseId: string | null; category: ExpenseCategory; description: string | null; createdByStaffId; createdAt; }
 ```
 
+- **Department split (Phase 19):** Σ `bill_items.line_total_paise` by the line's `department` over the bills the totals count — the day's SETTLED normal bills with no tender inside a still-running peak window, plus every bill of an ended peak session (reversals included, as negative lines). `unallocatedPaise` = counted tenders on every other bill of the day. Asserted: `Σ byDepartment + unallocated = total.salesPaise`; `closeBusinessDay` also asserts `unallocated = 0` (open bills and a running peak block the close). `CashBreakdown` and expected cash are untouched: one drawer.
 - **Sales breakdown (Phase 11), per ended peak session:** `peakUpi = upiDelta − in-window UPI` (UPI bill tenders and UPI waiter repayments taken during the peak, which moved the reading too); `peakCash = sales − peakUpi`. The variance therefore lands in peak cash. `getDayFigures` (shared with the peak baseline) asserts `peakCash = cashDelta − in-window cash tenders − in-window waiter cash + in-window expenses − variance` and `total.upi + waiterRepayments.upi = breakdown.upiTotalPaise`, throwing on drift. Normal-bill tenders taken inside a peak count under `normal` here but stay inside the peak's cash delta in `CashBreakdown`. A negative derived peak cash (UPI readings above sales) is reported, not clamped.
 - **`closeBusinessDay`:** locks the day row first, so a sale racing the close either commits before it (and is counted) or fails `PS007`. The database re-checks every blocker. The returned breakdown is checked against the frozen expected figure.
 - **`openBusinessDay`:** refuses a second open day and a date that has already traded (`PS007`). A business date trades once, so closing and reopening on the same calendar day is refused.
@@ -387,13 +399,19 @@ interface PeakSessionView extends PeakSession { runningExpectedPaise: Paise; exp
 interface SkuLookup {
   id: string; skuCode: string; barcode: string | null; displayName: string; sizeCode: SizeCode;
   pricePaise: Paise; purchasePricePaise: Paise | null; caseSize: number; onHandQty: number; isActive: boolean;
+  department: DepartmentCode; tracksStock: boolean;   // Phase 19: the product's department; false for Kitchen
 }
 interface MemberSummary { id: string; membershipNo: string; displayName: string; }
 interface WaiterSummary {
   id: string; code: string; displayName: string; isTrusted: boolean;
   outstandingPaise: Paise; creditLimitPaise: Paise | null;   // null = no limit
 }
-interface BillDetailItem extends BillItem { remainingQuantity: number; }  // 0 on negative lines
+interface BillDetailItem extends BillItem {
+  remainingQuantity: number;   // 0 on negative lines
+  kotStation: KotStation;      // Phase 19: where the line's KOT prints (its department's station)
+  kotSentQuantity: number;     // net quantity already on KOTs (kot_ticket_lines)
+}
+// BillItem.department: DepartmentCode — the snapshot (Phase 19).
 interface BillDetail {
   bill: Bill; items: BillDetailItem[];      // every line in line order, cancellations included
   payments: BillPayment[]; member: MemberSummary | null; waiter: WaiterSummary | null;
@@ -406,16 +424,17 @@ interface BillDetail {
 ```ts
 class ExpenseCategoryService {
   listCategories(opts?: { includeInactive?: boolean }): Promise<ExpenseCategory[]>;  // sort_order, then name
-  createCategory(input: { name: string; noteRequired?: boolean }): Promise<ExpenseCategory>;  // appended last; PS012 duplicate (any case)
-  updateCategory(id: string, patch: { name?; noteRequired?; isActive?; move?: 'up' | 'down' }): Promise<ExpenseCategory>;
+  createCategory(input: { name: string; noteRequired?: boolean; department?: DepartmentCode | null }): Promise<ExpenseCategory>;  // appended last; PS012 duplicate (any case)
+  updateCategory(id: string, patch: { name?; noteRequired?; isActive?; department?: DepartmentCode | null; move?: 'up' | 'down' }): Promise<ExpenseCategory>;
 }
-interface ExpenseCategory { id; name; isActive; noteRequired; sortOrder; legacyCode: string | null; usedCount: number }
+interface ExpenseCategory { id; name; isActive; noteRequired; sortOrder; department: DepartmentCode | null /* null = Shared */; legacyCode: string | null; usedCount: number }
 ```
 
 - **Names:** `cleanCategoryName` trims and collapses spaces. A blank name or one over 40 characters is a `RangeError`.
 - **Disabling:** refused for the last active category (`PS002`).
 - **Order:** `move` swaps `sort_order` with the neighbour, under a table lock.
 - **Renames:** relabel history, because past expenses resolve by id or by legacy code.
+- **Department (Phase 19):** `null` = Shared; an unknown code is a `RangeError`. `CashExpense.category.department` resolves the same way as the name, so changing a category's department moves its history too (the UI warns).
 
 ### `OrdersQueries` (`src/services/orders.queries.ts`, Phase 17)
 
@@ -447,7 +466,7 @@ interface OrderDetail {
 - The receipt is fixed-width (48 / 32 columns), ASCII via `asciiText`, with money via `receiptMoney` (`Rs 1,23,456.78`).
 - It carries no tax lines, and a reprint prints `*** DUPLICATE ***` and a reprint stamp.
 - Reprints are stateless (not logged).
-- `ApiConfig.printer` defaults to the console stub, like KOT.
+- `ApiConfig.printer` defaults to the console stub, and so does `ApiConfig.kotPrinter` (Phase 19, the counter's KITCHEN KOTs).
 
 ### `PurchaseService` (`src/services/purchase.service.ts`)
 
@@ -488,25 +507,27 @@ class CatalogService {
 
   listCatalog(filter?: { q?: string; includeInactive?: boolean }): Promise<CatalogProduct[]>;
   getProduct(productId: string): Promise<CatalogProduct>;                       // NotFoundError
-  createProduct(input: NewProductInput): Promise<CatalogProduct>;               // product + 1–5 sizes, one transaction
+  listDepartments(): Promise<Department[]>;                                     // Phase 19: { code, name, kotStation, tracksStock }, display order
+  createProduct(input: NewProductInput): Promise<CatalogProduct>;               // product + 1–6 sizes, one transaction
   updateProduct(productId: string, patch: ProductPatch): Promise<CatalogProduct>;
   addSku(productId: string, input: NewSkuInput & { codePrefix?: string }): Promise<CatalogProduct>;
   updateSku(skuId: string, patch: SkuPatch): Promise<CatalogProduct>;           // returns the whole product
 }
 
 interface CatalogSku extends SkuLookup { productId: string; }
-interface CatalogProduct { id; name; category: ProductCategory; isActive: boolean; skus: CatalogSku[] /* FULL → 330 */; }
+interface CatalogProduct { id; name; category: ProductCategory; department: DepartmentCode; isActive: boolean; skus: CatalogSku[] /* FULL → 330 → UNIT */; }
 interface NewSkuInput { sizeCode: SizeCode; salePricePaise: Paise; purchasePricePaise?: Paise | null; caseSize: number; barcode?: string | null; }
-interface NewProductInput { name: string; category: ProductCategory; codePrefix: string; skus: NewSkuInput[]; }
-interface ProductPatch { name?: string; category?: ProductCategory; isActive?: boolean; }
+interface NewProductInput { name: string; category: ProductCategory; department?: DepartmentCode /* default LIQUOR */; codePrefix: string; skus: NewSkuInput[]; }
+interface ProductPatch { name?: string; category?: ProductCategory; department?: DepartmentCode /* new sales only */; isActive?: boolean; }
 interface SkuPatch { salePricePaise?: Paise; purchasePricePaise?: Paise | null; caseSize?: number; barcode?: string | null; isActive?: boolean; }  // null clears
 ```
 
-- **Derived names:** `sku_code` = `PREFIX-F / -H / -Q / -650 / -330`; `display_name` = `Name — Full / Half / Quarter / 650 / 330` (same as the seed). A rename re-derives every size's display name; `sku_code` and `size_code` never change.
+- **Derived names:** `sku_code` = `PREFIX-F / -H / -Q / -650 / -330 / -U`; `display_name` = `Name — Full / Half / Quarter / 650 / 330`, and just `Name` for `UNIT` (same as the seed). A rename re-derives every size's display name; `sku_code` and `size_code` never change.
 - **Validation (`RangeError`):** name 1–80 chars (whitespace collapsed), category one of `PRODUCT_CATEGORIES`, prefix 2–10 A–Z/0–9 (upper-cased), 1–5 distinct sizes, sale price > 0, purchase price ≥ 0, case size 1–1000, barcode ≤ 40 chars with no spaces (blank → null).
 - **Active flags:** deactivating a product deactivates its sizes; reactivating it leaves them as they are. Adding a size to, or reactivating a size of, an inactive product → `InactiveError`.
 - **List:** products by name; without `includeInactive`, inactive products and sizes are left out. `q` matches the name (contains), any SKU code (prefix) or barcode (exact) and returns the whole product.
-- New SKUs start at 0 stock (stock comes only from a GRN). Constants: `DEFAULT_CASE_SIZE`, `MAX_CASE_SIZE`, `SIZE_CODES`, `PRODUCT_CATEGORIES`, `skuCodeFor`, `displayNameFor`.
+- New SKUs start at 0 stock (stock comes only from a GRN); Kitchen SKUs are never stock-tracked. Constants: `DEFAULT_CASE_SIZE`, `MAX_CASE_SIZE`, `SIZE_CODES`, `PRODUCT_CATEGORIES`, `DEPARTMENT_CODES`, `skuCodeFor`, `displayNameFor`.
+- **Department (Phase 19):** an unknown code is a `RangeError`; moving a product with stock on hand to Kitchen is `PS002`. Billed lines keep their snapshot.
 
 ### `CaptainService` (`src/services/captain.service.ts`)
 
@@ -526,12 +547,12 @@ interface OrderLine { skuId: string; quantity: number; }
 interface OrderRequest { requestId: string; deviceId: string; waiterId: string; memberId?: string; items: readonly OrderLine[]; }
 interface PlacedOrder {
   bill: Bill; items: BillItem[]; waiter: WaiterSummary; member: MemberSummary | null;
-  kot: KotStatus | null;   // null on a replay (never reprints)
+  kots: KotStatus[];       // Phase 19: one per station that had lines (BAR, KITCHEN); [] on a replay (never reprints)
+  kot: KotStatus | null;   // kept for older handsets: the BAR ticket, else the KITCHEN one; null on a replay
   replayed: boolean;
 }
 function orderFingerprint(request: Omit<OrderRequest, 'requestId'>): string;   // sha256 hex of handset, waiter, member, lines (ids case-insensitive)
-interface KotStatus { station: 'COUNTER'; printed: boolean; printedAt: Date | null; error: string | null; }
-const MAX_ORDER_LINES = 50;
+const MAX_ORDER_LINES = 50;   // KotStatus: see KotService
 ```
 
 **`placeOrder`** is idempotent on `requestId`:
@@ -546,30 +567,47 @@ const MAX_ORDER_LINES = 50;
    - Add one line per order line, in order, with the usual stock checks (`PS003`).
 3. **On a collision with a concurrent attempt** (the unique key, or `PS010` from its own committed order), look the key up again and replay or report the conflict.
 
-Any failure saves nothing and leaves the key unused, and bill numbers stay gap-free. The KOT prints **after** commit: a printer error is reported in `kot` (`printed: false`) and never undoes the order. Orders are allowed while a peak session runs, because waiter bills are always NORMAL.
+Any failure saves nothing and leaves the key unused, and bill numbers stay gap-free. The KOTs print **after** commit through `KotService.sendPending(bill, { deviceId }, { stations: ['BAR', 'KITCHEN'] })`: a printer error is reported in `kots` (`printed: false`), never undoes the order, and leaves those lines pending. Orders are allowed while a peak session runs, because waiter bills are always NORMAL.
+
+### `KotService` (`src/services/kot.service.ts`, Phase 19)
+
+```ts
+class KotService {
+  constructor(db: SqlDatabase, printer: KotPrinter);
+  sendPending(billId: string, by: { staffId: string } | { deviceId: string },
+              options?: { stations?: KotStation[] /* default ['KITCHEN'] */; includeReversals?: boolean }): Promise<KotStatus[]>;
+}
+interface KotStatus { station: KotStation; ticketNo: number | null; printed: boolean; printedAt: Date | null; sentQuantity: number; cancelledQuantity: number; error: string | null; }
+```
+
+- **Pending** per original line = net quantity (the line less its same-bill cancellations) − Σ `kot_ticket_lines.qty`. Positive prints; negative prints as CANCEL. `includeReversals` also counts reversal-bill lines (used only by peak undo; a refund reversal of a served bill never cancels food).
+- **Per station, one transaction:** lock the bill, insert the ticket (`ticket_no` = next per bill and station) and its lines, print, commit. A printer error rolls that station back (status `printed: false` with the error), so its lines stay pending and the next send retries them. Nothing pending → no status. Only a missing bill throws (`NotFoundError`).
+- Same-SKU lines print as one line (`2  Chicken 65 - Half`); the ledger keeps each bill line.
+- **Callers:** Captain orders (BAR + KITCHEN, after commit); the counter API (KITCHEN only — the counter is the bar) on F6 (`POST /api/bills/:id/kot`), after a settle or a counter waiter settlement, after each peak scan, after cancelling a Kitchen line, and after a peak undo (`includeReversals`).
 
 ### `PrinterService` (`src/services/printer.service.ts`)
 
-A stub for the ESC/POS network thermal printer. It implements `KotPrinter`.
+A stub for the ESC/POS network thermal printers. It implements `KotPrinter` and `ReceiptPrinter`.
 
 ```ts
 interface KotPrinter { printKOT(ticket: KotTicket): Promise<KotPrintResult>; }
+type KotStation = 'BAR' | 'KITCHEN';   // Phase 19 ('COUNTER' renamed BAR)
 interface KotTicket {
-  kotNo: number /* = bill number */; billId: string; station: 'COUNTER';
-  waiter: { code: string; displayName: string }; member: { membershipNo: string; displayName: string } | null;
-  lines: Array<{ skuCode: string; displayName: string; sizeCode: SizeCode; quantity: number }>; createdAt: Date;
+  kotNo: number /* = bill number */; ticketNo: number /* 1 → "KOT #12", 2 → "KOT #12/2" */; billId: string; station: KotStation;
+  waiter: { code: string; displayName: string } | null /* null → "Counter" */; member: { membershipNo: string; displayName: string } | null;
+  lines: Array<{ skuCode: string; displayName: string; sizeCode: SizeCode; quantity: number /* negative = CANCEL */ }>; createdAt: Date;
 }
-interface KotPrintResult { station: 'COUNTER'; printedAt: Date; text: string; }
+interface KotPrintResult { station: KotStation; printedAt: Date; text: string; }
 
 function formatKot(ticket: KotTicket, format?: { width?: number /* 48 = 80 mm, 32 = 58 mm */; timeZone?: string /* 'Asia/Kolkata' */ }): string;
-class PrinterService implements KotPrinter {
-  constructor(options?: { sink?: (text: string) => void /* default console.log */; width?: number; timeZone?: string });
+class PrinterService implements KotPrinter, ReceiptPrinter {
+  constructor(options?: { sink?: (text: string) => void /* default console.log */; stationSinks?: Partial<Record<KotStation, (text: string) => void>>; width?: number; timeZone?: string });
 }
 ```
 
-- Tickets show quantities and sizes, never prices.
-- Every product category is liquor, so every KOT routes to the `COUNTER` station.
-- Not yet built: the real printer (TCP to port 9100, ESC/POS init and cut), and a code-page mapping for non-ASCII characters in item names (for example `—`).
+- Tickets show quantities and sizes, never prices. A ticket of cancels only carries a `*** CANCEL ***` banner; cancelled lines read `CANCEL <name>`. The footer counts `Bottles` (BAR) or `Items` (KITCHEN), plus `Cancelled`.
+- Routing by department: LIQUOR and ANCILLARY → BAR, KITCHEN → KITCHEN. `stationSinks` sends a station to its own printer; both default to the console stub.
+- Not yet built: the real printers (TCP to port 9100, ESC/POS init and cut).
 
 ---
 
@@ -585,7 +623,7 @@ Neither server holds business rules.
 
 | Command | What it does |
 |---|---|
-| `npm run api:dev` | Embedded PGlite under `.data/pglite` (git-ignored). On an empty database, seeds demo data (cashier, 8 SKUs with barcodes `8900000000001`–`8900000000008`, purchase prices and case sizes 12 / 32 / 64 (beer 12 / 24), waiters W01 trusted / W02 untrusted / W03 trusted with ₹5,000 limit, 3 members, an open business day) and acts as the seeded cashier. |
+| `npm run api:dev` | Embedded PGlite under `.data/pglite` (git-ignored). On an empty database, seeds demo data (cashier, 12 SKUs with barcodes `8900000000001`–`8900000000012` (8 liquor, Soda as Ancillary, Chicken 65 Half / Full and Masala Peanuts as Kitchen items without stock), purchase prices and case sizes 12 / 32 / 64 (beer 12 / 24), waiters W01 trusted / W02 untrusted / W03 trusted with ₹5,000 limit, 3 members, an open business day) and acts as the seeded cashier. |
 | `npm run api` | Same server without demo data; `FL2_CASHIER_ID` is required. |
 
 | Variable | Default | Meaning |
@@ -634,15 +672,16 @@ Migrations run on every boot (already-applied ones are skipped).
 | `GET /api/bills/:billId` | | `getBillDetail` | 200 |
 | `POST /api/bills` | `{ mode, memberId? }` | `createBill(mode, cashier, memberId)` | 201 |
 | `POST /api/bills/:billId/items` | `{ skuId, quantity }` | `addItemToBill` | 201 |
-| `POST /api/bills/:billId/items/:itemId/cancel` | `{ quantity, restock? }` | `cancelBillItem` (works on Captain orders too) | 201 |
+| `POST /api/bills/:billId/items/:itemId/cancel` | `{ quantity, restock? }` | `cancelBillItem` (works on Captain orders too); a Kitchen line already sent gets a CANCEL ticket → `{ bill, item, kots }` | 201 |
+| `POST /api/bills/:billId/kot` | `{}` | Phase 19, F6: `KotService.sendPending(…, { stations: ['KITCHEN'] })` → `{ kots }` | 201 |
 | `PUT /api/bills/:billId/member` | `{ memberId: uuid \| null }` | `setBillMember` | 200 |
 | `PUT /api/bills/:billId/waiter` | `{ waiterId }` | `tagBillToWaiter` | 200 |
-| `POST /api/bills/:billId/settle` | `{ payments: [{ mode: 'CASH'\|'UPI', amount }] }` | `settleNormalBill` | 200 |
-| `POST /api/bills/:billId/settle-waiter` | `{ waiterId, tender, amount? }` | `settleWaiterBill` | 200 |
+| `POST /api/bills/:billId/settle` | `{ payments: [{ mode: 'CASH'\|'UPI', amount }] }` | `settleNormalBill`, then pending Kitchen lines are sent → `{ bill, payments, kots }` | 200 |
+| `POST /api/bills/:billId/settle-waiter` | `{ waiterId, tender, amount? }` | `settleWaiterBill`, then pending Kitchen lines are sent (`kots`) | 200 |
 | `POST /api/bills/:billId/close-empty` | | `closeEmptyBill` | 200 |
 | `POST /api/bills/:billId/reverse` | `{ reason, restock?, creditRefundTender?, peakRefundTender? }` | `reverseBill(…, cashier, …)` | 201 |
-| `POST /api/peak/sales` | `{ sessionId, skuId, quantity }` | `recordPeakSale(…, cashier)` | 201 |
-| `POST /api/peak/undo-last` | `{}` | `undoLastPeakSale(cashier)`: PS007 with no running session, 404 when nothing is left | 201 |
+| `POST /api/peak/sales` | `{ sessionId, skuId, quantity }` | `recordPeakSale(…, cashier)`; a Kitchen scan prints at once → `{ bill, item, kots }` | 201 |
+| `POST /api/peak/undo-last` | `{}` | `undoLastPeakSale(cashier)`: PS007 with no running session, 404 when nothing is left; a sent Kitchen scan gets a CANCEL ticket (`kots`) | 201 |
 | `GET /api/peak/baseline` | | `getStartBaseline(open day)`; 404 when no day is open | 200 |
 | `POST /api/peak/sessions` | `{ businessDayId, declaredCash, declaredUpi }` | `startPeakSession(…, cashier)` | 201 |
 | `POST /api/peak/sessions/:sessionId/end` | `{ countedCash, countedUpi }` | `endPeakSession(…, cashier)` | 200 |
@@ -660,8 +699,8 @@ Migrations run on every boot (already-applied ones are skipped).
 | `GET /api/expenses` | | `listCashExpenses(open day)`; 404 when no day is open | 200 |
 | `POST /api/expenses` | `{ amount, categoryId, description? }` (Phase 18; `categoryId` required) | `recordCashExpense(…, cashier, categoryId)` | 201 |
 | `GET /api/expense-categories` | `?includeInactive=1` | `listCategories` (picker order; `usedCount` per category) | 200 |
-| `POST /api/expense-categories` | `{ name, noteRequired? }` | `createCategory` (appended last; PS012 duplicate) | 201 |
-| `PATCH /api/expense-categories/:categoryId` | `{ name?, noteRequired?, isActive?, move?: 'up'\|'down' }` | `updateCategory` (PS002 for disabling the last active one) | 200 |
+| `POST /api/expense-categories` | `{ name, noteRequired?, department? (null = Shared) }` | `createCategory` (appended last; PS012 duplicate) | 201 |
+| `PATCH /api/expense-categories/:categoryId` | `{ name?, noteRequired?, isActive?, department? (null = Shared), move?: 'up'\|'down' }` | `updateCategory` (PS002 for disabling the last active one) | 200 |
 | `POST /api/expenses/:expenseId/void` | | `voidCashExpense(…, cashier)` | 201 |
 | `POST /api/days/:dayId/tender-adjustments` | `{ cashDelta, reason }` (`cashDelta` signed paise string, ≠ 0) | `adjustTenderSplit(…, cashier)` | 201 |
 | `POST /api/tender-adjustments/:adjustmentId/void` | | `voidTenderAdjustment(…, cashier)` | 201 |
@@ -671,9 +710,10 @@ Migrations run on every boot (already-applied ones are skipped).
 | `GET /api/purchases` | | `listReceipts(open day)`; 404 when no day is open | 200 `StockReceipt[]` |
 | `GET /api/purchases/:receiptId` | | `getReceipt` | 200 `StockReceiptDetail` |
 | `POST /api/purchases` | `{ invoiceNo, vendorName?, lines: [{ skuId, cases, looseBottles?, caseSize, unitCost }] }` or the loose-only `{ skuId, quantity, unitCost }` (`unitCost` in paise, `"0"` allowed) | `recordReceipt(…, cashier)` | 201 `StockReceiptDetail` |
+| `GET /api/departments` | | `listDepartments` (Phase 19) | 200 `Department[]` |
 | `GET /api/catalog` | `?q=&includeInactive=true` | `listCatalog` | 200 `CatalogProduct[]` |
-| `POST /api/catalog/products` | `{ name, category, codePrefix, skus: [{ sizeCode, salePrice, purchasePrice?, caseSize, barcode? }] }` | `createProduct` | 201 `CatalogProduct` |
-| `PATCH /api/catalog/products/:productId` | `{ name?, category?, isActive? }` | `updateProduct` | 200 `CatalogProduct` |
+| `POST /api/catalog/products` | `{ name, category, department? (default LIQUOR), codePrefix, skus: [{ sizeCode, salePrice, purchasePrice?, caseSize, barcode? }] }` | `createProduct` | 201 `CatalogProduct` |
+| `PATCH /api/catalog/products/:productId` | `{ name?, category?, department?, isActive? }` | `updateProduct` | 200 `CatalogProduct` |
 | `POST /api/catalog/products/:productId/skus` | `{ sizeCode, salePrice, purchasePrice?, caseSize, barcode?, codePrefix? }` | `addSku` | 201 `CatalogProduct` |
 | `PATCH /api/catalog/skus/:skuId` | `{ salePrice?, purchasePrice? (null clears), caseSize?, barcode? (null clears), isActive? }` | `updateSku` | 200 `CatalogProduct` |
 

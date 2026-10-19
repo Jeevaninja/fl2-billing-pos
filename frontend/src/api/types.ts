@@ -7,7 +7,10 @@ export type Paise = bigint
 export type BillingMode = 'NORMAL' | 'PEAK'
 export type BillStatus = 'OPEN' | 'SETTLED' | 'PEAK_UNSETTLED' | 'PEAK_RECONCILED'
 export type BillSource = 'COUNTER' | 'WAITER_APP'
-export type SizeCode = 'FULL' | 'HALF' | 'QUARTER' | 'BEER_650' | 'BEER_330'
+export type SizeCode = 'FULL' | 'HALF' | 'QUARTER' | 'BEER_650' | 'BEER_330' | 'UNIT'
+/** P&L department (Phase 19). Bills and the drawer stay unified; lines carry one each. */
+export type DepartmentCode = 'LIQUOR' | 'KITCHEN' | 'ANCILLARY'
+export type KotStation = 'BAR' | 'KITCHEN'
 export type CounterTender = 'CASH' | 'UPI'
 export type Tender = CounterTender | 'WAITER_CREDIT'
 
@@ -40,10 +43,34 @@ export interface BillItem {
   lineTotalPaise: Paise
   reversesItemId: string | null
   restock: boolean
+  /** Snapshotted when the line was rung up. */
+  department: DepartmentCode
 }
 
 export interface BillDetailItem extends BillItem {
   remainingQuantity: number
+  /** Where the line's KOT prints. */
+  kotStation: KotStation
+  /** Quantity already sent to that station on KOTs. */
+  kotSentQuantity: number
+}
+
+/** One KOT print attempt (Phase 19). A failed print leaves its lines pending for the next send. */
+export interface KotStatus {
+  station: KotStation
+  ticketNo: number | null
+  printed: boolean
+  printedAt: string | null
+  sentQuantity: number
+  cancelledQuantity: number
+  error: string | null
+}
+
+export interface Department {
+  code: DepartmentCode
+  name: string
+  kotStation: KotStation
+  tracksStock: boolean
 }
 
 export interface BillPayment {
@@ -187,11 +214,16 @@ export interface SkuLookup {
   caseSize: number
   onHandQty: number
   isActive: boolean
+  department: DepartmentCode
+  /** false for Kitchen items: no stock is counted or needed. */
+  tracksStock: boolean
 }
 
 export interface BillLine {
   bill: Bill
   item: BillItem
+  /** Kitchen KOTs printed by this call (peak scans, cancellations); absent on plain adds. */
+  kots?: KotStatus[]
 }
 
 export interface CounterPayment {
@@ -203,6 +235,8 @@ export interface WaiterSettlement {
   bill: Bill
   payment: BillPayment
   remainingDuePaise: Paise
+  /** Kitchen KOTs printed with the payment (Phase 19). */
+  kots?: KotStatus[]
 }
 
 // ── Day End (backend_state.md §3 DayEndService) ─────────────────────────────
@@ -272,6 +306,10 @@ export interface SalesBreakdown {
   peak: { salesPaise: Paise; cashPaise: Paise; upiPaise: Paise; sessionCount: number; runningSessionNo: number | null }
   waiterRepayments: { cashPaise: Paise; upiPaise: Paise }
   total: { cashPaise: Paise; upiPaise: Paise; creditPaise: Paise; salesPaise: Paise }
+  /** Phase 19, info only: the same sales by department (every department listed). */
+  byDepartment: Array<{ code: DepartmentCode; name: string; salesPaise: Paise }>
+  /** Counted tenders on bills still open (part-paid) or inside a running peak: not split yet. */
+  unallocatedPaise: Paise
 }
 
 export interface DayEndSummary {
@@ -311,6 +349,8 @@ export interface TenderAdjustmentEntry extends TenderAdjustment {
 /** POST /api/peak/undo-last: the reversal and the scan it voided. */
 export interface PeakUndoResult {
   reversal: Bill
+  /** A Kitchen scan already sent gets a CANCEL ticket. */
+  kots: KotStatus[]
   undone: { billId: string; billNo: number; sessionNo: number; displayName: string; sizeCode: SizeCode; quantity: number; totalPaise: Paise }
 }
 
@@ -368,6 +408,8 @@ export interface ExpenseCategory {
   noteRequired: boolean
   /** Picker order: the first nine active categories get keys 1–9. */
   sortOrder: number
+  /** The P&L its expenses go to; null = Shared (overheads). */
+  department: DepartmentCode | null
   /** The pre-Phase-18 code old expenses carry (ICE, OTHER, …); null for categories added since. */
   legacyCode: string | null
   usedCount: number
@@ -377,6 +419,8 @@ export interface ExpenseCategoryPatch {
   name?: string
   noteRequired?: boolean
   isActive?: boolean
+  /** null = Shared. */
+  department?: DepartmentCode | null
   move?: 'up' | 'down'
 }
 
@@ -387,7 +431,7 @@ export interface CashExpense {
   amountPaise: Paise
   reversesExpenseId: string | null
   /** Resolved by the server (old rows through their legacy code). */
-  category: { id: string; name: string }
+  category: { id: string; name: string; department: DepartmentCode | null }
   description: string | null
   createdAt: string
 }
@@ -464,7 +508,7 @@ export interface ReceiptLinePayload {
 
 // ── Inventory catalog ───────────────────────────────────────────────────────
 
-export const PRODUCT_CATEGORIES = ['WHISKY', 'RUM', 'VODKA', 'BRANDY', 'GIN', 'WINE', 'BEER', 'OTHER'] as const
+export const PRODUCT_CATEGORIES = ['WHISKY', 'RUM', 'VODKA', 'BRANDY', 'GIN', 'WINE', 'BEER', 'OTHER', 'FOOD', 'BEVERAGE', 'TOBACCO'] as const
 export type ProductCategory = (typeof PRODUCT_CATEGORIES)[number]
 
 export interface CatalogSku extends SkuLookup {
@@ -475,8 +519,9 @@ export interface CatalogProduct {
   id: string
   name: string
   category: ProductCategory
+  department: DepartmentCode
   isActive: boolean
-  /** Ordered FULL → HALF → QUARTER → 650 → 330. */
+  /** Ordered FULL → HALF → QUARTER → 650 → 330 → UNIT. */
   skus: CatalogSku[]
 }
 
@@ -492,6 +537,7 @@ export interface NewSkuPayload {
 export interface NewProductPayload {
   name: string
   category: ProductCategory
+  department: DepartmentCode
   codePrefix: string
   skus: NewSkuPayload[]
 }
@@ -499,6 +545,7 @@ export interface NewProductPayload {
 export interface ProductPatch {
   name?: string
   category?: ProductCategory
+  department?: DepartmentCode
   isActive?: boolean
 }
 

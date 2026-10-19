@@ -7,6 +7,12 @@ const sales = (over: Partial<SalesBreakdown['peak']> = {}): SalesBreakdown => ({
   peak: { salesPaise: 11400_00n, cashPaise: 7300_00n, upiPaise: 4100_00n, sessionCount: 2, runningSessionNo: null, ...over },
   waiterRepayments: { cashPaise: 1000_00n, upiPaise: 500_00n },
   total: { cashPaise: 17100_00n, upiPaise: 9800_00n, creditPaise: 1500_00n, salesPaise: 28400_00n },
+  byDepartment: [
+    { code: 'LIQUOR', name: 'Liquor', salesPaise: 25000_00n },
+    { code: 'KITCHEN', name: 'Kitchen', salesPaise: 2400_00n },
+    { code: 'ANCILLARY', name: 'Ancillary', salesPaise: 1000_00n },
+  ],
+  unallocatedPaise: 0n,
 })
 
 describe('salesCard', () => {
@@ -29,5 +35,19 @@ describe('salesCard', () => {
       'Peak #3 is still running — its sales appear once it ends.',
       'Peak UPI readings exceed peak sales — check the UPI readings.',
     ])
+  })
+})
+
+describe('salesCard departments (Phase 19)', () => {
+  it('lists every department, then the total; "still open" only when not ₹0', () => {
+    expect(salesCard(sales()).departments).toEqual([
+      { key: 'LIQUOR', label: 'Liquor', amount: 25000_00n },
+      { key: 'KITCHEN', label: 'Kitchen', amount: 2400_00n },
+      { key: 'ANCILLARY', label: 'Ancillary', amount: 1000_00n },
+      { key: 'total', label: 'Total', amount: 28400_00n },
+    ])
+    const open = salesCard({ ...sales(), unallocatedPaise: 500_00n }).departments
+    expect(open.map((d) => d.key)).toEqual(['LIQUOR', 'KITCHEN', 'ANCILLARY', 'open', 'total'])
+    expect(open[3]).toEqual({ key: 'open', label: 'On bills still open', amount: 500_00n })
   })
 })

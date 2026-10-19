@@ -2,9 +2,13 @@
  * Settings → Expense Categories (Phase 18): the managed list the Expense screen picks from.
  * Master data like the catalog — editable, never deleted (disable instead). Past expenses point at a
  * category by id (or, before 0012, by its legacy code), so a rename relabels their history.
+ * Phase 19: each category belongs to a P&L department, or none (null = Shared overheads); past
+ * expenses follow their category's department the same way they follow its name.
  */
 import type { SqlClient, SqlDatabase } from '../db/client.js';
 import { NotFoundError, PosError, PosErrorCode, withPosErrors } from '../db/errors.js';
+import type { DepartmentCode } from '../domain/types.js';
+import { DEPARTMENT_CODES } from './catalog.service.js';
 import { maybeOne, one } from './rows.js';
 
 export const MAX_CATEGORY_NAME = 40;
@@ -15,6 +19,8 @@ export interface ExpenseCategory {
   isActive: boolean;
   noteRequired: boolean;
   sortOrder: number;
+  /** The P&L its expenses go to; null = Shared (overheads). */
+  department: DepartmentCode | null;
   /** The 0006 code this category stands for on pre-0012 expenses; null for categories added since. */
   legacyCode: string | null;
   /** Expenses filed under it (originals, voids excluded), legacy rows included. */
@@ -24,12 +30,16 @@ export interface ExpenseCategory {
 export interface NewExpenseCategory {
   name: string;
   noteRequired?: boolean;
+  /** Default null (Shared). */
+  department?: DepartmentCode | null;
 }
 
 export interface ExpenseCategoryPatch {
   name?: string;
   noteRequired?: boolean;
   isActive?: boolean;
+  /** null moves it to Shared; past expenses follow. */
+  department?: DepartmentCode | null;
   /** Swap places with the neighbour above or below in the picker order. */
   move?: 'up' | 'down';
 }
@@ -40,12 +50,13 @@ interface CategoryRow {
   is_active: boolean;
   note_required: boolean;
   sort_order: number;
+  department: DepartmentCode | null;
   legacy_code: string | null;
   used_count: number;
 }
 
 const SELECT_CATEGORIES = `
-  SELECT c.id, c.name, c.is_active, c.note_required, c.sort_order, c.legacy_code,
+  SELECT c.id, c.name, c.is_active, c.note_required, c.sort_order, c.department, c.legacy_code,
          (SELECT count(*)::int FROM cash_expenses e
            WHERE e.amount_paise > 0 AND (e.category_id = c.id OR (c.legacy_code IS NOT NULL AND e.category = c.legacy_code))) AS used_count
     FROM expense_categories c`;
@@ -57,6 +68,7 @@ function mapCategory(r: CategoryRow): ExpenseCategory {
     isActive: r.is_active,
     noteRequired: r.note_required,
     sortOrder: r.sort_order,
+    department: r.department,
     legacyCode: r.legacy_code,
     usedCount: r.used_count,
   };
@@ -68,6 +80,14 @@ export function cleanCategoryName(name: string): string {
   if (text === '') throw new RangeError('a category needs a name');
   if (text.length > MAX_CATEGORY_NAME) throw new RangeError(`a category name must be at most ${MAX_CATEGORY_NAME} characters`);
   return text;
+}
+
+function checkDepartment(department: DepartmentCode | null | undefined): DepartmentCode | null | undefined {
+  if (department === undefined || department === null) return department;
+  if (!(DEPARTMENT_CODES as readonly string[]).includes(department)) {
+    throw new RangeError(`department must be one of ${DEPARTMENT_CODES.join(', ')}, or null for Shared`);
+  }
+  return department;
 }
 
 async function getCategory(db: SqlClient, id: string): Promise<ExpenseCategory> {
@@ -90,14 +110,15 @@ export class ExpenseCategoryService {
   /** Added at the end of the picker order. A name already taken (any case) is PS012. */
   async createCategory(input: NewExpenseCategory): Promise<ExpenseCategory> {
     const name = cleanCategoryName(input.name);
+    const department = checkDepartment(input.department) ?? null;
     return withPosErrors(() =>
       this.db.transaction(async (tx) => {
         await tx.query(`LOCK TABLE expense_categories IN SHARE ROW EXCLUSIVE MODE`); // one sort_order per new row
         const row = await one<{ id: string }>(
           tx,
-          `INSERT INTO expense_categories (name, note_required, sort_order)
-           VALUES ($1, $2, (SELECT coalesce(max(sort_order), 0) + 1 FROM expense_categories)) RETURNING id`,
-          [name, input.noteRequired ?? false],
+          `INSERT INTO expense_categories (name, note_required, department, sort_order)
+           VALUES ($1, $2, $3, (SELECT coalesce(max(sort_order), 0) + 1 FROM expense_categories)) RETURNING id`,
+          [name, input.noteRequired ?? false, department],
         );
         return getCategory(tx, row.id);
       }),
@@ -110,6 +131,7 @@ export class ExpenseCategoryService {
    */
   async updateCategory(id: string, patch: ExpenseCategoryPatch): Promise<ExpenseCategory> {
     const name = patch.name === undefined ? undefined : cleanCategoryName(patch.name);
+    const department = checkDepartment(patch.department);
     return withPosErrors(() =>
       this.db.transaction(async (tx) => {
         await tx.query(`LOCK TABLE expense_categories IN SHARE ROW EXCLUSIVE MODE`);
@@ -122,12 +144,13 @@ export class ExpenseCategoryService {
           }
         }
 
-        if (name !== undefined || patch.noteRequired !== undefined || patch.isActive !== undefined) {
+        if (name !== undefined || patch.noteRequired !== undefined || patch.isActive !== undefined || department !== undefined) {
           await tx.query(
             `UPDATE expense_categories
-                SET name = coalesce($2, name), note_required = coalesce($3, note_required), is_active = coalesce($4, is_active)
+                SET name = coalesce($2, name), note_required = coalesce($3, note_required), is_active = coalesce($4, is_active),
+                    department = CASE WHEN $5 THEN $6 ELSE department END
               WHERE id = $1`,
-            [id, name ?? null, patch.noteRequired ?? null, patch.isActive ?? null],
+            [id, name ?? null, patch.noteRequired ?? null, patch.isActive ?? null, department !== undefined, department ?? null],
           );
         }
 

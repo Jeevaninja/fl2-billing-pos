@@ -3,7 +3,7 @@
  * source of truth — bills enter the state only as BillDetail responses, so totals are never summed
  * client-side from prices.
  */
-import type { BillDetail, BillDetailItem, CounterContext, MemberSummary, Paise, SizeCode, WaiterSummary } from '../api/types'
+import type { BillDetail, BillDetailItem, CounterContext, DepartmentCode, KotStatus, MemberSummary, Paise, SizeCode, WaiterSummary } from '../api/types'
 
 export type DialogKind = 'payment' | 'member' | 'waiter' | 'abandon'
 export type ScreenMode = 'LOADING' | 'OFFLINE' | 'BLOCKED' | 'NORMAL' | 'PEAK'
@@ -20,6 +20,10 @@ export interface ItemRow {
   amountPaise: Paise
   /** Newest line with bottles left: the one "−" cancels from. */
   cancelItemId: string | null
+  /** Phase 19: the line's P&L department (KITCHEN lines print a kitchen KOT). */
+  department: DepartmentCode
+  /** Kitchen lines only: quantity not yet on a KOT (negative = a cancel still to print); 0 otherwise. */
+  kotPending: number
 }
 
 export interface PendingScan {
@@ -141,16 +145,50 @@ export function groupItems(items: readonly BillDetailItem[]): ItemRow[] {
         unitPricePaise: item.unitPricePaise,
         amountPaise: 0n,
         cancelItemId: null,
+        department: item.department,
+        kotPending: 0,
       }
       rows.set(key, row)
     }
     row.amountPaise += item.lineTotalPaise
+    if (item.quantity > 0 && item.kotStation === 'KITCHEN') row.kotPending += item.remainingQuantity - item.kotSentQuantity
     if (item.quantity > 0 && item.remainingQuantity > 0) {
       row.quantity += item.remainingQuantity
       row.cancelItemId = item.id // items arrive in line order, so the last one wins
     }
   }
   return [...rows.values()].filter((r) => r.quantity > 0)
+}
+
+/**
+ * What F6 would print for a bill (Phase 19): Kitchen quantity not yet sent, and sent quantity since
+ * cancelled. Both 0 when the kitchen is up to date.
+ */
+export function kitchenKotPending(items: readonly BillDetailItem[]): { send: number; cancel: number } {
+  let send = 0
+  let cancel = 0
+  for (const item of items) {
+    if (item.quantity <= 0 || item.kotStation !== 'KITCHEN') continue
+    const pending = item.remainingQuantity - item.kotSentQuantity
+    if (pending > 0) send += pending
+    else cancel -= pending
+  }
+  return { send, cancel }
+}
+
+/** A flash sentence for KOTs just printed (or failed); null when nothing was sent. */
+export function kotMessage(kots: readonly KotStatus[] | undefined, billNo: number): { kind: 'ok' | 'error'; text: string } | null {
+  if (!kots || kots.length === 0) return null
+  const failed = kots.find((k) => !k.printed)
+  if (failed) return { kind: 'error', text: `Kitchen KOT not printed (${failed.error ?? 'printer error'}) — F6 retries` }
+  const parts = kots.map((k) => {
+    const what = [k.sentQuantity > 0 ? `${k.sentQuantity} item${k.sentQuantity === 1 ? '' : 's'}` : null, k.cancelledQuantity > 0 ? `${k.cancelledQuantity} cancelled` : null]
+      .filter(Boolean)
+      .join(', ')
+    const label = k.station === 'KITCHEN' ? 'Kitchen' : 'Bar'
+    return `${label} KOT #${billNo}${k.ticketNo !== null && k.ticketNo > 1 ? `/${k.ticketNo}` : ''} sent · ${what}`
+  })
+  return { kind: 'ok', text: parts.join(' · ') }
 }
 
 export function totals(detail: BillDetail | null): { lines: number; bottles: number } {

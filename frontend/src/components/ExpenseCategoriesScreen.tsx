@@ -1,14 +1,25 @@
 import { useCallback, useEffect, useReducer, useRef, type ReactNode } from 'react'
 import { ArrowDown, ArrowLeft, ArrowUp, Plus, Tags, WifiOff } from 'lucide-react'
 import { ApiError, api } from '../api/client'
-import type { ExpenseCategory } from '../api/types'
+import type { DepartmentCode, ExpenseCategory } from '../api/types'
 import { FlashLine } from '../billing/BillingPanels'
 import type { Flash } from '../billing/billingReducer'
 import { counterErrorMessage } from '../billing/errors'
 import { Modal } from '../billing/Modal'
 import { beep } from '../lib/beep'
-import { FOCUS_RING, keepFocus } from '../lib/ui'
-import { categoryFormError, categoryPatch, formFor, MAX_NAME, NEW_CATEGORY, quickKeyFor, visibleCategories, type CategoryForm } from '../settings/expenseCategoryForm'
+import { DEPARTMENT_CHIP, DEPARTMENT_ORDER, FOCUS_RING, keepFocus } from '../lib/ui'
+import {
+  categoryFormError,
+  categoryPatch,
+  departmentLabel,
+  departmentMoveNote,
+  formFor,
+  MAX_NAME,
+  NEW_CATEGORY,
+  quickKeyFor,
+  visibleCategories,
+  type CategoryForm,
+} from '../settings/expenseCategoryForm'
 import { Kbd, LiveClock } from './ui'
 
 interface State {
@@ -65,7 +76,8 @@ const INITIAL: State = { load: 'loading', categories: [], showDisabled: false, s
 /**
  * Settings → Expense Categories (Phase 18): the manager's list the Expense screen picks from. Add,
  * rename, require a note, disable / enable, and set the order (the first nine get keys 1–9 on the
- * Expense screen). Categories are never deleted, so past expenses keep their label.
+ * Expense screen). Categories are never deleted, so past expenses keep their label. Phase 19: each
+ * category routes its petty cash to a department's P&L, or Shared.
  */
 export default function ExpenseCategoriesScreen({ onExit }: { onExit: () => void }) {
   const [state, dispatch] = useReducer(reducer, INITIAL)
@@ -106,7 +118,7 @@ export default function ExpenseCategoriesScreen({ onExit }: { onExit: () => void
           const patch = categoryPatch(original, form)
           return Object.keys(patch).length === 0 ? Promise.resolve(original) : api.updateExpenseCategory(original.id, patch)
         })()
-      : api.createExpenseCategory(form.name, form.noteRequired)
+      : api.createExpenseCategory(form.name, form.noteRequired, form.department)
     dispatch({ type: 'saving', on: true })
     request
       .then((saved) => {
@@ -229,6 +241,7 @@ export default function ExpenseCategoriesScreen({ onExit }: { onExit: () => void
                   >
                     <span className="flex items-center gap-2 text-lg font-bold">
                       {c.name}
+                      <DepartmentBadge department={c.department} />
                       {c.noteRequired && <span className="rounded bg-sky-500 px-1.5 py-0.5 text-[11px] font-black text-zinc-950 uppercase">Note required</span>}
                       {!c.isActive && <span className="rounded bg-zinc-700 px-1.5 py-0.5 text-[11px] font-black text-zinc-200 uppercase">Disabled</span>}
                     </span>
@@ -348,6 +361,29 @@ function CategoryModal({
           className={`mt-1 w-full rounded-md border-2 bg-zinc-950 px-4 py-4 text-2xl outline-none focus:border-amber-400 ${showError ? 'border-rose-500' : 'border-zinc-600'}`}
         />
       </label>
+      <div className="mt-4">
+        <span className="text-sm font-semibold text-zinc-300">Department (P&amp;L)</span>
+        <div className="mt-1 grid grid-cols-4 gap-2" role="radiogroup" aria-label="Department">
+          {[...DEPARTMENT_ORDER, null].map((d) => (
+            <button
+              key={d ?? 'SHARED'}
+              type="button"
+              role="radio"
+              aria-checked={form.department === d}
+              onClick={() => onEdit({ department: d })}
+              className={`min-h-14 rounded-lg border-2 px-3 text-lg font-bold ${
+                form.department === d ? (d ? DEPARTMENT_CHIP[d] : 'border-zinc-300 bg-zinc-700 text-zinc-50') : 'border-zinc-700 bg-zinc-950 text-zinc-300'
+              } ${FOCUS_RING}`}
+            >
+              {departmentLabel(d)}
+            </button>
+          ))}
+        </div>
+        <p className="mt-1 text-sm text-zinc-500">Shared = overheads that belong to no single P&amp;L (rent, transport, repairs, wages).</p>
+      </div>
+      {departmentMoveNote(original, form) && (
+        <p className="mt-3 rounded-md border-l-4 border-amber-500 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">{departmentMoveNote(original, form)}</p>
+      )}
       <div className="mt-4 grid grid-cols-2 gap-3">
         <Toggle on={form.noteRequired} onClick={() => onEdit({ noteRequired: !form.noteRequired })} title="Note required" hint="The cashier must add a note" />
         {original && <Toggle on={form.isActive} onClick={() => onEdit({ isActive: !form.isActive })} title={form.isActive ? 'Active' : 'Disabled'} hint="Shown on the Expense screen" />}
@@ -362,6 +398,11 @@ function CategoryModal({
       )}
     </Modal>
   )
+}
+
+function DepartmentBadge({ department }: { department: DepartmentCode | null }) {
+  const tone = department ? DEPARTMENT_CHIP[department] : 'border-zinc-600 bg-zinc-800 text-zinc-300'
+  return <span className={`rounded border px-1.5 py-0.5 text-[11px] font-black uppercase ${tone}`}>{departmentLabel(department)}</span>
 }
 
 function Toggle({ on, onClick, title, hint }: { on: boolean; onClick: () => void; title: string; hint: string }) {

@@ -10,11 +10,14 @@ import type {
   CounterTender,
   DayEndSummary,
   DaySummary,
+  Department,
+  DepartmentCode,
   CashExpense,
   CatalogProduct,
   ExpenseCategory,
   ExpenseCategoryPatch,
   ExpenseEntry,
+  KotStatus,
   MemberSummary,
   NewProductPayload,
   NewSkuPayload,
@@ -117,7 +120,9 @@ export const api = {
     call<BillLine>('POST', `${bill(billId)}/items/${encodeURIComponent(itemId)}/cancel`, { quantity, restock }),
   setMember: (billId: string, memberId: string | null) => call<Bill>('PUT', `${bill(billId)}/member`, { memberId }),
   tagWaiter: (billId: string, waiterId: string) => call<Bill>('PUT', `${bill(billId)}/waiter`, { waiterId }),
-  settle: (billId: string, payments: CounterPayment[]) => call<{ bill: Bill }>('POST', `${bill(billId)}/settle`, { payments }),
+  settle: (billId: string, payments: CounterPayment[]) => call<{ bill: Bill; kots: KotStatus[] }>('POST', `${bill(billId)}/settle`, { payments }),
+  /** F6: prints the bill's pending Kitchen lines (and CANCELs). */
+  sendKot: (billId: string) => call<{ kots: KotStatus[] }>('POST', `${bill(billId)}/kot`, {}),
   settleWaiter: (billId: string, waiterId: string, tender: Tender, amount?: Paise) =>
     call<WaiterSettlement>('POST', `${bill(billId)}/settle-waiter`, amount === undefined ? { waiterId, tender } : { waiterId, tender, amount }),
   closeEmpty: (billId: string) => call<Bill>('POST', `${bill(billId)}/close-empty`),
@@ -164,7 +169,8 @@ export const api = {
   /** Active categories in picker order; with `includeInactive`, disabled ones too (Settings). */
   listExpenseCategories: (includeInactive = false) =>
     call<ExpenseCategory[]>('GET', `/api/expense-categories${includeInactive ? '?includeInactive=1' : ''}`),
-  createExpenseCategory: (name: string, noteRequired: boolean) => call<ExpenseCategory>('POST', '/api/expense-categories', { name, noteRequired }),
+  createExpenseCategory: (name: string, noteRequired: boolean, department: DepartmentCode | null) =>
+    call<ExpenseCategory>('POST', '/api/expense-categories', { name, noteRequired, department }),
   updateExpenseCategory: (categoryId: string, patch: ExpenseCategoryPatch) =>
     call<ExpenseCategory>('PATCH', `/api/expense-categories/${encodeURIComponent(categoryId)}`, patch),
   voidExpense: (expenseId: string) => call<CashExpense>('POST', `/api/expenses/${encodeURIComponent(expenseId)}/void`),
@@ -178,6 +184,7 @@ export const api = {
     call<StockReceiptDetail>('POST', '/api/purchases', { invoiceNo, vendorName, lines }),
 
   /** Liquors with their sizes; inactive ones only with `includeInactive`. */
+  listDepartments: () => call<Department[]>('GET', '/api/departments'),
   listCatalog: (q: string, includeInactive: boolean) =>
     call<CatalogProduct[]>('GET', `/api/catalog?q=${encodeURIComponent(q)}&includeInactive=${includeInactive}`),
   createProduct: (payload: NewProductPayload) => call<CatalogProduct>('POST', '/api/catalog/products', payload),

@@ -6,6 +6,8 @@ import {
   cancelPlan,
   findTab,
   groupItems,
+  kitchenKotPending,
+  kotMessage,
   initialBillingState,
   MAX_TABS,
   newTabBlock,
@@ -368,5 +370,33 @@ describe('cancelPlan', () => {
     const old = line({ skuId: 'a', quantity: 1, unitPricePaise: 20000n })
     const now = line({ skuId: 'a', quantity: 1, unitPricePaise: 22000n })
     expect(cancelPlan([old, now], 'a:20000', 1)).toEqual([{ itemId: old.id, quantity: 1 }])
+  })
+})
+
+describe('kitchen KOTs (Phase 19)', () => {
+  const dish = (over: Parameters<typeof line>[0]) => line({ department: 'KITCHEN', kotStation: 'KITCHEN', ...over })
+
+  it('counts what F6 would send and cancel, Kitchen lines only', () => {
+    const items = [
+      dish({ skuId: 'ch65', quantity: 3, remainingQuantity: 3, kotSentQuantity: 1 }),
+      dish({ skuId: 'mpnt', quantity: 2, remainingQuantity: 1, kotSentQuantity: 2 }), // one cancelled after sending
+      line({ skuId: 'rum', quantity: 2, kotSentQuantity: 0 }),
+    ]
+    expect(kitchenKotPending(items)).toEqual({ send: 2, cancel: 1 })
+    expect(groupItems(items).map((r) => [r.skuId, r.department, r.kotPending])).toEqual([
+      ['ch65', 'KITCHEN', 2],
+      ['mpnt', 'KITCHEN', -1],
+      ['rum', 'LIQUOR', 0],
+    ])
+    expect(kitchenKotPending([dish({ skuId: 'ch65', quantity: 2, kotSentQuantity: 2 })])).toEqual({ send: 0, cancel: 0 })
+  })
+
+  it('describes printed and failed KOTs for the flash line', () => {
+    const ok = { station: 'KITCHEN' as const, ticketNo: 2, printed: true, printedAt: '2026-10-19T10:00:00Z', sentQuantity: 3, cancelledQuantity: 1, error: null }
+    expect(kotMessage([ok], 42)).toEqual({ kind: 'ok', text: 'Kitchen KOT #42/2 sent · 3 items, 1 cancelled' })
+    expect(kotMessage([{ ...ok, ticketNo: 1, cancelledQuantity: 0, sentQuantity: 1 }], 42)?.text).toBe('Kitchen KOT #42 sent · 1 item')
+    expect(kotMessage([{ ...ok, printed: false, ticketNo: null, error: 'offline' }], 42)).toEqual({ kind: 'error', text: 'Kitchen KOT not printed (offline) — F6 retries' })
+    expect(kotMessage([], 42)).toBeNull()
+    expect(kotMessage(undefined, 42)).toBeNull()
   })
 })
