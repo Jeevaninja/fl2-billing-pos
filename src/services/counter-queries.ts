@@ -93,6 +93,8 @@ export interface SkuLookup {
   department: DepartmentCode;
   /** false for Kitchen items: no stock is counted and none is needed to sell them. */
   tracksStock: boolean;
+  /** Phase 20: the catalog grouping it sits in (FULL, QUARTER, BEER, …). */
+  itemCategory: { id: string; name: string };
 }
 
 export interface BillDetailItem extends BillItem {
@@ -211,11 +213,21 @@ export interface SkuLookupRow {
   is_active: boolean;
   department: DepartmentCode;
   tracks_stock: boolean;
+  item_category_id: string;
+  item_category_name: string;
 }
 
-/** SkuLookupRow columns over `skus k JOIN products p JOIN departments d LEFT JOIN sku_stock s`. */
+/** SkuLookupRow columns over SKU_FROM. */
 export const SKU_COLUMNS = `k.id, k.sku_code, k.barcode, k.display_name, k.size_code, k.price_paise, k.purchase_price_paise, k.case_size,
-       k.is_active, coalesce(s.on_hand_qty, 0) AS on_hand_qty, p.department, d.tracks_stock`;
+       k.is_active, coalesce(s.on_hand_qty, 0) AS on_hand_qty, p.department, d.tracks_stock,
+       k.item_category_id, ic.name AS item_category_name`;
+
+/** The joins SKU_COLUMNS reads from. */
+export const SKU_FROM = `skus k
+         JOIN products p ON p.id = k.product_id
+         JOIN departments d ON d.code = p.department
+         JOIN item_categories ic ON ic.id = k.item_category_id
+         LEFT JOIN sku_stock s ON s.sku_id = k.id`;
 
 export function mapSkuLookup(row: SkuLookupRow): SkuLookup {
   return {
@@ -231,6 +243,7 @@ export function mapSkuLookup(row: SkuLookupRow): SkuLookup {
     isActive: row.is_active,
     department: row.department,
     tracksStock: row.tracks_stock,
+    itemCategory: { id: row.item_category_id, name: row.item_category_name },
   };
 }
 
@@ -355,10 +368,7 @@ export class CounterQueries {
     const row = await maybeOne<SkuLookupRow>(
       this.db,
       `SELECT ${SKU_COLUMNS}
-         FROM skus k
-         JOIN products p ON p.id = k.product_id
-         JOIN departments d ON d.code = p.department
-         LEFT JOIN sku_stock s ON s.sku_id = k.id
+         FROM ${SKU_FROM}
         WHERE k.barcode = $1 OR upper(k.sku_code) = upper($1)
         ORDER BY (k.barcode = $1) IS TRUE DESC
         LIMIT 1`,
@@ -376,10 +386,7 @@ export class CounterQueries {
     if (text === '') return [];
     const { rows } = await this.db.query<SkuLookupRow>(
       `SELECT ${SKU_COLUMNS}
-         FROM skus k
-         JOIN products p ON p.id = k.product_id
-         JOIN departments d ON d.code = p.department
-         LEFT JOIN sku_stock s ON s.sku_id = k.id
+         FROM ${SKU_FROM}
         WHERE k.barcode = $2 OR k.sku_code ILIKE $1 || '%' OR k.display_name ILIKE '%' || $1 || '%'
         ORDER BY (k.barcode = $2) IS TRUE DESC, k.is_active DESC, lower(p.name),
                  array_position(ARRAY['FULL', 'HALF', 'QUARTER', 'BEER_650', 'BEER_330', 'UNIT'], k.size_code),

@@ -401,7 +401,7 @@ describe('upgrading a 0012 database with bills to 0013', () => {
       [fx.dayId],
     );
 
-    expect(await runMigrations(db)).toEqual(['0013_departments']);
+    expect((await runMigrations(db))[0]).toBe('0013_departments');
     const { rows } = await db.query<{ department: string }>(`SELECT DISTINCT department FROM bill_items`);
     expect(rows).toEqual([{ department: 'LIQUOR' }]);
     const after = await one<{ expected: string; totals: string }>(

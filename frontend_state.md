@@ -1,10 +1,10 @@
 # FL2 POS — Frontend State Reference
 
-As of Phase 11 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders, Phase 7 Day End, Phase 8 Expenses and peak controls, Phase 9 Purchase / GRN, Phase 10 Inventory Catalog and case-based GRN, Phase 11 peak start baseline and Day End sales breakdown, Phase 12 Enter → qty → pay, payment arrow keys and server-side peak undo; plan `docs/ui/phase12-billing-speed-plan.md`, Phase 13 peak end live split, Day End tally adjustments and Day End ⇄ Expenses; plan `docs/ui/phase13-peak-close-tally-plan.md`, Phase 14 bank deposits; plan `docs/ui/phase14-bank-deposits-plan.md`, Phase 15 multi-tab billing and the waiter sidebar; plan `docs/ui/phase15-billing-tabs-waiter-sidebar-plan.md`, Phase 16 Waiter Ledger (replaces the Captain Orders queue) and the strict Day End waiter-balance blocker; plan `docs/ui/phase16-waiter-ledger-plan.md`, Phase 17 Orders screen, the header Settings menu and Jump to bill; plan `docs/ui/phase17-orders-plan.md`, Phase 18 custom expense categories (Settings screen + Expense picker); plan `docs/ui/phase18-expense-categories-plan.md`, Phase 19 departments: catalog / expense-category departments, Kitchen KOTs (F6) and the Day End department split; plan `docs/ui/phase19-departments-plan.md`). Upcoming phases (not built): `docs/roadmap.md`. Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
+As of Phase 11 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Captain Orders, Phase 7 Day End, Phase 8 Expenses and peak controls, Phase 9 Purchase / GRN, Phase 10 Inventory Catalog and case-based GRN, Phase 11 peak start baseline and Day End sales breakdown, Phase 12 Enter → qty → pay, payment arrow keys and server-side peak undo; plan `docs/ui/phase12-billing-speed-plan.md`, Phase 13 peak end live split, Day End tally adjustments and Day End ⇄ Expenses; plan `docs/ui/phase13-peak-close-tally-plan.md`, Phase 14 bank deposits; plan `docs/ui/phase14-bank-deposits-plan.md`, Phase 15 multi-tab billing and the waiter sidebar; plan `docs/ui/phase15-billing-tabs-waiter-sidebar-plan.md`, Phase 16 Waiter Ledger (replaces the Captain Orders queue) and the strict Day End waiter-balance blocker; plan `docs/ui/phase16-waiter-ledger-plan.md`, Phase 17 Orders screen, the header Settings menu and Jump to bill; plan `docs/ui/phase17-orders-plan.md`, Phase 18 custom expense categories (Settings screen + Expense picker); plan `docs/ui/phase18-expense-categories-plan.md`, Phase 19 departments: catalog / expense-category departments, Kitchen KOTs (F6) and the Day End department split; plan `docs/ui/phase19-departments-plan.md`, Phase 20 item categories (Settings screen) and the flat, category-grouped Inventory Catalog; plan `docs/ui/phase20-item-categories-plan.md`). Upcoming phases (not built): `docs/roadmap.md`. Backend contract: `backend_state.md`. Billing screen design: `docs/ui/phase4-billing-screen-plan.md`.
 
 - **Stack:** Vite 8, React 19, TypeScript, Tailwind CSS 4 (`@tailwindcss/vite`), Lucide icons, Vitest. No router, no state library.
 - **Run:** `npm run api:dev` at the repo root (API on `127.0.0.1:4310`), then `npm run dev` in `frontend/` (http://localhost:5173). Vite proxies `/api` to the API.
-- **Check:** `npm test` (Vitest, 215 tests), `npx tsc -b`, `npx oxlint src`, `npm run build`.
+- **Check:** `npm test` (Vitest, 210 tests), `npx tsc -b`, `npx oxlint src`, `npm run build`.
 - **Money:** `bigint` paise end to end. The API client decodes every `…Paise` JSON string to `bigint` and encodes `bigint` back to strings. Display goes through `formatPaise`; cashier input goes through `parseRupeesToPaise`. No floats.
 - **Server is the source of truth:** bills enter screen state only as `BillDetail` responses, so the UI never adds up prices to get a total.
 
@@ -16,7 +16,7 @@ As of Phase 11 on `main` (Phase 3 dashboard, Phase 4 billing screen, Phase 6 Cap
 main.tsx                      StrictMode → <App/>, imports index.css (Tailwind)
 └─ App                        view: 'dashboard' | 'billing' | 'captain-orders' | 'day-end' | 'expenses' | 'bank-deposits' | 'purchase' | 'catalog' | 'orders' | 'expense-categories'; holds the Recently Used list and the one-shot Jump-to-bill targets (billingFocus, ledgerFocus)
    ├─ Dashboard               module tiles + Recently Used rail + key legend footer
-   │  ├─ header               Start peak (F8) button when a day is open and no peak runs; Settings gear menu (Phase 17): Inventory Catalog, Expense Categories (Phase 18)
+   │  ├─ header               Start peak (F8) button when a day is open and no peak runs; Settings gear menu (Phase 17): Inventory Catalog, Item Categories (Phase 20), Expense Categories (Phase 18)
    │  ├─ PeakBanner           amber "PEAK #n running · since · expected drawer total" strip with End peak session (F8)
    │  ├─ day banner           "No business day is open" strip → Day End (context polled 15 s)
    │  ├─ ModuleTile ×8        4 × 2 grid (2 × 4 narrow), equal tiles (Phase 14). Billing, Waiter Ledger (live "n open" Captain-order badge,
@@ -152,6 +152,8 @@ Shared: components/peak/PeakControls.tsx: PeakBanner, StartPeakButton, PeakStart
 | `components/DayEndScreen.tsx` | `DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrders })` |
 | `components/ExpenseScreen.tsx` | `ExpenseScreen({ onExit, onOpenDayEnd })` |
 | `components/ExpenseCategoriesScreen.tsx` | `ExpenseCategoriesScreen({ onExit })` (Phase 18, Settings) |
+| `components/ItemCategoriesScreen.tsx` | `ItemCategoriesScreen({ onExit })` (Phase 20, Settings) |
+| `components/settings/SettingsControls.tsx` | `Toggle`, `IconButton`, `CenterNote` shared by the Settings category screens |
 | `settings/expenseCategoryForm.ts` | `NEW_CATEGORY`, `MAX_NAME`, `formFor`, `cleanName`, `categoryFormError`, `categoryPatch`, `visibleCategories`, `quickKeyFor` |
 | `components/BankDepositScreen.tsx` | `BankDepositScreen({ onExit, onOpenDayEnd, exitLabel? })` |
 | `components/PurchaseScreen.tsx` | `PurchaseScreen({ onExit, onOpenDayEnd })` |
@@ -237,6 +239,11 @@ Only the Reports tile still calls `runStub`; every other tile (and F1/F2/F9, whi
   "Moves its n past expenses from X to Y" (`departmentMoveNote`): expenses follow their category.
 - **Keys:** ↑/↓ select · Alt+↑ / Alt+↓ reorder · Enter edit · Ins new · Esc dashboard.
 
+**Item Categories screen** (Settings, Phase 20; helpers in `settings/itemCategoryForm.ts`):
+- **List:** active categories in report order with their department badge, item count, bottles on hand (not for Kitchen) and default size; ↑ / ↓ buttons; "Show disabled".
+- **Modal** (touch-friendly; Enter / F9 saves): name (shown upper-case), default size chips (or "Ask each time"), default department for new brands, and Active when editing. `itemCategoryFormError` catches a blank, too-long (30) or duplicate name and disabling a category that still has active items; `itemCategoryPatch` sends only what changed.
+- **Keys:** ↑/↓ select · Alt+↑ / Alt+↓ reorder · Enter edit · Ins new · Esc dashboard.
+
 **Purchase screen (GRN)** (`purchaseReducer`, pure and unit-tested):
 - **State:** `load` (`loading` / `ready` / `offline` / `noDay`), `till`, `receipts` (today's, newest first), `invoiceNo`, `vendorName`, `invoiceError` (set by a PS011 duplicate, cleared on edit), the picker (`query`, `results`, `highlighted`, `picked`), `cases`, `loose` (digits; empty = 0), `cost`, `lines: StagedLine[]` (`sku`, `cases`, `looseBottles`, `caseSize`, `quantity`, `unitCostPaise`), `selectedLine`, `confirming`, `submitting`, `flash`.
 - **Picker:** Kitchen SKUs (`tracksStock: false`) are filtered out of the results (Phase 19); the server refuses them too.
@@ -250,17 +257,13 @@ Only the Reports tile still calls `runStub`; every other tile (and F1/F2/F9, whi
 - **Posting:** `posted` clears the invoice, vendor and lines; `duplicate` keeps everything, closes the dialog and flags the invoice fields. Once the form is up, a failed poll only flashes (the invoice being keyed in stays).
 - **Keys:** Enter moves invoice → vendor → SKU → cases → loose → cost → stage · ↑/↓ in SKU results · F9 asks to post, Enter / F9 confirms · Del removes the selected line (outside text fields) · Esc clears the line being entered; with lines staged, the first Esc warns and a second within 3 s leaves.
 
-**Inventory Catalog screen** (`catalogReducer`, pure and unit-tested):
-- **State:** `load` (`loading` / `ready` / `offline`), `products`, `query`, `includeInactive`, `selected` (index into `catalogRows`: each liquor followed by its sizes), `form` (`newProduct` / `editProduct` / `addSku` / `editSku`), `conflict` (`name` / `codePrefix` / `barcode` / `size`), `saveError`, `submitting`, `flash`.
-- **Forms:** prices are typed rupees parsed with `parseRupeesToPaise` (sale > ₹0, purchase optional ≥ ₹0), case size digits 1–1000, barcode no spaces. `formError` gives the first problem (prefixed with the SKU code for a size row). Edits send only the changed fields (`productPatch` / `skuPatch`; an empty purchase price or barcode sends `null` to clear it); no change just closes.
-- **Departments (Phase 19):** new and edit forms carry `department` with a large three-way switch (Liquor · Kitchen ·
-  Ancillary). `departmentForCategory` pre-selects it from the category (FOOD → Kitchen, BEVERAGE / TOBACCO → Ancillary,
-  the rest Liquor) until the operator picks one (`departmentTouched`). `sizesFor('KITCHEN')` offers only Full plate /
-  Half plate / Single size (`UNIT`), with no case size (sent as 1); other departments get every size. Rows show a
-  department chip, and Kitchen sizes read "not tracked" for stock and "—" for case. An edit that changes the
-  department warns it applies to new sales only.
-- **Results:** `saved` upserts the server's copy of the liquor in name order and selects it; `conflict` keeps the form open with the reason in `saveError` (cleared by the next edit) and the clashing field outlined until it's edited. Results for a stale search are dropped. New sizes start at 0 stock.
-- **Keys:** ↑/↓ select · Enter edits the selected liquor or size · Ins new liquor · Esc clears the search, else back to the dashboard · in the form: Enter / F9 save, Esc cancel.
+**Inventory Catalog screen** (`catalogReducer`, pure and unit-tested; Phase 20 flat layout):
+- **Data:** `api.listItems()` (every item, inactive included) and `api.listItemCategories(true)`, loaded together; search and the inactive filter run client-side (`filterItems`: brand / display name contains, SKU code prefix, exact barcode).
+- **Rows (`catalogRows`):** a sticky header per category in report order (name, department chip, item count, Σ on hand, "+ Item"), then its items: code, brand name (+ barcode), size, sale, purchase, case, on hand ("not tracked" for Kitchen), status. Categories with nothing to show drop out. `selectedItem` is derived (first shown when the selected one is filtered out); ↑/↓ skip headers.
+- **New item (Ins / "+ Item"):** opens in the highlighted (or clicked) category with its default size, case size and department. Category chips, name, code prefix (suggested; read-only `1848-F` when the brand exists), size chips only where `sizeChoices` gives a choice (no default, beer 650 / 330, Kitchen plates), a department switch for new brands only, then sale, purchase, per case and opening stock (hidden for Kitchen), barcode. `existingBrand` notes "Adds a Full to 1848 … it already has Quarter" and blocks a size the brand already has. `newItemPayload` sends paise, the prefix and department only for a new brand, and `openingQty` only when > 0.
+- **Edit item (Enter / click):** name (with a note when it moves the item to another brand, or renames the brand on a case-only change), category, sale, purchase, case, barcode, active; size, SKU code, department and stock are shown read-only. `itemPatch` sends only the changed fields.
+- **Results:** `saved` upserts the server's item in report order and selects it, then the list reloads (brand renames touch other rows). A PS012 marks the clashing field (`conflictField`: name, code prefix, barcode, size).
+- **Keys:** ↑/↓ select · Enter edits · Ins new item in the highlighted category · Esc clears the search, else back · in the form: Enter / F9 save, Esc cancel.
 
 **Billing scan stock note:** each scan's flash now ends with the bottles left (`stockLeft`: "57 left", or "last in stock"), computed from the `lookupSku` taken just before the sale. Stock received in Purchase shows on the very next scan. A Kitchen item's flash says "Kitchen — F6 sends the KOT" instead.
 
@@ -357,7 +360,7 @@ No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDow
 
 | File | Contents |
 |---|---|
-| `api/client.ts` | `api.*` (`context`, `lookupSku`, `searchMembers`, `listWaiters`, `getBill`, `captainOrders`, `createBill`, `addItem`, `cancelItem` (optional `restock`), `setMember`, `tagWaiter`, `settle` (returns `kots`), `sendKot` (Phase 19), `settleWaiter`, `closeEmpty`, `reverse`, `peakSale`, `searchSkus`, `listPurchases`, `postPurchase`, `listDepartments` (Phase 19), `listCatalog`, `createProduct`, `updateProduct`, `addSku`, `updateSku`, `peakBaseline`, `undoLastPeak`, `listBankDeposits`, `addBankDeposit`, `voidBankDeposit`, `waiterStats` (Phase 15), `waiterLedger`, `waiterLedgerDetail`, `settleWaiterBills`, `receiveWaiterPayment` (Phase 16), `orders`, `order`, `reprintOrder` (Phase 17)), `ApiError` (`status`, `code`, `constraint` on a 409; `NETWORK` when unreachable or the proxy answers non-JSON 5xx), `reviveJson`, `encodeJson` |
+| `api/client.ts` | `api.*` (`context`, `lookupSku`, `searchMembers`, `listWaiters`, `getBill`, `captainOrders`, `createBill`, `addItem`, `cancelItem` (optional `restock`), `setMember`, `tagWaiter`, `settle` (returns `kots`), `sendKot` (Phase 19), `settleWaiter`, `closeEmpty`, `reverse`, `peakSale`, `searchSkus`, `listPurchases`, `postPurchase`, `listDepartments` (Phase 19), `listItemCategories`, `createItemCategory`, `updateItemCategory`, `listItems`, `createItem`, `updateItem` (Phase 20), `peakBaseline`, `undoLastPeak`, `listBankDeposits`, `addBankDeposit`, `voidBankDeposit`, `waiterStats` (Phase 15), `waiterLedger`, `waiterLedgerDetail`, `settleWaiterBills`, `receiveWaiterPayment` (Phase 16), `orders`, `order`, `reprintOrder` (Phase 17)), `ApiError` (`status`, `code`, `constraint` on a 409; `NETWORK` when unreachable or the proxy answers non-JSON 5xx), `reviveJson`, `encodeJson` |
 | `api/types.ts` | Frontend mirrors of the API DTOs (`Bill`, `BillDetail`, `CounterContext`, `SkuLookup`, …) with `Paise = bigint`; dates stay ISO strings |
 | `billing/payment.ts` | `payOptions(detail)`, `planPayment(detail, input)` → counter tenders or waiter settle steps plus change, credit-limit pre-check, `describePlan` |
 | `billing/errors.ts` | `CounterError` (screen-raised), `counterErrorMessage(err)` (PS code → cashier wording) |
@@ -367,7 +370,8 @@ No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDow
 | `lib/beep.ts` | WebAudio scan feedback; silent if audio is unavailable |
 
 **Tests** (`*.test.ts`, Node environment, no DOM):
-- Phase 19: catalog departments and Kitchen sizes (`catalogReducer.test.ts`), expense-category departments and the move warning, `kitchenKotPending` / `kotMessage` / row `kotPending` (`billingReducer.test.ts`), and the Day End department rows (`salesRows.test.ts`)
+- Phase 20: grouping, search, selection, New / Edit item payloads and existing-brand rules (`catalogReducer.test.ts`), `settings/itemCategoryForm.test.ts`
+- Phase 19: expense-category departments and the move warning, `kitchenKotPending` / `kotMessage` / row `kotPending` (`billingReducer.test.ts`), and the Day End department rows (`salesRows.test.ts`)
 - `expense/expenseReducer.test.ts` (Phase 18: server categories, picker filter and highlight, quick keys 1–9, note rule, disabled-meanwhile) and `settings/expenseCategoryForm.test.ts`
 - `orders/ordersView.test.ts` (Phase 17: filters and waiter filter, chip counts, peak grouping and expansion, moves, labels, jump targets, settlement wording)
 - `captain/waiterLedgerReducer.test.ts` (Phase 16: selection, ticks across refreshes, panes, new-order flag, `allocate`, `receiveError`; Phase 17 jump focus)

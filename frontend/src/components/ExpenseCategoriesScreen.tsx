@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef, type ReactNode } from 'react'
+import { useCallback, useEffect, useReducer, useRef } from 'react'
 import { ArrowDown, ArrowLeft, ArrowUp, Plus, Tags, WifiOff } from 'lucide-react'
 import { ApiError, api } from '../api/client'
 import type { DepartmentCode, ExpenseCategory } from '../api/types'
@@ -20,6 +20,7 @@ import {
   visibleCategories,
   type CategoryForm,
 } from '../settings/expenseCategoryForm'
+import { CenterNote, IconButton, Toggle } from './settings/SettingsControls'
 import { Kbd, LiveClock } from './ui'
 
 interface State {
@@ -216,7 +217,7 @@ export default function ExpenseCategoriesScreen({ onExit }: { onExit: () => void
         <FlashLine flash={state.flash} />
       </div>
 
-      {state.load === 'loading' && <CenterNote title="Loading categories…" />}
+      {state.load === 'loading' && <CenterNote title="Loading categories…" icon={<Tags className="size-10 text-zinc-500" aria-hidden />} />}
       {state.load === 'offline' && state.categories.length === 0 && <CenterNote title="POS server unreachable" icon={<WifiOff className="size-10 text-rose-400" aria-hidden />} />}
 
       {state.categories.length > 0 && (
@@ -403,46 +404,4 @@ function CategoryModal({
 function DepartmentBadge({ department }: { department: DepartmentCode | null }) {
   const tone = department ? DEPARTMENT_CHIP[department] : 'border-zinc-600 bg-zinc-800 text-zinc-300'
   return <span className={`rounded border px-1.5 py-0.5 text-[11px] font-black uppercase ${tone}`}>{departmentLabel(department)}</span>
-}
-
-function Toggle({ on, onClick, title, hint }: { on: boolean; onClick: () => void; title: string; hint: string }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      onClick={onClick}
-      className={`flex min-h-16 flex-col items-start justify-center rounded-lg border-2 px-4 text-left ${on ? 'border-amber-400 bg-amber-400/15' : 'border-zinc-700 bg-zinc-950'}`}
-    >
-      <span className="flex items-center gap-2 text-lg font-bold">
-        <span className={`inline-block size-4 rounded-full ${on ? 'bg-amber-400' : 'bg-zinc-600'}`} aria-hidden />
-        {title}
-      </span>
-      <span className="text-sm text-zinc-400">{hint}</span>
-    </button>
-  )
-}
-
-function IconButton({ label, disabled, onClick, children }: { label: string; disabled: boolean; onClick: () => void; children: ReactNode }) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      disabled={disabled}
-      onClick={onClick}
-      className={`flex size-12 items-center justify-center rounded-lg border-2 border-zinc-600 hover:border-zinc-300 disabled:cursor-not-allowed disabled:opacity-30 ${FOCUS_RING}`}
-    >
-      {children}
-    </button>
-  )
-}
-
-function CenterNote({ title, icon }: { title: string; icon?: ReactNode }) {
-  return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
-      {icon ?? <Tags className="size-10 text-zinc-500" aria-hidden />}
-      <h2 className="text-2xl font-bold">{title}</h2>
-    </div>
-  )
 }

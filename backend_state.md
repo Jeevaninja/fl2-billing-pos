@@ -1,8 +1,8 @@
 # FL2 POS — Backend State Reference
 
-Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`), Phase 10 master catalog and case-based inwarding (`0009_catalog_case_size`, `CatalogService`; plan `docs/ui/phase10-catalog-case-grn-plan.md`), Phase 11 peak start baseline and Day End sales breakdown (no migration; plan `docs/ui/phase11-peak-day-end-visibility-plan.md`), Phase 12 server-side peak undo (no migration; plan `docs/ui/phase12-billing-speed-plan.md`), Phase 13 Day End tally adjustments and running peak analytics (`0010_tender_adjustments`; plan `docs/ui/phase13-peak-close-tally-plan.md`), Phase 14 bank deposits / cash drops (`0011_bank_deposits`; plan `docs/ui/phase14-bank-deposits-plan.md`), Phase 15 held bills in `/api/context` and per-waiter day stats (no migration; plan `docs/ui/phase15-billing-tabs-waiter-sidebar-plan.md`), Phase 16 waiter ledger, multi-bill and lump-sum waiter settlement and the Day End waiter-balance blocker (no migration; plan `docs/ui/phase16-waiter-ledger-plan.md`), Phase 17 Orders (bill-wise tracking) and DUPLICATE receipt reprints (no migration; plan `docs/ui/phase17-orders-plan.md`), Phase 18 custom expense categories (`0012_expense_categories`; plan `docs/ui/phase18-expense-categories-plan.md`), and Phase 19 departments — unified billing, split ledger (`0013_departments`; plan `docs/ui/phase19-departments-plan.md`). Upcoming phases, not built: `docs/roadmap.md`. Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
+Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`), Phase 10 master catalog and case-based inwarding (`0009_catalog_case_size`, `CatalogService`; plan `docs/ui/phase10-catalog-case-grn-plan.md`), Phase 11 peak start baseline and Day End sales breakdown (no migration; plan `docs/ui/phase11-peak-day-end-visibility-plan.md`), Phase 12 server-side peak undo (no migration; plan `docs/ui/phase12-billing-speed-plan.md`), Phase 13 Day End tally adjustments and running peak analytics (`0010_tender_adjustments`; plan `docs/ui/phase13-peak-close-tally-plan.md`), Phase 14 bank deposits / cash drops (`0011_bank_deposits`; plan `docs/ui/phase14-bank-deposits-plan.md`), Phase 15 held bills in `/api/context` and per-waiter day stats (no migration; plan `docs/ui/phase15-billing-tabs-waiter-sidebar-plan.md`), Phase 16 waiter ledger, multi-bill and lump-sum waiter settlement and the Day End waiter-balance blocker (no migration; plan `docs/ui/phase16-waiter-ledger-plan.md`), Phase 17 Orders (bill-wise tracking) and DUPLICATE receipt reprints (no migration; plan `docs/ui/phase17-orders-plan.md`), Phase 18 custom expense categories (`0012_expense_categories`; plan `docs/ui/phase18-expense-categories-plan.md`), Phase 19 departments — unified billing, split ledger (`0013_departments`; plan `docs/ui/phase19-departments-plan.md`), and Phase 20 custom item categories and the flat catalog (`0014_item_categories`; plan `docs/ui/phase20-item-categories-plan.md`). Upcoming phases, not built: `docs/roadmap.md`. Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
 
-- **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`, `0006_expense_category`, `0007_peak_drawer_cash`, `0008_stock_receipts`, `0009_catalog_case_size`, `0010_tender_adjustments`, `0011_bank_deposits`, `0012_expense_categories`, `0013_departments`.
+- **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`, `0006_expense_category`, `0007_peak_drawer_cash`, `0008_stock_receipts`, `0009_catalog_case_size`, `0010_tender_adjustments`, `0011_bank_deposits`, `0012_expense_categories`, `0013_departments`, `0014_item_categories`.
 - **Money:** `BIGINT` whole paise in SQL, `bigint` in TypeScript (`type Paise = bigint`). No floats anywhere.
 - **Quantities:** `INTEGER` whole sealed bottles (whole units for Ancillary items; Kitchen dishes are not stock-tracked). No ml / peg columns.
 - **Append-only:** DELETE and TRUNCATE are blocked on every domain table. Ledger tables also block UPDATE. Corrections are made with reversing records.
@@ -17,7 +17,8 @@ Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local 
 | `members` | Member register (optional on bills, no KYC gate) | — |
 | `products` | An item: a liquor brand, a kitchen dish or an ancillary good (category: WHISKY, RUM, BEER… FOOD, BEVERAGE, TOBACCO). Phase 19 (0013): `department` (default `LIQUOR`; every size shares it) | `department → departments` |
 | `departments` | Phase 19 (0013). Fixed, read-only list (`code` PK): LIQUOR (BAR, stock-tracked), KITCHEN (KITCHEN station, **not** stock-tracked), ANCILLARY (BAR, stock-tracked). `kot_station`, `tracks_stock`, `sort_order`. UPDATE / DELETE / TRUNCATE → `PS001`; no outbox (seeded on every database) | — |
-| `skus` | One row per size: `FULL`, `HALF`, `QUARTER`, `BEER_650`, `BEER_330`, and `UNIT` (0013, a single-size item; Kitchen items use `FULL` / `HALF` plates or `UNIT`). `price_paise` = default sale price; `case_size` (1–1000, required) and optional `purchase_price_paise` ≥ 0 (0009) | `product_id → products` |
+| `item_categories` | Phase 20 (0014). The manager's catalog groupings in stock-report order: `name` (unique, case-insensitive, ≤ 30), `sort_order`, `is_active`, `default_size_code` (nullable = ask), `default_department`, `system_key` (the seven seeds FULL, HALF, QUARTER, BEER, WINE, FOOD, OTHERS; immutable). Editable master data, no DELETE, outbox on change; disabling one with active items → `PS002` | `default_department → departments` |
+| `skus` | Phase 20: `item_category_id` (NOT NULL; back-filled by `pos_default_item_category`: Kitchen → FOOD, Ancillary → OTHERS, wine → WINE, beer sizes → BEER, Full / Half / Quarter → the same; a SKU inserted without one gets the same default by trigger). One row per size: `FULL`, `HALF`, `QUARTER`, `BEER_650`, `BEER_330`, and `UNIT` (0013, a single-size item; Kitchen items use `FULL` / `HALF` plates or `UNIT`). `price_paise` = default sale price; `case_size` (1–1000, required) and optional `purchase_price_paise` ≥ 0 (0009) | `product_id → products` |
 | `sku_stock` | Cached on-hand bottles, `≥ 0` (trigger-maintained) | `sku_id → skus` (PK) |
 | `stock_movements` | Stock ledger: OPENING, PURCHASE_RECEIPT, SALE, SALE_REVERSAL, ADJUSTMENT. SALE / SALE_REVERSAL are posted only by `bill_items`, PURCHASE_RECEIPT only by `stock_receipt_lines` (0008) | `sku_id → skus`, `business_day_id → business_days`, `bill_item_id → bill_items` (unique), `receipt_line_id → stock_receipt_lines` (unique, set exactly on PURCHASE_RECEIPT rows; 0008) |
 | `stock_receipts` | GRN header: one supplier invoice received on the open day (append-only). `invoice_no` required, `vendor_name` optional; unique per (invoice no, vendor), case- and space-insensitive (0008) | `business_day_id → business_days` (stamped), `received_by_staff_id → staff` |
@@ -74,13 +75,18 @@ UPI is excluded. A peak sale actually paid by UPI makes the drawer lower by that
 - `products` and `skus` stay mutable master rows (UPDATE goes to the outbox; DELETE is still `PS001`). Bill lines snapshot price, code, name and size, so a catalog edit never changes a line already billed.
 - GRN line trigger (extended): a supplied `case_size` must equal the SKU's current one, else `PS002` ("case size for X is now N — re-check the line"). `PurchaseService` also share-locks the SKUs, so a catalog edit can't land mid-receipt.
 - Loose bottles are not stored: `qty − cases × case_size`. `qty` stays the only number the ledger sees.
-- Duplicate product name (case-insensitive), SKU code, barcode or size per product → `PS012`.
+- Duplicate product name (case-insensitive), SKU code, barcode, size per product or item category name → `PS012`.
 
 **Departments (0013):** design in `docs/ui/phase19-departments-plan.md`.
 - **One drawer:** bills, tenders, `pos_day_expected_cash`, the peak functions and the close trigger are untouched. Departments only label lines (and expense categories).
 - **Stock (D2):** `pos_sku_tracks_stock(sku)` reads the product's department. For Kitchen SKUs `bill_items` posts no SALE / SALE_REVERSAL movement, sales need no stock, and any direct movement (OPENING / ADJUSTMENT) or GRN line is refused (`PS002`). Moving a product with stock on hand into an untracked department is `PS002` (`products_department_guard`).
 - **Upgrade:** `products.department` and `bill_items.department` are added with `DEFAULT 'LIQUOR'` by DDL (every existing row was liquor), so no append-only row is updated and totals / expected cash are unchanged (tested from a 0012 database).
 - **KOT ledger:** `kot_tickets` / `kot_ticket_lines` record what each station was sent; `KotService` prints only the pending difference.
+
+**Item categories (0014):** design in `docs/ui/phase20-item-categories-plan.md`.
+- **Flat items (D1):** one item = one SKU in one category; the brand (`products`) is an internal link found or created by name, so codes (`1848-Q`) and names (`1848 — Quarter`) are derived as before.
+- **Size stays (D2):** the category only groups and suggests a size; `size_code` still drives KOT labels, case sizes and excise reports. **Department stays on the brand (D3)**; a category's default department pre-selects it for a new brand.
+- Bills, stock, KOTs and Day End are untouched (tested from a 0013 database).
 
 **Captain orders (0004):**
 - `bills_request_id_unique` (partial unique index) is the idempotency guarantee.
@@ -400,6 +406,7 @@ interface SkuLookup {
   id: string; skuCode: string; barcode: string | null; displayName: string; sizeCode: SizeCode;
   pricePaise: Paise; purchasePricePaise: Paise | null; caseSize: number; onHandQty: number; isActive: boolean;
   department: DepartmentCode; tracksStock: boolean;   // Phase 19: the product's department; false for Kitchen
+  itemCategory: { id: string; name: string };          // Phase 20
 }
 interface MemberSummary { id: string; membershipNo: string; displayName: string; }
 interface WaiterSummary {
@@ -435,6 +442,19 @@ interface ExpenseCategory { id; name; isActive; noteRequired; sortOrder; departm
 - **Order:** `move` swaps `sort_order` with the neighbour, under a table lock.
 - **Renames:** relabel history, because past expenses resolve by id or by legacy code.
 - **Department (Phase 19):** `null` = Shared; an unknown code is a `RangeError`. `CashExpense.category.department` resolves the same way as the name, so changing a category's department moves its history too (the UI warns).
+
+### `ItemCategoryService` (`src/services/item-category.service.ts`, Phase 20)
+
+```ts
+class ItemCategoryService {
+  listCategories(opts?: { includeInactive?: boolean }): Promise<ItemCategory[]>;   // sort_order, then name
+  createCategory(input: { name: string; defaultSizeCode?: SizeCode | null; defaultDepartment?: DepartmentCode }): Promise<ItemCategory>;  // appended last; PS012 duplicate
+  updateCategory(id: string, patch: { name?; defaultSizeCode?: SizeCode | null; defaultDepartment?; isActive?; move?: 'up' | 'down' }): Promise<ItemCategory>;
+}
+interface ItemCategory { id; name; sortOrder; isActive; defaultSizeCode: SizeCode | null; defaultDepartment: DepartmentCode; systemKey: string | null; itemCount /* active items */; onHandQty }
+```
+
+- Names are trimmed and space-collapsed, stored as typed (shown upper-case), at most 30 characters (`RangeError`). Disabling a category with active items is `PS002`; `move` swaps `sort_order` with the neighbour under a table lock.
 
 ### `OrdersQueries` (`src/services/orders.queries.ts`, Phase 17)
 
@@ -512,7 +532,15 @@ class CatalogService {
   updateProduct(productId: string, patch: ProductPatch): Promise<CatalogProduct>;
   addSku(productId: string, input: NewSkuInput & { codePrefix?: string }): Promise<CatalogProduct>;
   updateSku(skuId: string, patch: SkuPatch): Promise<CatalogProduct>;           // returns the whole product
+  // Phase 20 — flat items (the UI uses these; the brand-and-sizes calls above stay for older callers):
+  listItems(filter?: { q?: string; includeInactive?: boolean }): Promise<CatalogItem[]>;   // category sort_order, brand, size
+  getItem(skuId: string): Promise<CatalogItem>;
+  createItem(input: NewItemInput, staffId: string): Promise<CatalogItem>;
+  updateItem(skuId: string, patch: ItemPatch): Promise<CatalogItem>;
 }
+interface CatalogItem extends SkuLookup { productId; brandName; productCategory: ProductCategory; brandActive: boolean; }
+interface NewItemInput { categoryId; name /* brand */; sizeCode? /* default: the category's */; salePricePaise; purchasePricePaise?; caseSize?; barcode?; codePrefix?; openingQty? /* D5 */; department? /* new brands */; productCategory?; }
+interface ItemPatch extends SkuPatch { name?: string; categoryId?: string; }
 
 interface CatalogSku extends SkuLookup { productId: string; }
 interface CatalogProduct { id; name; category: ProductCategory; department: DepartmentCode; isActive: boolean; skus: CatalogSku[] /* FULL → 330 → UNIT */; }
@@ -528,6 +556,8 @@ interface SkuPatch { salePricePaise?: Paise; purchasePricePaise?: Paise | null; 
 - **List:** products by name; without `includeInactive`, inactive products and sizes are left out. `q` matches the name (contains), any SKU code (prefix) or barcode (exact) and returns the whole product.
 - New SKUs start at 0 stock (stock comes only from a GRN); Kitchen SKUs are never stock-tracked. Constants: `DEFAULT_CASE_SIZE`, `MAX_CASE_SIZE`, `SIZE_CODES`, `PRODUCT_CATEGORIES`, `DEPARTMENT_CODES`, `skuCodeFor`, `displayNameFor`.
 - **Department (Phase 19):** an unknown code is a `RangeError`; moving a product with stock on hand to Kitchen is `PS002`. Billed lines keep their snapshot.
+- **`createItem` (Phase 20):** the category must be active (`PS002`); the size defaults to the category's (none → `RangeError` "choose a size"). The brand is found by name (case-insensitive; an inactive one is reactivated) or created with the category's default department and a type from the category (WINE / BEER, Kitchen → FOOD, Ancillary → BEVERAGE, else OTHER). The prefix comes from the brand's SKUs, else the input, else `suggestPrefix(name)`. A size the brand already has is `PS012` (`skus_product_size_unique`). `openingQty` (0–100,000) posts one `OPENING` movement on the open day, stamped with the staff id; refused for Kitchen.
+- **`updateItem` (Phase 20):** a new name moves this item alone to the brand of that name (found or created with the old brand's type and department; `PS012` if it already has the size, `PS002` if the item has stock and the brand is Kitchen); a case-only change renames the brand on every size. `categoryId` must be active. Reactivating an item reactivates its brand. Size and SKU code never change.
 
 ### `CaptainService` (`src/services/captain.service.ts`)
 
@@ -711,6 +741,12 @@ Migrations run on every boot (already-applied ones are skipped).
 | `GET /api/purchases/:receiptId` | | `getReceipt` | 200 `StockReceiptDetail` |
 | `POST /api/purchases` | `{ invoiceNo, vendorName?, lines: [{ skuId, cases, looseBottles?, caseSize, unitCost }] }` or the loose-only `{ skuId, quantity, unitCost }` (`unitCost` in paise, `"0"` allowed) | `recordReceipt(…, cashier)` | 201 `StockReceiptDetail` |
 | `GET /api/departments` | | `listDepartments` (Phase 19) | 200 `Department[]` |
+| `GET /api/item-categories` | `?includeInactive=1` | `listCategories` (Phase 20) | 200 |
+| `POST /api/item-categories` | `{ name, defaultSizeCode? (null = ask), defaultDepartment? }` | `createCategory` (PS012 duplicate) | 201 |
+| `PATCH /api/item-categories/:categoryId` | `{ name?, defaultSizeCode?, defaultDepartment?, isActive?, move? }` | `updateCategory` (PS002 disabling one with items) | 200 |
+| `GET /api/catalog/items` | `?q=&includeInactive=true` | `listItems` (Phase 20) | 200 `CatalogItem[]` |
+| `POST /api/catalog/items` | `{ categoryId, name, sizeCode?, salePrice, purchasePrice?, caseSize?, barcode?, codePrefix?, openingQty?, department?, productCategory? }` | `createItem(…, cashier)` | 201 `CatalogItem` |
+| `PATCH /api/catalog/items/:skuId` | `{ name?, categoryId?, salePrice?, purchasePrice? (null clears), caseSize?, barcode? (null clears), isActive? }` | `updateItem` | 200 `CatalogItem` |
 | `GET /api/catalog` | `?q=&includeInactive=true` | `listCatalog` | 200 `CatalogProduct[]` |
 | `POST /api/catalog/products` | `{ name, category, department? (default LIQUOR), codePrefix, skus: [{ sizeCode, salePrice, purchasePrice?, caseSize, barcode? }] }` | `createProduct` | 201 `CatalogProduct` |
 | `PATCH /api/catalog/products/:productId` | `{ name?, category?, department?, isActive? }` | `updateProduct` | 200 `CatalogProduct` |

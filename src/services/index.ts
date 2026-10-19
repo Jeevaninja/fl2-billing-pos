@@ -5,12 +5,14 @@ export {
   DEFAULT_CASE_SIZE,
   DEPARTMENT_CODES,
   MAX_CASE_SIZE,
+  MAX_OPENING_QTY,
   PRODUCT_CATEGORIES,
   SIZE_CODES,
   displayNameFor,
   skuCodeFor,
+  suggestPrefix,
 } from './catalog.service.js';
-export type { CatalogFilter, CatalogProduct, CatalogSku, Department, NewProductInput, NewSkuInput, ProductCategory, ProductPatch, SkuPatch } from './catalog.service.js';
+export type { CatalogFilter, CatalogItem, CatalogProduct, CatalogSku, Department, ItemPatch, NewItemInput, NewProductInput, NewSkuInput, ProductCategory, ProductPatch, SkuPatch } from './catalog.service.js';
 export { CaptainService, MAX_ORDER_LINES, orderFingerprint } from './captain.service.js';
 export type { OrderLine, OrderRequest, PlacedOrder, WaiterProfile } from './captain.service.js';
 export { KotService } from './kot.service.js';
@@ -38,6 +40,8 @@ export type {
 export { DayEndService, EXPENSE_CATEGORIES } from './day-end.service.js';
 export { cleanCategoryName, ExpenseCategoryService, MAX_CATEGORY_NAME } from './expense-category.service.js';
 export type { ExpenseCategory, ExpenseCategoryPatch, NewExpenseCategory } from './expense-category.service.js';
+export { cleanItemCategoryName, ItemCategoryService, MAX_ITEM_CATEGORY_NAME } from './item-category.service.js';
+export type { ItemCategory, ItemCategoryPatch, NewItemCategory } from './item-category.service.js';
 export type {
   WaiterBalanceBlocker,
   BankDeposit,

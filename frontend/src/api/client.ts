@@ -13,24 +13,25 @@ import type {
   Department,
   DepartmentCode,
   CashExpense,
-  CatalogProduct,
   ExpenseCategory,
   ExpenseCategoryPatch,
   ExpenseEntry,
+  CatalogItem,
+  ItemCategory,
+  ItemCategoryPatch,
+  ItemPatchPayload,
   KotStatus,
+  NewItemPayload,
   MemberSummary,
-  NewProductPayload,
-  NewSkuPayload,
   Paise,
+  SizeCode,
   PeakReconciliation,
   PeakSession,
   PeakStartBaseline,
   PeakUndoResult,
   TenderAdjustment,
-  ProductPatch,
   ReceiptLinePayload,
   SkuLookup,
-  SkuPatchPayload,
   StockReceipt,
   StockReceiptDetail,
   Tender,
@@ -185,12 +186,14 @@ export const api = {
 
   /** Liquors with their sizes; inactive ones only with `includeInactive`. */
   listDepartments: () => call<Department[]>('GET', '/api/departments'),
-  listCatalog: (q: string, includeInactive: boolean) =>
-    call<CatalogProduct[]>('GET', `/api/catalog?q=${encodeURIComponent(q)}&includeInactive=${includeInactive}`),
-  createProduct: (payload: NewProductPayload) => call<CatalogProduct>('POST', '/api/catalog/products', payload),
-  updateProduct: (productId: string, patch: ProductPatch) =>
-    call<CatalogProduct>('PATCH', `/api/catalog/products/${encodeURIComponent(productId)}`, patch),
-  addSku: (productId: string, sku: NewSkuPayload) =>
-    call<CatalogProduct>('POST', `/api/catalog/products/${encodeURIComponent(productId)}/skus`, sku),
-  updateSku: (skuId: string, patch: SkuPatchPayload) => call<CatalogProduct>('PATCH', `/api/catalog/skus/${encodeURIComponent(skuId)}`, patch),
+  listItemCategories: (includeInactive = false) =>
+    call<ItemCategory[]>('GET', `/api/item-categories${includeInactive ? '?includeInactive=1' : ''}`),
+  createItemCategory: (payload: { name: string; defaultSizeCode: SizeCode | null; defaultDepartment: DepartmentCode }) =>
+    call<ItemCategory>('POST', '/api/item-categories', payload),
+  updateItemCategory: (categoryId: string, patch: ItemCategoryPatch) =>
+    call<ItemCategory>('PATCH', `/api/item-categories/${encodeURIComponent(categoryId)}`, patch),
+  /** Every item (inactive included); the Catalog filters and groups client-side. */
+  listItems: () => call<CatalogItem[]>('GET', '/api/catalog/items?includeInactive=true'),
+  createItem: (payload: NewItemPayload) => call<CatalogItem>('POST', '/api/catalog/items', payload),
+  updateItem: (skuId: string, patch: ItemPatchPayload) => call<CatalogItem>('PATCH', `/api/catalog/items/${encodeURIComponent(skuId)}`, patch),
 }

@@ -22,6 +22,7 @@ const TILE_ACCENT: Record<PosActionId, string> = {
   catalog: 'bg-teal-400 text-zinc-950',
   orders: 'bg-cyan-400 text-zinc-950',
   'expense-categories': 'bg-rose-400 text-zinc-950',
+  'item-categories': 'bg-lime-400 text-zinc-950',
   'day-end': 'bg-orange-500 text-zinc-950',
   reports: 'bg-emerald-500 text-zinc-950',
 }
@@ -44,6 +45,7 @@ interface DashboardProps {
   onOpenCatalog: () => void
   onOpenOrders: () => void
   onOpenExpenseCategories: () => void
+  onOpenItemCategories: () => void
 }
 
 const CAPTAIN_COUNT_POLL_MS = 15_000
@@ -105,6 +107,7 @@ export default function Dashboard({
   onOpenCatalog,
   onOpenOrders,
   onOpenExpenseCategories,
+  onOpenItemCategories,
 }: DashboardProps) {
   const [lastAction, setLastAction] = useState<LastAction | null>(null)
   const [status, setStatus] = useState<string | null>(null)
@@ -160,10 +163,14 @@ export default function Dashboard({
         onOpenExpenseCategories()
         return
       }
+      if (id === 'item-categories') {
+        onOpenItemCategories()
+        return
+      }
       runStub(id)
       setLastAction({ id, at: new Date() })
     },
-    [onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd, onOpenExpenses, onOpenBankDeposits, onOpenPurchase, onOpenCatalog, onOpenOrders, onOpenExpenseCategories],
+    [onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd, onOpenExpenses, onOpenBankDeposits, onOpenPurchase, onOpenCatalog, onOpenOrders, onOpenExpenseCategories, onOpenItemCategories],
   )
 
   useGlobalShortcuts(

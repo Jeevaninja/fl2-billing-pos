@@ -455,6 +455,29 @@ describe('local HTTP API', () => {
     expect(await call('PATCH', `/api/expense-categories/${veg.body.id}`, { department: 'BAR' })).toMatchObject({ status: 400 });
   });
 
+  it('Phase 20: item categories and flat items', async () => {
+    const { call } = await start();
+    const list = await call('GET', '/api/item-categories');
+    expect(list.body.map((c: { name: string }) => c.name)).toEqual(['FULL', 'HALF', 'QUARTER', 'BEER', 'WINE', 'FOOD', 'OTHERS']);
+    const quarter = list.body.find((c: { name: string }) => c.name === 'QUARTER');
+
+    const cig = await call('POST', '/api/item-categories', { name: 'CIGARETTES', defaultSizeCode: 'UNIT', defaultDepartment: 'ANCILLARY' });
+    expect(cig).toMatchObject({ status: 201, body: { name: 'CIGARETTES', sortOrder: 8, defaultDepartment: 'ANCILLARY' } });
+    expect(await call('PATCH', `/api/item-categories/${cig.body.id}`, { move: 'up', defaultSizeCode: null })).toMatchObject({ status: 200, body: { sortOrder: 7, defaultSizeCode: null } });
+    expect(await call('POST', '/api/item-categories', { name: 'cigarettes' })).toMatchObject({ status: 409, body: { error: { code: 'PS012' } } });
+    expect(await call('PATCH', `/api/item-categories/${quarter.id}`, { isActive: false })).toMatchObject({ status: 409, body: { error: { code: 'PS002' } } });
+
+    const item = await call('POST', '/api/catalog/items', { categoryId: quarter.id, name: '1848', salePrice: '39000', openingQty: 24 });
+    expect(item).toMatchObject({ status: 201, body: { skuCode: '1848-Q', displayName: '1848 — Quarter', onHandQty: 24, itemCategory: { name: 'QUARTER' } } });
+    expect(await call('POST', '/api/catalog/items', { categoryId: quarter.id, name: '1848', salePrice: '39000' })).toMatchObject({ status: 409, body: { error: { code: 'PS012' } } });
+    expect(await call('POST', '/api/catalog/items', { categoryId: quarter.id, name: 'X', salePrice: '100', openingQty: -1 })).toMatchObject({ status: 400 });
+    const edited = await call('PATCH', `/api/catalog/items/${item.body.id}`, { salePrice: '40000', barcode: '8901848' });
+    expect(edited).toMatchObject({ status: 200, body: { pricePaise: '40000', barcode: '8901848' } });
+    const found = await call('GET', '/api/catalog/items?q=1848');
+    expect(found.body.map((i: { skuCode: string }) => i.skuCode)).toEqual(['1848-Q']);
+    expect((await call('GET', '/api/skus/lookup?code=8901848')).body).toMatchObject({ id: item.body.id, itemCategory: { name: 'QUARTER' } });
+  });
+
   it('searches members and returns 404 for unknown SKUs and bills', async () => {
     const { db, call } = await start();
     await db.query(`INSERT INTO members (membership_no, display_name) VALUES ('M-1', 'Asha'), ('M-2', 'Ravi')`);

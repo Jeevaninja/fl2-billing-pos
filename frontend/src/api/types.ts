@@ -217,6 +217,8 @@ export interface SkuLookup {
   department: DepartmentCode
   /** false for Kitchen items: no stock is counted or needed. */
   tracksStock: boolean
+  /** Phase 20: the catalog grouping (FULL, QUARTER, BEER…). */
+  itemCategory: { id: string; name: string }
 }
 
 export interface BillLine {
@@ -511,46 +513,59 @@ export interface ReceiptLinePayload {
 export const PRODUCT_CATEGORIES = ['WHISKY', 'RUM', 'VODKA', 'BRANDY', 'GIN', 'WINE', 'BEER', 'OTHER', 'FOOD', 'BEVERAGE', 'TOBACCO'] as const
 export type ProductCategory = (typeof PRODUCT_CATEGORIES)[number]
 
-export interface CatalogSku extends SkuLookup {
-  productId: string
-}
+// ── Item categories and flat items (Phase 20) ───────────────────────────────
 
-export interface CatalogProduct {
+export interface ItemCategory {
   id: string
   name: string
-  category: ProductCategory
-  department: DepartmentCode
+  sortOrder: number
   isActive: boolean
-  /** Ordered FULL → HALF → QUARTER → 650 → 330 → UNIT. */
-  skus: CatalogSku[]
+  /** Pre-fills a new item's size; null = always ask. */
+  defaultSizeCode: SizeCode | null
+  /** Pre-fills a new brand's department. */
+  defaultDepartment: DepartmentCode
+  /** The seeded category (FULL … OTHERS); null for categories added since. */
+  systemKey: string | null
+  itemCount: number
+  onHandQty: number
 }
 
-/** A size on a new liquor (or one added later). Prices are whole paise. */
-export interface NewSkuPayload {
+export interface ItemCategoryPatch {
+  name?: string
+  defaultSizeCode?: SizeCode | null
+  defaultDepartment?: DepartmentCode
+  isActive?: boolean
+  move?: 'up' | 'down'
+}
+
+/** One item = one SKU in one category; the brand is found or created by name. */
+export interface CatalogItem extends SkuLookup {
+  productId: string
+  brandName: string
+  productCategory: ProductCategory
+  brandActive: boolean
+}
+
+export interface NewItemPayload {
+  categoryId: string
+  name: string
   sizeCode: SizeCode
   salePrice: Paise
   purchasePrice: Paise | null
   caseSize: number
   barcode: string | null
-}
-
-export interface NewProductPayload {
-  name: string
-  category: ProductCategory
-  department: DepartmentCode
-  codePrefix: string
-  skus: NewSkuPayload[]
-}
-
-export interface ProductPatch {
-  name?: string
-  category?: ProductCategory
+  /** Sent only for a new brand. */
+  codePrefix?: string
+  /** Optional opening stock (whole bottles); never for Kitchen items. */
+  openingQty?: number
+  /** New brands only. */
   department?: DepartmentCode
-  isActive?: boolean
 }
 
 /** `null` clears the purchase price or barcode; a missing key leaves the field as it is. */
-export interface SkuPatchPayload {
+export interface ItemPatchPayload {
+  name?: string
+  categoryId?: string
   salePrice?: Paise
   purchasePrice?: Paise | null
   caseSize?: number

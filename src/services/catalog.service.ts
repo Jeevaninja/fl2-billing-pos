@@ -5,10 +5,11 @@
  * so a price edit never changes a bill already rung up. Duplicates surface as PS012.
  */
 import type { SqlClient, SqlDatabase } from '../db/client.js';
-import { InactiveError, NotFoundError, withPosErrors } from '../db/errors.js';
+import { InactiveError, NotFoundError, PosError, PosErrorCode, withPosErrors } from '../db/errors.js';
 import { assertPaise, type Paise, paiseParam } from '../domain/money.js';
 import type { DepartmentCode, KotStation, SizeCode } from '../domain/types.js';
-import { mapSkuLookup, type SkuLookup, type SkuLookupRow } from './counter-queries.js';
+import { mapSkuLookup, SKU_COLUMNS, SKU_FROM, type SkuLookup, type SkuLookupRow } from './counter-queries.js';
+import { getItemCategory } from './item-category.service.js';
 import { maybeOne, one } from './rows.js';
 
 export const PRODUCT_CATEGORIES = ['WHISKY', 'RUM', 'VODKA', 'BRANDY', 'GIN', 'WINE', 'BEER', 'OTHER', 'FOOD', 'BEVERAGE', 'TOBACCO'] as const;
@@ -91,6 +92,54 @@ export interface CatalogFilter {
   /** Product name contains, SKU code prefix, or exact barcode. */
   q?: string | undefined;
   includeInactive?: boolean | undefined;
+}
+
+/** Phase 20: one item = one SKU in one category; its brand (product) is found or created by name. */
+export interface CatalogItem extends SkuLookup {
+  productId: string;
+  /** The brand name (shown under the category header; the display name adds the size). */
+  brandName: string;
+  /** The brand's liquor type (Whisky, Rum…). */
+  productCategory: ProductCategory;
+  /** The brand is active (an item of an inactive brand can't be sold). */
+  brandActive: boolean;
+}
+
+export interface NewItemInput {
+  categoryId: string;
+  /** The brand name, e.g. "1848"; an existing brand (any case) gets this item as another size. */
+  name: string;
+  /** Default: the category's default size. */
+  sizeCode?: SizeCode | undefined;
+  salePricePaise: Paise;
+  purchasePricePaise?: Paise | null | undefined;
+  /** Default: by size (Kitchen 1). */
+  caseSize?: number | undefined;
+  barcode?: string | null | undefined;
+  /** Default: the brand's existing prefix, else suggested from the name. */
+  codePrefix?: string | undefined;
+  /** D5: optional opening stock, posted once as an OPENING movement (tracked departments only). */
+  openingQty?: number | undefined;
+  /** New brands only. Default: the category's default department. */
+  department?: DepartmentCode | undefined;
+  /** New brands only. Default: from the category (WINE, BEER, FOOD…), else OTHER. */
+  productCategory?: ProductCategory | undefined;
+}
+
+export interface ItemPatch extends SkuPatch {
+  /** Moves this item to the brand of that name (found or created); a case-only change renames the brand. */
+  name?: string | undefined;
+  categoryId?: string | undefined;
+}
+
+export const MAX_OPENING_QTY = 100_000;
+
+/** Suggested SKU code prefix: the first two letters of the first two words, or the first four of one ("Royal Stag" → ROST). */
+export function suggestPrefix(name: string): string {
+  const words = name.toUpperCase().replace(/[^A-Z0-9 ]/g, '').split(/\s+/).filter(Boolean);
+  if (words.length === 0) return '';
+  const prefix = words.length === 1 ? words[0]!.slice(0, 4) : words.slice(0, 2).map((w) => w.slice(0, 2)).join('');
+  return prefix.slice(0, 10);
 }
 
 export function skuCodeFor(prefix: string, size: SizeCode): string {
@@ -181,10 +230,12 @@ interface CatalogRow extends SkuLookupRow {
 const CATALOG_SELECT = `
   SELECT p.id AS product_id, p.name AS product_name, p.category, p.department AS product_department, p.is_active AS product_active,
          k.id, k.sku_code, k.barcode, k.display_name, k.size_code, k.price_paise, k.purchase_price_paise,
-         k.case_size, k.is_active, coalesce(s.on_hand_qty, 0) AS on_hand_qty, p.department, d.tracks_stock
+         k.case_size, k.is_active, coalesce(s.on_hand_qty, 0) AS on_hand_qty, p.department, d.tracks_stock,
+         k.item_category_id, ic.name AS item_category_name
     FROM products p
     JOIN departments d ON d.code = p.department
     LEFT JOIN skus k ON k.product_id = p.id
+    LEFT JOIN item_categories ic ON ic.id = k.item_category_id
     LEFT JOIN sku_stock s ON s.sku_id = k.id`;
 const CATALOG_ORDER = `
   ORDER BY lower(p.name), p.id,
@@ -351,45 +402,273 @@ export class CatalogService {
    * Returns the whole liquor.
    */
   async updateSku(skuId: string, patch: SkuPatch): Promise<CatalogProduct> {
-    if (patch.salePricePaise !== undefined) assertPaise(patch.salePricePaise, 'salePricePaise');
-    if (patch.purchasePricePaise !== undefined && patch.purchasePricePaise !== null) {
-      assertPaise(patch.purchasePricePaise, 'purchasePricePaise', { allowZero: true });
-    }
-    if (patch.caseSize !== undefined) checkCaseSize(patch.caseSize);
-    const barcode = patch.barcode === undefined ? undefined : checkBarcode(patch.barcode, 'barcode');
-
+    const barcode = checkSkuPatch(patch);
     return withPosErrors(() =>
       this.db.transaction(async (tx) => {
-        const current = await maybeOne<{ product_id: string; product_name: string; product_active: boolean }>(
-          tx,
-          `SELECT k.product_id, p.name AS product_name, p.is_active AS product_active
-             FROM skus k JOIN products p ON p.id = k.product_id
-            WHERE k.id = $1
-              FOR UPDATE OF k`,
-          [skuId],
-        );
-        if (!current) throw new NotFoundError('sku', skuId);
+        const current = await lockSku(tx, skuId);
         if (patch.isActive === true && !current.product_active) {
           throw new InactiveError('product', current.product_id, current.product_name);
         }
-        const sets: string[] = [];
-        const params: unknown[] = [skuId];
-        const set = (column: string, value: unknown) => {
-          params.push(value);
-          sets.push(`${column} = $${params.length}`);
-        };
-        if (patch.salePricePaise !== undefined) set('price_paise', paiseParam(patch.salePricePaise));
-        if (patch.purchasePricePaise !== undefined) {
-          set('purchase_price_paise', patch.purchasePricePaise === null ? null : paiseParam(patch.purchasePricePaise));
-        }
-        if (patch.caseSize !== undefined) set('case_size', patch.caseSize);
-        if (barcode !== undefined) set('barcode', barcode);
-        if (patch.isActive !== undefined) set('is_active', patch.isActive);
-        if (sets.length > 0) await tx.query(`UPDATE skus SET ${sets.join(', ')} WHERE id = $1`, params);
+        await applySkuFields(tx, skuId, patch, barcode);
         return loadProduct(tx, current.product_id);
       }),
     );
   }
+
+  // ── Phase 20: flat items (one SKU in one category; the brand is an internal link) ──
+
+  /**
+   * Every item in report order: category `sort_order`, then brand name, then size. Without
+   * `includeInactive`, inactive items (and items of an inactive brand) are left out. A query matches
+   * the brand or display name (contains), the SKU code (prefix) or the barcode (exact), across all
+   * categories.
+   */
+  async listItems(filter: CatalogFilter = {}): Promise<CatalogItem[]> {
+    const text = filter.q?.trim() ?? '';
+    const { rows } = await this.db.query<ItemRow>(
+      `${ITEM_SELECT}
+        WHERE ($1 OR (k.is_active AND p.is_active))
+          AND ($2 = '' OR k.barcode = $2 OR k.sku_code ILIKE $3 || '%' OR p.name ILIKE '%' || $3 || '%' OR k.display_name ILIKE '%' || $3 || '%')
+        ORDER BY ic.sort_order, lower(ic.name), lower(p.name),
+                 array_position(ARRAY['FULL', 'HALF', 'QUARTER', 'BEER_650', 'BEER_330', 'UNIT'], k.size_code)`,
+      [filter.includeInactive === true, text, likeLiteral(text)],
+    );
+    return rows.map(mapItem);
+  }
+
+  async getItem(skuId: string): Promise<CatalogItem> {
+    return loadItem(this.db, skuId);
+  }
+
+  /**
+   * Creates one item inside a category (D1). The brand is found by name (any case) or created with
+   * the category's default department and type; an existing brand that already has this size is
+   * PS012. `openingQty` posts one OPENING movement (D5), refused for an untracked (Kitchen) item.
+   */
+  async createItem(input: NewItemInput, staffId: string): Promise<CatalogItem> {
+    const name = checkName(input.name);
+    const given = input.codePrefix === undefined || input.codePrefix.trim() === '' ? undefined : checkPrefix(input.codePrefix);
+    if (input.sizeCode !== undefined) checkSize(input.sizeCode, 'sizeCode');
+    assertPaise(input.salePricePaise, 'salePricePaise');
+    const purchase = checkPurchasePrice(input.purchasePricePaise, 'purchasePricePaise');
+    if (input.caseSize !== undefined) checkCaseSize(input.caseSize);
+    const barcode = checkBarcode(input.barcode, 'barcode');
+    const opening = input.openingQty ?? 0;
+    if (!Number.isSafeInteger(opening) || opening < 0 || opening > MAX_OPENING_QTY) {
+      throw new RangeError(`openingQty must be a whole number of bottles from 0 to ${MAX_OPENING_QTY}`);
+    }
+    const department = input.department === undefined ? undefined : checkDepartment(input.department);
+    const type = input.productCategory === undefined ? undefined : checkCategory(input.productCategory);
+
+    return withPosErrors(() =>
+      this.db.transaction(async (tx) => {
+        const category = await getItemCategory(tx, input.categoryId);
+        if (!category.isActive) throw new PosError(PosErrorCode.ILLEGAL_TRANSITION, `item category ${category.name} is disabled`);
+        const sizeCode = input.sizeCode ?? category.defaultSizeCode;
+        if (sizeCode === null) throw new RangeError(`choose a size: ${category.name} has no default size`);
+
+        type BrandRow = { id: string; name: string; is_active: boolean; department: DepartmentCode };
+        let brand = await maybeOne<BrandRow>(
+          tx,
+          `SELECT id, name, is_active, department FROM products WHERE lower(name) = lower($1) FOR UPDATE`,
+          [name],
+        );
+        if (!brand) {
+          const dept = department ?? category.defaultDepartment;
+          brand = await one<BrandRow>(
+            tx,
+            `INSERT INTO products (name, category, department) VALUES ($1, $2, $3) RETURNING id, name, is_active, department`,
+            [name, type ?? typeForCategory(category.systemKey, dept), dept],
+          );
+        } else if (!brand.is_active) {
+          // The flat catalog has no brand screen: adding an item brings its brand back.
+          await tx.query(`UPDATE products SET is_active = true WHERE id = $1`, [brand.id]);
+        }
+
+        let prefix = given;
+        if (prefix === undefined) {
+          const sibling = await maybeOne<{ sku_code: string }>(tx, `SELECT sku_code FROM skus WHERE product_id = $1 ORDER BY created_at LIMIT 1`, [brand.id]);
+          const dash = sibling?.sku_code.lastIndexOf('-') ?? -1;
+          prefix = sibling && dash > 0 ? sibling.sku_code.slice(0, dash) : checkPrefix(suggestPrefix(name).padEnd(2, 'X'));
+        }
+        const tracks = (await one<{ tracks_stock: boolean }>(tx, `SELECT tracks_stock FROM departments WHERE code = $1`, [brand.department])).tracks_stock;
+        if (opening > 0 && !tracks) throw new RangeError(`${name} is a Kitchen item: it has no stock to open`);
+
+        const skuId = await insertSku(
+          tx,
+          brand.id,
+          brand.name,
+          prefix,
+          {
+            sizeCode,
+            salePricePaise: input.salePricePaise,
+            purchasePricePaise: purchase,
+            caseSize: input.caseSize ?? (tracks ? DEFAULT_CASE_SIZE[sizeCode] : 1),
+            barcode,
+          },
+          category.id,
+        );
+        if (opening > 0) {
+          await tx.query(
+            `INSERT INTO stock_movements (sku_id, business_day_id, movement_type, qty_delta, created_by_staff_id)
+             VALUES ($1, (SELECT id FROM business_days WHERE status = 'OPEN'), 'OPENING', $2, $3)`,
+            [skuId, opening, staffId],
+          );
+        }
+        return loadItem(tx, skuId);
+      }),
+    );
+  }
+
+  /**
+   * Edits one item. A new name moves this item alone to the brand of that name (found or created,
+   * keeping the old brand's department and type); a case-only change renames the brand itself. The
+   * size and SKU code never change. Reactivating an item reactivates its brand.
+   */
+  async updateItem(skuId: string, patch: ItemPatch): Promise<CatalogItem> {
+    const barcode = checkSkuPatch(patch);
+    const name = patch.name === undefined ? undefined : checkName(patch.name);
+
+    return withPosErrors(() =>
+      this.db.transaction(async (tx) => {
+        const current = await lockSku(tx, skuId);
+
+        if (name !== undefined && name !== current.product_name) {
+          if (name.toLowerCase() === current.product_name.toLowerCase()) {
+            await renameBrand(tx, current.product_id, name);
+          } else {
+            await moveToBrand(tx, skuId, current, name);
+          }
+        }
+        if (patch.categoryId !== undefined) {
+          const category = await getItemCategory(tx, patch.categoryId);
+          if (!category.isActive) throw new PosError(PosErrorCode.ILLEGAL_TRANSITION, `item category ${category.name} is disabled`);
+          await tx.query(`UPDATE skus SET item_category_id = $2 WHERE id = $1`, [skuId, category.id]);
+        }
+        if (patch.isActive === true) {
+          await tx.query(`UPDATE products SET is_active = true WHERE id = (SELECT product_id FROM skus WHERE id = $1) AND NOT is_active`, [skuId]);
+        }
+        await applySkuFields(tx, skuId, patch, barcode);
+        return loadItem(tx, skuId);
+      }),
+    );
+  }
+}
+
+// ── Item helpers ──
+
+interface ItemRow extends SkuLookupRow {
+  product_id: string;
+  brand_name: string;
+  product_category: ProductCategory;
+  brand_active: boolean;
+}
+
+const ITEM_SELECT = `
+  SELECT ${SKU_COLUMNS}, k.product_id, p.name AS brand_name, p.category AS product_category, p.is_active AS brand_active
+    FROM ${SKU_FROM}`;
+
+function mapItem(r: ItemRow): CatalogItem {
+  return { ...mapSkuLookup(r), productId: r.product_id, brandName: r.brand_name, productCategory: r.product_category, brandActive: r.brand_active };
+}
+
+async function loadItem(db: SqlClient, skuId: string): Promise<CatalogItem> {
+  const row = await maybeOne<ItemRow>(db, `${ITEM_SELECT} WHERE k.id = $1`, [skuId]);
+  if (!row) throw new NotFoundError('sku', skuId);
+  return mapItem(row);
+}
+
+/** A new brand's liquor type, from its category: WINE / BEER as named, Kitchen → FOOD, Ancillary → BEVERAGE. */
+function typeForCategory(systemKey: string | null, department: DepartmentCode): ProductCategory {
+  if (systemKey === 'WINE') return 'WINE';
+  if (systemKey === 'BEER') return 'BEER';
+  if (department === 'KITCHEN') return 'FOOD';
+  if (department === 'ANCILLARY') return 'BEVERAGE';
+  return 'OTHER';
+}
+
+interface LockedSku {
+  product_id: string;
+  product_name: string;
+  product_active: boolean;
+  size_code: SizeCode;
+  on_hand_qty: number;
+}
+
+async function lockSku(tx: SqlClient, skuId: string): Promise<LockedSku> {
+  const current = await maybeOne<LockedSku>(
+    tx,
+    `SELECT k.product_id, p.name AS product_name, p.is_active AS product_active, k.size_code, coalesce(s.on_hand_qty, 0) AS on_hand_qty
+       FROM skus k JOIN products p ON p.id = k.product_id LEFT JOIN sku_stock s ON s.sku_id = k.id
+      WHERE k.id = $1
+        FOR UPDATE OF k`,
+    [skuId],
+  );
+  if (!current) throw new NotFoundError('sku', skuId);
+  return current;
+}
+
+/** Validates a SKU patch before any write; returns the cleaned barcode (undefined = unchanged). */
+function checkSkuPatch(patch: SkuPatch): string | null | undefined {
+  if (patch.salePricePaise !== undefined) assertPaise(patch.salePricePaise, 'salePricePaise');
+  if (patch.purchasePricePaise !== undefined && patch.purchasePricePaise !== null) {
+    assertPaise(patch.purchasePricePaise, 'purchasePricePaise', { allowZero: true });
+  }
+  if (patch.caseSize !== undefined) checkCaseSize(patch.caseSize);
+  return patch.barcode === undefined ? undefined : checkBarcode(patch.barcode, 'barcode');
+}
+
+async function applySkuFields(tx: SqlClient, skuId: string, patch: SkuPatch, barcode: string | null | undefined): Promise<void> {
+  const sets: string[] = [];
+  const params: unknown[] = [skuId];
+  const set = (column: string, value: unknown) => {
+    params.push(value);
+    sets.push(`${column} = $${params.length}`);
+  };
+  if (patch.salePricePaise !== undefined) set('price_paise', paiseParam(patch.salePricePaise));
+  if (patch.purchasePricePaise !== undefined) {
+    set('purchase_price_paise', patch.purchasePricePaise === null ? null : paiseParam(patch.purchasePricePaise));
+  }
+  if (patch.caseSize !== undefined) set('case_size', patch.caseSize);
+  if (barcode !== undefined) set('barcode', barcode);
+  if (patch.isActive !== undefined) set('is_active', patch.isActive);
+  if (sets.length > 0) await tx.query(`UPDATE skus SET ${sets.join(', ')} WHERE id = $1`, params);
+}
+
+/** Renames a brand (e.g. a case fix) and re-derives every size's display name. */
+async function renameBrand(tx: SqlClient, productId: string, name: string): Promise<void> {
+  await tx.query(`UPDATE products SET name = $2 WHERE id = $1`, [productId, name]);
+  const { rows } = await tx.query<{ id: string; size_code: SizeCode }>(`SELECT id, size_code FROM skus WHERE product_id = $1`, [productId]);
+  for (const sku of rows) await tx.query(`UPDATE skus SET display_name = $2 WHERE id = $1`, [sku.id, displayNameFor(name, sku.size_code)]);
+}
+
+/**
+ * Re-links one item to another brand (found by name, else created with the old brand's type and
+ * department). PS012 if that brand already has this size; PS002 if the item has stock and the target
+ * brand is untracked (Kitchen).
+ */
+async function moveToBrand(tx: SqlClient, skuId: string, current: LockedSku, name: string): Promise<void> {
+  type TargetRow = { id: string; name: string; tracks_stock: boolean };
+  let target = await maybeOne<TargetRow>(
+    tx,
+    `SELECT p.id, p.name, d.tracks_stock FROM products p JOIN departments d ON d.code = p.department WHERE lower(p.name) = lower($1) FOR UPDATE OF p`,
+    [name],
+  );
+  if (!target) {
+    target = await one<TargetRow>(
+      tx,
+      `INSERT INTO products (name, category, department)
+       SELECT $1, category, department FROM products WHERE id = $2
+       RETURNING id, name, (SELECT tracks_stock FROM departments WHERE code = products.department) AS tracks_stock`,
+      [name, current.product_id],
+    );
+  } else {
+    await tx.query(`UPDATE products SET is_active = true WHERE id = $1 AND NOT is_active`, [target.id]);
+  }
+  if (!target.tracks_stock && current.on_hand_qty !== 0) {
+    throw new PosError(PosErrorCode.ILLEGAL_TRANSITION, `${target.name} is a Kitchen brand; this item still has ${current.on_hand_qty} on hand`);
+  }
+  await tx.query(`UPDATE skus SET product_id = $2, display_name = $3 WHERE id = $1`, [skuId, target.id, displayNameFor(target.name, current.size_code)]);
 }
 
 async function insertSku(
@@ -398,10 +677,12 @@ async function insertSku(
   productName: string,
   prefix: string,
   sku: ReturnType<typeof checkNewSku>,
-): Promise<void> {
-  await tx.query(
-    `INSERT INTO skus (product_id, sku_code, barcode, size_code, display_name, price_paise, purchase_price_paise, case_size)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+  itemCategoryId: string | null = null,
+): Promise<string> {
+  const { id } = await one<{ id: string }>(
+    tx,
+    `INSERT INTO skus (product_id, sku_code, barcode, size_code, display_name, price_paise, purchase_price_paise, case_size, item_category_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
     [
       productId,
       skuCodeFor(prefix, sku.sizeCode),
@@ -411,6 +692,8 @@ async function insertSku(
       paiseParam(sku.salePricePaise),
       sku.purchasePricePaise === null ? null : paiseParam(sku.purchasePricePaise),
       sku.caseSize,
+      itemCategoryId,
     ],
   );
+  return id;
 }

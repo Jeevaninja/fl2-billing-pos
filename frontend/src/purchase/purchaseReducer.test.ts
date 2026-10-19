@@ -31,6 +31,7 @@ function sku(over: Partial<SkuLookup> = {}): SkuLookup {
     isActive: true,
     department: 'LIQUOR',
     tracksStock: true,
+    itemCategory: { id: 'c-full', name: 'FULL' },
     ...over,
   }
 }

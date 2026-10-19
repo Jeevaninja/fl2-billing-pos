@@ -1,68 +1,48 @@
 import { useCallback, useEffect, useReducer, useRef, type ReactNode } from 'react'
-import { ArrowLeft, Boxes, Pencil, Plus, RefreshCw, Search, WifiOff } from 'lucide-react'
+import { ArrowLeft, Pencil, Plus, RefreshCw, Search, WifiOff } from 'lucide-react'
 import { ApiError, api } from '../api/client'
-import { PRODUCT_CATEGORIES, type CatalogProduct, type DepartmentCode, type ProductCategory } from '../api/types'
+import type { CatalogItem, DepartmentCode, ItemCategory } from '../api/types'
 import { FlashLine } from '../billing/BillingPanels'
 import { counterErrorMessage } from '../billing/errors'
 import { Modal } from '../billing/Modal'
 import {
-  addSkuPayload,
   catalogReducer,
   catalogRows,
   conflictField,
   deactivates,
+  effectiveDepartment,
+  existingBrand,
   formError,
   initialCatalogState,
-  newProductPayload,
-  productPatch,
-  sizesFor,
+  itemPatch,
+  newItemPayload,
+  selectedItem,
+  sizeChoices,
   skuCodePreview,
-  skuPatch,
-  type AddSkuForm,
-  type CatalogForm,
+  type CatalogState,
   type ConflictField,
-  type EditProductForm,
-  type EditSkuForm,
-  type FormField,
-  type NewProductForm,
-  type SizeFields,
+  type EditItemForm,
+  type ItemField,
+  type ItemForm,
+  type NewItemForm,
 } from '../catalog/catalogReducer'
 import { beep } from '../lib/beep'
 import { formatPaise } from '../lib/money'
 import { DEPARTMENT_CHIP, DEPARTMENT_NAME, DEPARTMENT_ORDER, FOCUS_RING, keepFocus, sizeNameFor } from '../lib/ui'
 import { Kbd, LiveClock } from './ui'
 
-const SEARCH_DEBOUNCE_MS = 150
-
-const CATEGORY_LABEL: Record<ProductCategory, string> = {
-  WHISKY: 'Whisky',
-  RUM: 'Rum',
-  VODKA: 'Vodka',
-  BRANDY: 'Brandy',
-  GIN: 'Gin',
-  WINE: 'Wine',
-  BEER: 'Beer',
-  OTHER: 'Other',
-  FOOD: 'Food',
-  BEVERAGE: 'Beverage',
-  TOBACCO: 'Tobacco',
-}
-
-const DEPARTMENT_HINT: Record<DepartmentCode, string> = {
-  LIQUOR: 'Sealed bottles · stock-tracked · KOT to the bar',
-  KITCHEN: 'Dishes · not stock-tracked · KOT to the kitchen',
-  ANCILLARY: 'Soda, water, cigarettes · stock-tracked · KOT to the bar',
-}
-
 interface CatalogScreenProps {
   onExit: () => void
 }
 
+const GRID = 'grid grid-cols-[7.5rem_1fr_9rem_8rem_8rem_4.5rem_6.5rem_6rem_3.5rem] items-center gap-3'
+
 /**
- * Inventory Catalog: create and edit items (liquors, kitchen dishes, ancillary goods), their sizes,
- * sale and purchase prices and case sizes, and each item's P&L department (Phase 19). ↑/↓ move
- * through the list, Enter edits the selected item or size, Ins adds an item, Esc clears the search
- * or leaves. Nothing is deleted: an item or size is deactivated instead.
+ * Inventory Catalog (Phase 20): items listed under their item category, like the TASMAC / FL2 stock
+ * report — a FULL header with every 750 ml brand, then HALF, QUARTER, BEER… Search filters every
+ * category at once. Ins adds an item straight into a category; Enter edits the highlighted one.
+ * Nothing is deleted: an item is deactivated instead. Stock changes only through Purchase (GRN),
+ * apart from an optional opening stock when an item is created.
  */
 export default function CatalogScreen({ onExit }: CatalogScreenProps) {
   const [state, dispatch] = useReducer(catalogReducer, initialCatalogState)
@@ -78,83 +58,60 @@ export default function CatalogScreen({ onExit }: CatalogScreenProps) {
     dispatch({ type: 'flash', kind, text })
   }, [])
 
-  const load = useCallback(async (query: string, includeInactive: boolean) => {
+  const load = useCallback(async () => {
     try {
-      dispatch({ type: 'loaded', products: await api.listCatalog(query, includeInactive), query, includeInactive })
+      const [items, categories] = await Promise.all([api.listItems(), api.listItemCategories(true)])
+      dispatch({ type: 'loaded', items, categories })
     } catch (err) {
       dispatch({ type: 'failed', message: counterErrorMessage(err) })
     }
   }, [])
 
-  // (Re)load whenever the search or the inactive filter changes; typing is debounced.
-  const { query, includeInactive } = state
   useEffect(() => {
-    const timer = setTimeout(() => void load(query.trim(), includeInactive), SEARCH_DEBOUNCE_MS)
-    return () => clearTimeout(timer)
-  }, [query, includeInactive, load])
-
-  useEffect(() => {
+    void load()
     searchRef.current?.focus()
-  }, [])
+  }, [load])
 
-  // Keep the selected row in view as ↑/↓ move it.
+  const highlighted = selectedItem(state)
+  // Keep the highlighted row in view as ↑/↓ move it.
   useEffect(() => {
     listRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' })
-  }, [state.selected])
+  }, [highlighted?.id])
 
   const save = useCallback(async () => {
     const current = stateRef.current
     const form = current.form
     if (!form || current.submitting) return
-    const error = formError(form)
+    const error = formError(current, form)
     if (error) {
       flash('error', error)
       return
     }
-    let request: Promise<CatalogProduct>
-    let done: (p: CatalogProduct) => string
-    switch (form.kind) {
-      case 'newProduct':
-        request = api.createProduct(newProductPayload(form)!)
-        done = (p) =>
-          `Added ${p.name} · ${p.skus.length} size${p.skus.length === 1 ? '' : 's'} · ${
-            p.department === 'KITCHEN' ? 'Kitchen items sell without stock' : 'at 0 stock — receive them through Purchase'
-          }`
-        break
-      case 'editProduct': {
-        const patch = productPatch(form)
-        if (typeof patch === 'string' || Object.keys(patch).length === 0) {
-          dispatch({ type: 'close' })
-          return
-        }
-        request = api.updateProduct(form.product.id, patch)
-        done = (p) => (patch.isActive === false ? `Deactivated ${p.name} and its sizes` : `Saved ${p.name}`)
-        break
+    let request: Promise<CatalogItem>
+    let done: (item: CatalogItem) => string
+    if (form.kind === 'new') {
+      const payload = newItemPayload(form, current.items, current.categories)
+      if (typeof payload === 'string') return
+      request = api.createItem(payload)
+      done = (item) =>
+        `Added ${item.displayName} to ${item.itemCategory.name}${
+          !item.tracksStock ? ' · Kitchen items sell without stock' : payload.openingQty ? ` · ${payload.openingQty} opening stock` : ' · receive stock through Purchase'
+        }`
+    } else {
+      const patch = itemPatch(form, current.categories)
+      if (typeof patch === 'string' || Object.keys(patch).length === 0) {
+        dispatch({ type: 'close' })
+        return
       }
-      case 'addSku': {
-        const payload = addSkuPayload(form)
-        if (typeof payload === 'string') return
-        request = api.addSku(form.product.id, payload)
-        done = (p) => `Added ${sizeNameFor(payload.sizeCode, p.department)} to ${p.name}`
-        break
-      }
-      case 'editSku': {
-        const patch = skuPatch(form)
-        if (typeof patch === 'string' || Object.keys(patch).length === 0) {
-          dispatch({ type: 'close' })
-          return
-        }
-        request = api.updateSku(form.sku.id, patch)
-        done = () => `Saved ${form.sku.skuCode}`
-        break
-      }
+      request = api.updateItem(form.item.id, patch)
+      done = (item) => (patch.isActive === false ? `Deactivated ${item.displayName}` : `Saved ${item.displayName}`)
     }
     dispatch({ type: 'submitting', on: true })
     try {
-      const product = await request
+      const item = await request
       beep('ok')
-      dispatch({ type: 'saved', product, text: done(product) })
-      void load(stateRef.current.query.trim(), stateRef.current.includeInactive)
+      dispatch({ type: 'saved', item, text: done(item) })
+      void load() // brand renames and category counts touch other rows
       searchRef.current?.focus()
     } catch (err) {
       beep('error')
@@ -200,8 +157,9 @@ export default function CatalogScreen({ onExit }: CatalogScreenProps) {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [formOpen, onExit])
 
-  const rows = catalogRows(state.products)
-  const sizeCount = state.products.reduce((n, p) => n + p.skus.length, 0)
+  const rows = catalogRows(state)
+  const itemCount = rows.filter((r) => r.kind === 'item').length
+  const categoryCount = rows.filter((r) => r.kind === 'header').length
 
   return (
     <div className="flex h-full min-h-screen flex-col">
@@ -219,7 +177,7 @@ export default function CatalogScreen({ onExit }: CatalogScreenProps) {
         <h1 className="text-lg font-bold tracking-wide uppercase">Inventory Catalog</h1>
         {state.load === 'ready' && (
           <span className="rounded bg-teal-400 px-2.5 py-1 text-sm font-black tracking-widest text-zinc-950 uppercase">
-            {state.products.length} item{state.products.length === 1 ? '' : 's'} · {sizeCount} size{sizeCount === 1 ? '' : 's'}
+            {itemCount} item{itemCount === 1 ? '' : 's'} · {categoryCount} categor{categoryCount === 1 ? 'y' : 'ies'}
           </span>
         )}
         <div className="ml-auto flex items-center gap-4 text-sm">
@@ -267,7 +225,7 @@ export default function CatalogScreen({ onExit }: CatalogScreenProps) {
         <CenterNote title="POS server unreachable" icon={<WifiOff className="size-10 text-rose-400" aria-hidden />}>
           <button
             type="button"
-            onClick={() => void load(state.query.trim(), state.includeInactive)}
+            onClick={() => void load()}
             className="mt-2 inline-flex items-center gap-2 rounded-md border-2 border-zinc-600 px-4 py-2 font-bold hover:border-zinc-300"
           >
             <RefreshCw className="size-4" aria-hidden /> Retry now
@@ -277,8 +235,9 @@ export default function CatalogScreen({ onExit }: CatalogScreenProps) {
 
       {state.load === 'ready' && (
         <main className="flex min-h-0 flex-1 flex-col" aria-label="Catalog">
-          <div className="grid grid-cols-[7rem_1fr_9rem_9rem_5rem_6rem_6rem_3.5rem] items-center gap-3 border-b border-zinc-800 px-5 py-2 text-xs font-bold tracking-widest text-zinc-500 uppercase">
+          <div className={`${GRID} border-b border-zinc-800 px-5 py-2 text-xs font-bold tracking-widest text-zinc-500 uppercase`}>
             <span>Code</span>
+            <span>Item</span>
             <span>Size</span>
             <span className="text-right">Sale</span>
             <span className="text-right">Purchase</span>
@@ -287,66 +246,49 @@ export default function CatalogScreen({ onExit }: CatalogScreenProps) {
             <span>Status</span>
             <span />
           </div>
-          <ul ref={listRef} className="min-h-0 flex-1 overflow-y-auto" role="listbox" aria-label="Items and sizes">
-            {rows.map((row, i) => {
-              const selected = state.selected === i
-              const base = `cursor-pointer border-b border-zinc-800 px-5 ${selected ? 'bg-amber-400/10 outline-2 -outline-offset-2 outline-amber-400/60' : 'hover:bg-zinc-900'}`
-              if (row.kind === 'product') {
-                const { product } = row
+          <ul ref={listRef} className="min-h-0 flex-1 overflow-y-auto" role="listbox" aria-label="Items by category">
+            {rows.map((row) => {
+              if (row.kind === 'header') {
+                const { category } = row
                 return (
-                  <li
-                    key={product.id}
-                    role="option"
-                    aria-selected={selected}
-                    onClick={() => {
-                      dispatch({ type: 'select', index: i })
-                      dispatch({ type: 'openEditProduct', product })
-                    }}
-                    className={`flex min-h-14 items-center gap-3 bg-zinc-900/60 pt-2 ${base}`}
-                  >
-                    <Boxes className="size-5 shrink-0 text-teal-400" aria-hidden />
-                    <span className={`text-xl font-extrabold ${product.isActive ? '' : 'text-zinc-500 line-through'}`}>{product.name}</span>
-                    <span className="rounded bg-zinc-800 px-2 py-0.5 text-xs font-bold tracking-widest text-zinc-300 uppercase">{CATEGORY_LABEL[product.category]}</span>
-                    <DepartmentChip department={product.department} />
-                    {!product.isActive && <InactiveBadge />}
-                    <span className="ml-auto flex gap-2">
-                      <RowButton
-                        label={`Add a size to ${product.name}`}
-                        onClick={() => dispatch({ type: 'openAddSku', product })}
-                        disabled={!product.isActive || sizesFor(product.department).every((s) => product.skus.some((k) => k.sizeCode === s))}
-                      >
-                        <Plus className="size-4" aria-hidden /> Size
-                      </RowButton>
-                      <RowButton label={`Edit ${product.name}`} onClick={() => dispatch({ type: 'openEditProduct', product })}>
-                        <Pencil className="size-4" aria-hidden /> Edit
-                      </RowButton>
+                  <li key={`h-${category.id}`} role="presentation" className="sticky top-0 z-10 flex min-h-12 items-center gap-3 border-y-2 border-zinc-700 bg-zinc-800 px-5">
+                    <span className="text-xl font-black tracking-widest uppercase">{category.name}</span>
+                    <DepartmentChip department={category.defaultDepartment} />
+                    <span className="ml-auto font-mono text-sm text-zinc-300 tabular-nums">
+                      {row.count} item{row.count === 1 ? '' : 's'}
+                      {category.defaultDepartment !== 'KITCHEN' && ` · ${row.onHand} on hand`}
                     </span>
+                    <RowButton label={`New item in ${category.name}`} onClick={() => dispatch({ type: 'openNew', categoryId: category.id })} disabled={!category.isActive}>
+                      <Plus className="size-4" aria-hidden /> Item
+                    </RowButton>
                   </li>
                 )
               }
-              const { sku, product } = row
+              const { item } = row
+              const selected = highlighted?.id === item.id
+              const live = item.isActive && item.brandActive
               return (
                 <li
-                  key={sku.id}
+                  key={item.id}
                   role="option"
                   aria-selected={selected}
-                  onClick={() => {
-                    dispatch({ type: 'select', index: i })
-                    dispatch({ type: 'openEditSku', product, sku })
-                  }}
-                  className={`grid min-h-14 grid-cols-[7rem_1fr_9rem_9rem_5rem_6rem_6rem_3.5rem] items-center gap-3 ${base} ${sku.isActive ? '' : 'text-zinc-500'}`}
+                  onClick={() => dispatch({ type: 'openEdit', item })}
+                  className={`${GRID} min-h-14 cursor-pointer border-b border-zinc-800 px-5 ${
+                    selected ? 'bg-amber-400/10 outline-2 -outline-offset-2 outline-amber-400/60' : 'hover:bg-zinc-900'
+                  } ${live ? '' : 'text-zinc-500'}`}
                 >
-                  <span className="font-mono text-sm font-bold">{sku.skuCode}</span>
+                  <span className="font-mono text-sm font-bold">{item.skuCode}</span>
                   <span className="min-w-0">
-                    <span className="block truncate font-semibold">{sizeNameFor(sku.sizeCode, product.department)}</span>
-                    {sku.barcode && <span className="block truncate font-mono text-xs text-zinc-500">{sku.barcode}</span>}
+                    <span className={`block truncate text-lg font-bold ${live ? '' : 'line-through'}`}>{item.brandName}</span>
+                    {item.barcode && <span className="block truncate font-mono text-xs text-zinc-500">{item.barcode}</span>}
                   </span>
-                  <span className="text-right font-mono font-bold tabular-nums">{formatPaise(sku.pricePaise)}</span>
-                  <span className="text-right font-mono tabular-nums text-zinc-300">{sku.purchasePricePaise === null ? '—' : formatPaise(sku.purchasePricePaise)}</span>
-                  <span className="text-right font-mono tabular-nums">{sku.tracksStock ? sku.caseSize : '—'}</span>
-                  <span className={`text-right tabular-nums ${sku.tracksStock ? 'font-mono' : 'text-xs text-zinc-500'}`}>{sku.tracksStock ? sku.onHandQty : 'not tracked'}</span>
-                  <span>{sku.isActive ? <span className="text-sm font-semibold text-emerald-400">● active</span> : <InactiveBadge />}</span>
-                  <RowButton label={`Edit ${sku.skuCode}`} onClick={() => dispatch({ type: 'openEditSku', product, sku })} iconOnly>
+                  <span className="truncate text-sm text-zinc-300">{sizeNameFor(item.sizeCode, item.department)}</span>
+                  <span className="text-right font-mono font-bold tabular-nums">{formatPaise(item.pricePaise)}</span>
+                  <span className="text-right font-mono tabular-nums text-zinc-300">{item.purchasePricePaise === null ? '—' : formatPaise(item.purchasePricePaise)}</span>
+                  <span className="text-right font-mono tabular-nums">{item.tracksStock ? item.caseSize : '—'}</span>
+                  <span className={`text-right tabular-nums ${item.tracksStock ? 'font-mono font-bold' : 'text-xs text-zinc-500'}`}>{item.tracksStock ? item.onHandQty : 'not tracked'}</span>
+                  <span>{live ? <span className="text-sm font-semibold text-emerald-400">● active</span> : <InactiveBadge />}</span>
+                  <RowButton label={`Edit ${item.displayName}`} onClick={() => dispatch({ type: 'openEdit', item })} iconOnly>
                     <Pencil className="size-4" aria-hidden />
                   </RowButton>
                 </li>
@@ -359,18 +301,16 @@ export default function CatalogScreen({ onExit }: CatalogScreenProps) {
             )}
           </ul>
           <p className="border-t-2 border-zinc-800 bg-zinc-900 px-5 py-2 text-sm text-zinc-500">
-            <Kbd>↑</Kbd>/<Kbd>↓</Kbd> select · <Kbd>Enter</Kbd> edit · <Kbd>Ins</Kbd> new item · <Kbd>Esc</Kbd> clear search / back. New sizes start at 0
-            stock; receive them through Purchase. Kitchen items are not stock-tracked.
+            <Kbd>↑</Kbd>/<Kbd>↓</Kbd> select · <Kbd>Enter</Kbd> edit · <Kbd>Ins</Kbd> new item (in the highlighted category) · <Kbd>Esc</Kbd> clear search / back.
+            Categories are set up in Settings → Item Categories. Stock comes in through Purchase.
           </p>
         </main>
       )}
 
       {state.form && (
-        <CatalogFormModal
+        <ItemFormModal
+          state={state}
           form={state.form}
-          conflict={state.conflict}
-          saveError={state.saveError}
-          submitting={state.submitting}
           onField={(change) => dispatch({ type: 'field', ...change })}
           onClose={() => dispatch({ type: 'close' })}
           onSave={() => void save()}
@@ -383,29 +323,21 @@ export default function CatalogScreen({ onExit }: CatalogScreenProps) {
 // ── Form modal ──────────────────────────────────────────────────────────────
 
 interface FormModalProps {
-  form: CatalogForm
-  conflict: ConflictField | null
-  saveError: string | null
-  submitting: boolean
-  onField: (change: FormField) => void
+  state: CatalogState
+  form: ItemForm
+  onField: (change: ItemField) => void
   onClose: () => void
   onSave: () => void
 }
 
-const TITLE: Record<CatalogForm['kind'], (form: CatalogForm) => string> = {
-  newProduct: () => 'New item',
-  editProduct: (f) => `Edit ${(f as EditProductForm).product.name}`,
-  addSku: (f) => `Add a size to ${(f as AddSkuForm).product.name}`,
-  editSku: (f) => `Edit ${(f as EditSkuForm).sku.skuCode}`,
-}
-
-function CatalogFormModal({ form, conflict, saveError, submitting, onField, onClose, onSave }: FormModalProps) {
-  const error = formError(form)
+function ItemFormModal({ state, form, onField, onClose, onSave }: FormModalProps) {
+  const error = formError(state, form)
   const retiring = deactivates(form)
+  const { saveError, submitting, conflict } = state
   return (
     <Modal
-      title={TITLE[form.kind](form)}
-      width={form.kind === 'newProduct' ? 'max-w-5xl' : 'max-w-2xl'}
+      title={form.kind === 'new' ? 'New item' : `Edit ${form.item.displayName}`}
+      width="max-w-3xl"
       onClose={onClose}
       onKey={(e) => {
         if (e.key !== 'Enter' && e.key !== 'F9') return false
@@ -432,15 +364,14 @@ function CatalogFormModal({ form, conflict, saveError, submitting, onField, onCl
         </div>
       }
     >
-      {form.kind === 'newProduct' && <NewProductFields form={form} conflict={conflict} onField={onField} />}
-      {form.kind === 'editProduct' && <EditProductFields form={form} conflict={conflict} onField={onField} />}
-      {form.kind === 'addSku' && <AddSkuFields form={form} conflict={conflict} onField={onField} />}
-      {form.kind === 'editSku' && <EditSkuFields form={form} conflict={conflict} onField={onField} />}
-      {retiring && (
+      {form.kind === 'new' ? (
+        <NewItemFields state={state} form={form} conflict={conflict} onField={onField} />
+      ) : (
+        <EditItemFields state={state} form={form} conflict={conflict} onField={onField} />
+      )}
+      {retiring && form.kind === 'edit' && (
         <p className="mt-4 rounded-md border-2 border-rose-500/60 bg-rose-500/10 p-3 text-rose-200">
-          {form.kind === 'editProduct'
-            ? `Deactivate ${form.product.name}? None of its sizes can be billed or received any more. Stock stays on record, and you can reactivate it later.`
-            : `Deactivate ${(form as EditSkuForm).sku.skuCode}? It can no longer be billed or received. Stock stays on record.`}
+          Deactivate {form.item.displayName}? It can no longer be billed or received. Stock stays on record, and you can reactivate it later.
         </p>
       )}
     </Modal>
@@ -448,148 +379,136 @@ function CatalogFormModal({ form, conflict, saveError, submitting, onField, onCl
 }
 
 interface FieldsProps<F> {
+  state: CatalogState
   form: F
   conflict: ConflictField | null
-  onField: (change: FormField) => void
+  onField: (change: ItemField) => void
 }
 
-function NewProductFields({ form, conflict, onField }: FieldsProps<NewProductForm>) {
-  const prefix = form.codePrefix || '…'
+function NewItemFields({ state, form, conflict, onField }: FieldsProps<NewItemForm>) {
+  const category = state.categories.find((c) => c.id === form.categoryId)
+  const brand = existingBrand(state.items, form.name)
+  const department = effectiveDepartment(form, state.items)
+  const choices = category ? sizeChoices(category, department) : []
+  const kitchen = department === 'KITCHEN'
+  const prefix = brand ? brand.prefix : form.codePrefix
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-[1fr_12rem] gap-4">
-        <TextInput label="Item name" value={form.name} onChange={(value) => onField({ field: 'name', value })} invalid={conflict === 'name'} autofocus maxLength={80} placeholder="e.g. Royal Stag, Chicken 65" />
-        <TextInput
-          label="Code prefix"
-          value={form.codePrefix}
-          onChange={(value) => onField({ field: 'codePrefix', value })}
-          invalid={conflict === 'codePrefix'}
-          maxLength={10}
-          placeholder="e.g. ROST"
-          mono
-        />
+      <CategoryPicker categories={state.categories} value={form.categoryId} onChange={(value) => onField({ field: 'categoryId', value })} />
+      <div className="grid grid-cols-[1fr_11rem] gap-4">
+        <TextInput label="Item name" value={form.name} onChange={(value) => onField({ field: 'name', value })} invalid={conflict === 'name' || conflict === 'size'} autofocus maxLength={80} placeholder="e.g. 1848, Royal Stag" />
+        {brand ? (
+          <div>
+            <span className="text-sm font-semibold text-zinc-300">SKU code</span>
+            <p className="mt-1 flex min-h-[3.25rem] items-center rounded-md border-2 border-zinc-800 px-3 font-mono text-lg text-zinc-300">
+              {form.sizeCode ? skuCodePreview(prefix, form.sizeCode) : `${prefix}-…`}
+            </p>
+          </div>
+        ) : (
+          <TextInput
+            label={`Code prefix${form.sizeCode && prefix ? ` → ${skuCodePreview(prefix, form.sizeCode)}` : ''}`}
+            value={form.codePrefix}
+            onChange={(value) => onField({ field: 'codePrefix', value })}
+            invalid={conflict === 'codePrefix'}
+            maxLength={10}
+            placeholder="e.g. 1848"
+            mono
+          />
+        )}
       </div>
-      <CategoryPicker value={form.category} onChange={(value) => onField({ field: 'category', value })} />
-      <DepartmentPicker value={form.department} onChange={(value) => onField({ field: 'department', value })} />
-      <div>
-        <span className="text-sm font-semibold text-zinc-300">Sizes — tick each size you sell</span>
-        <div className="mt-1 grid grid-cols-[13rem_1fr_1fr_6rem_1fr] gap-x-3 gap-y-2 text-xs font-bold tracking-widest text-zinc-500 uppercase">
-          <span>Size · SKU code</span>
-          <span>Sale ₹</span>
-          <span>Purchase ₹ (optional)</span>
-          <span>Case</span>
-          <span>Barcode (optional)</span>
-          {sizesFor(form.department).map((size) => {
-            const row = form.sizes[size]
-            const name = sizeNameFor(size, form.department)
-            const set = (field: keyof SizeFields) => (value: string) => onField({ field, value, size })
-            return (
-              <SizeRow key={size} on={row.on}>
-                <label className="flex min-h-12 cursor-pointer items-center gap-3 text-base font-semibold tracking-normal text-zinc-100 normal-case select-none">
-                  <input type="checkbox" checked={row.on} onChange={(e) => onField({ field: 'sizeOn', size, value: e.target.checked })} className="size-6 accent-teal-400" />
-                  <span>
-                    <span className="block">{name}</span>
-                    <span className="block font-mono text-xs text-zinc-500">{skuCodePreview(prefix, size)}</span>
-                  </span>
-                </label>
-                <CellInput value={row.sale} onChange={set('sale')} label={`${name} sale price`} inputMode="decimal" />
-                <CellInput value={row.buy} onChange={set('buy')} label={`${name} purchase price`} inputMode="decimal" />
-                {form.department === 'KITCHEN' ? (
-                  <span className="flex min-h-12 items-center justify-center font-mono text-base text-zinc-500">—</span>
-                ) : (
-                  <CellInput value={row.caseSize} onChange={set('caseSize')} label={`${name} bottles per case`} inputMode="numeric" />
-                )}
-                <CellInput value={row.barcode} onChange={set('barcode')} label={`${name} barcode`} invalid={conflict === 'barcode' && row.barcode !== ''} />
-              </SizeRow>
-            )
-          })}
-        </div>
-      </div>
-      <p className="text-sm text-zinc-400">
-        {form.department === 'KITCHEN'
-          ? 'Kitchen items are not stock-tracked: they sell without stock, print a KOT to the kitchen and never go through Purchase. Use Full / Half for plate sizes, Unit for a single size.'
-          : 'Case size is how many sealed bottles come in one supplier case (Full 12 · Half 32 · Quarter 64 by default). The purchase price pre-fills the GRN unit cost.'}
+      <p className="-mt-2 text-sm text-zinc-400">
+        {brand
+          ? `Adds a ${form.sizeCode ? sizeNameFor(form.sizeCode, department) : 'size'} to ${brand.name} (${DEPARTMENT_NAME[brand.department]}) — it already has ${brand.sizes.map((s) => sizeNameFor(s, brand.department)).join(', ')}.`
+          : form.name.trim()
+            ? `New brand “${form.name.trim()}”.`
+            : 'Type the brand name; an existing brand gets this as another size.'}
       </p>
-    </div>
-  )
-}
 
-function EditProductFields({ form, conflict, onField }: FieldsProps<EditProductForm>) {
-  return (
-    <div className="flex flex-col gap-4">
-      <TextInput label="Item name" value={form.name} onChange={(value) => onField({ field: 'name', value })} invalid={conflict === 'name'} autofocus maxLength={80} placeholder="" />
-      <CategoryPicker value={form.category} onChange={(value) => onField({ field: 'category', value })} />
-      <DepartmentPicker value={form.department} onChange={(value) => onField({ field: 'department', value })} />
-      {form.department !== form.product.department && (
-        <p className="rounded-md border-2 border-amber-500/60 bg-amber-500/10 p-3 text-amber-200">
-          Moves {form.product.name} from {DEPARTMENT_NAME[form.product.department]} to {DEPARTMENT_NAME[form.department]} for new sales only — lines already billed keep
-          their department.
-        </p>
+      {choices.length > 0 ? (
+        <div>
+          <span className="text-sm font-semibold text-zinc-300">Size</span>
+          <div className="mt-1 flex flex-wrap gap-2" role="radiogroup" aria-label="Size">
+            {choices.map((size) => (
+              <ChoiceChip key={size} on={form.sizeCode === size} onClick={() => onField({ field: 'sizeCode', value: size })} invalid={conflict === 'size'}>
+                {sizeNameFor(size, department)}
+              </ChoiceChip>
+            ))}
+          </div>
+        </div>
+      ) : (
+        form.sizeCode && (
+          <p className="text-sm text-zinc-300">
+            Size <span className="font-bold">{sizeNameFor(form.sizeCode, department)}</span> <span className="text-zinc-500">(from {category?.name})</span>
+          </p>
+        )
       )}
-      <ActiveToggle on={form.isActive} onChange={(value) => onField({ field: 'isActive', value })} />
+
+      {!brand && <DepartmentPicker value={form.department} onChange={(value) => onField({ field: 'department', value })} />}
+
+      <div className={`grid gap-4 ${kitchen ? 'grid-cols-3' : 'grid-cols-5'}`}>
+        <TextInput label="Sale ₹" value={form.sale} onChange={(value) => onField({ field: 'sale', value })} inputMode="decimal" mono />
+        <TextInput label="Purchase ₹ (opt.)" value={form.buy} onChange={(value) => onField({ field: 'buy', value })} inputMode="decimal" mono />
+        {!kitchen && <TextInput label="Per case" value={form.caseSize} onChange={(value) => onField({ field: 'caseSize', value })} inputMode="numeric" mono />}
+        <TextInput label="Barcode (opt.)" value={form.barcode} onChange={(value) => onField({ field: 'barcode', value })} invalid={conflict === 'barcode'} maxLength={40} mono />
+        {!kitchen && <TextInput label="Opening stock" value={form.opening} onChange={(value) => onField({ field: 'opening', value })} inputMode="numeric" placeholder="0" mono />}
+      </div>
       <p className="text-sm text-zinc-400">
-        Renaming updates every size's name ({form.product.skus.map((s) => s.skuCode).join(', ') || 'no sizes yet'}). Bills already rung up keep the old name.
+        {kitchen
+          ? 'Kitchen items are not stock-tracked: they sell without stock and print a KOT to the kitchen.'
+          : 'Opening stock is entered once, now (e.g. at go-live); after that stock comes in only through Purchase. The purchase price pre-fills the GRN unit cost.'}
       </p>
     </div>
   )
 }
 
-function AddSkuFields({ form, conflict, onField }: FieldsProps<AddSkuForm>) {
-  const taken = new Set(form.product.skus.map((s) => s.sizeCode))
-  return (
-    <div className="flex flex-col gap-4">
-      <div>
-        <span className="text-sm font-semibold text-zinc-300">Size</span>
-        <div className="mt-1 flex flex-wrap gap-2">
-          {sizesFor(form.product.department).filter((s) => !taken.has(s)).map((size) => (
-            <ChoiceChip key={size} on={form.sizeCode === size} onClick={() => onField({ field: 'sizeCode', value: size })} invalid={conflict === 'size'}>
-              {sizeNameFor(size, form.product.department)}
-            </ChoiceChip>
-          ))}
-        </div>
-      </div>
-      <SizeFieldsGrid form={form} conflict={conflict} onField={onField} department={form.product.department} />
-    </div>
-  )
-}
-
-function EditSkuFields({ form, conflict, onField }: FieldsProps<EditSkuForm>) {
+function EditItemFields({ state, form, conflict, onField }: FieldsProps<EditItemForm>) {
+  const { item } = form
+  const name = form.name.trim().replace(/\s+/g, ' ')
+  const other = name.toLowerCase() !== item.brandName.toLowerCase() ? existingBrand(state.items, name) : null
+  const kitchen = item.department === 'KITCHEN'
   return (
     <div className="flex flex-col gap-4">
       <p className="text-zinc-300">
-        <span className="font-semibold text-zinc-100">{form.sku.displayName}</span> · {sizeNameFor(form.sku.sizeCode, form.product.department)} ·{' '}
-        <span className="font-mono">{form.sku.skuCode}</span> · {form.sku.tracksStock ? `${form.sku.onHandQty} on hand` : 'stock not tracked'}
+        <span className="font-mono">{item.skuCode}</span> · {sizeNameFor(item.sizeCode, item.department)} · <DepartmentChip department={item.department} /> ·{' '}
+        {item.tracksStock ? `${item.onHandQty} on hand (changes only through Purchase)` : 'stock not tracked'}
       </p>
-      <SizeFieldsGrid form={form} conflict={conflict} onField={onField} department={form.product.department} />
+      <TextInput label="Item name" value={form.name} onChange={(value) => onField({ field: 'name', value })} invalid={conflict === 'name' || conflict === 'size'} autofocus maxLength={80} />
+      {name !== item.brandName && name !== '' && (
+        <p className="-mt-2 text-sm text-amber-200">
+          {name.toLowerCase() === item.brandName.toLowerCase()
+            ? `Renames the brand on every size of ${item.brandName}.`
+            : other
+              ? `Moves this item to the existing brand ${other.name} (${DEPARTMENT_NAME[other.department]}); other sizes of ${item.brandName} stay.`
+              : `Moves this item to a new brand “${name}”; other sizes of ${item.brandName} stay.`}
+        </p>
+      )}
+      <CategoryPicker categories={state.categories} value={form.categoryId} onChange={(value) => onField({ field: 'categoryId', value })} />
+      <div className={`grid gap-4 ${kitchen ? 'grid-cols-3' : 'grid-cols-4'}`}>
+        <TextInput label="Sale ₹" value={form.sale} onChange={(value) => onField({ field: 'sale', value })} inputMode="decimal" mono />
+        <TextInput label="Purchase ₹ (opt.)" value={form.buy} onChange={(value) => onField({ field: 'buy', value })} inputMode="decimal" mono />
+        {!kitchen && <TextInput label="Per case" value={form.caseSize} onChange={(value) => onField({ field: 'caseSize', value })} inputMode="numeric" mono />}
+        <TextInput label="Barcode (opt.)" value={form.barcode} onChange={(value) => onField({ field: 'barcode', value })} invalid={conflict === 'barcode'} maxLength={40} mono />
+      </div>
       <ActiveToggle on={form.isActive} onChange={(value) => onField({ field: 'isActive', value })} />
-      <p className="text-sm text-zinc-400">A new sale price applies from the next scan; bills already rung up keep their price. SKU code and size can't be changed.</p>
-    </div>
-  )
-}
-
-function SizeFieldsGrid({ form, conflict, onField, department }: FieldsProps<SizeFields> & { department: DepartmentCode }) {
-  const set = (field: keyof SizeFields) => (value: string) => onField({ field, value })
-  const kitchen = department === 'KITCHEN'
-  return (
-    <div className="grid grid-cols-2 gap-4">
-      <TextInput label={kitchen ? 'Sale price ₹' : 'Sale price ₹ (per bottle)'} value={form.sale} onChange={set('sale')} inputMode="decimal" autofocus mono />
-      <TextInput label="Purchase price ₹ (optional)" value={form.buy} onChange={set('buy')} inputMode="decimal" mono />
-      {!kitchen && <TextInput label="Bottles per case" value={form.caseSize} onChange={set('caseSize')} inputMode="numeric" mono />}
-      <TextInput label="Barcode (optional)" value={form.barcode} onChange={set('barcode')} invalid={conflict === 'barcode'} maxLength={40} mono />
+      <p className="text-sm text-zinc-400">
+        A new sale price applies from the next scan; bills already rung up keep their price and name. The department ({DEPARTMENT_NAME[item.department]}) belongs to the brand
+        and applies to every size of {item.brandName}. Size and SKU code can&rsquo;t be changed.
+      </p>
     </div>
   )
 }
 
 // ── Small controls ──────────────────────────────────────────────────────────
 
-function CategoryPicker({ value, onChange }: { value: ProductCategory; onChange: (value: ProductCategory) => void }) {
+function CategoryPicker({ categories, value, onChange }: { categories: ItemCategory[]; value: string; onChange: (value: string) => void }) {
+  const shown = categories.filter((c) => c.isActive || c.id === value)
   return (
     <div>
       <span className="text-sm font-semibold text-zinc-300">Category</span>
-      <div className="mt-1 flex flex-wrap gap-2">
-        {PRODUCT_CATEGORIES.map((c) => (
-          <ChoiceChip key={c} on={value === c} onClick={() => onChange(c)}>
-            {CATEGORY_LABEL[c]}
+      <div className="mt-1 flex flex-wrap gap-2" role="radiogroup" aria-label="Category">
+        {shown.map((c) => (
+          <ChoiceChip key={c.id} on={value === c.id} onClick={() => onChange(c.id)}>
+            <span className="tracking-wide uppercase">{c.name}</span>
           </ChoiceChip>
         ))}
       </div>
@@ -597,11 +516,11 @@ function CategoryPicker({ value, onChange }: { value: ProductCategory; onChange:
   )
 }
 
-/** Large three-way switch: which P&L the item's sales go to, and where its KOT prints. */
+/** Three-way switch for a new brand: which P&L its sales go to, and where its KOT prints. */
 function DepartmentPicker({ value, onChange }: { value: DepartmentCode; onChange: (value: DepartmentCode) => void }) {
   return (
     <div>
-      <span className="text-sm font-semibold text-zinc-300">Department (P&amp;L)</span>
+      <span className="text-sm font-semibold text-zinc-300">Department (P&amp;L) — from the category, change if needed</span>
       <div className="mt-1 grid grid-cols-3 gap-2" role="radiogroup" aria-label="Department">
         {DEPARTMENT_ORDER.map((d) => (
           <button
@@ -610,12 +529,9 @@ function DepartmentPicker({ value, onChange }: { value: DepartmentCode; onChange
             role="radio"
             aria-checked={value === d}
             onClick={() => onChange(d)}
-            className={`min-h-14 rounded-md border-2 px-3 py-2 text-left ${
-              value === d ? DEPARTMENT_CHIP[d] : 'border-zinc-600 text-zinc-300 hover:border-zinc-400'
-            } ${FOCUS_RING}`}
+            className={`min-h-12 rounded-md border-2 px-3 text-lg font-black ${value === d ? DEPARTMENT_CHIP[d] : 'border-zinc-600 text-zinc-300 hover:border-zinc-400'} ${FOCUS_RING}`}
           >
-            <span className="block text-lg font-black">{DEPARTMENT_NAME[d]}</span>
-            <span className="block text-xs opacity-80">{DEPARTMENT_HINT[d]}</span>
+            {DEPARTMENT_NAME[d]}
           </button>
         ))}
       </div>
@@ -624,18 +540,17 @@ function DepartmentPicker({ value, onChange }: { value: DepartmentCode; onChange
 }
 
 function DepartmentChip({ department }: { department: DepartmentCode }) {
-  return (
-    <span className={`rounded border px-2 py-0.5 text-xs font-bold tracking-widest uppercase ${DEPARTMENT_CHIP[department]}`}>{DEPARTMENT_NAME[department]}</span>
-  )
+  return <span className={`rounded border px-2 py-0.5 text-xs font-bold tracking-widest uppercase ${DEPARTMENT_CHIP[department]}`}>{DEPARTMENT_NAME[department]}</span>
 }
 
 function ChoiceChip({ on, onClick, invalid = false, children }: { on: boolean; onClick: () => void; invalid?: boolean; children: ReactNode }) {
   return (
     <button
       type="button"
+      role="radio"
       onClick={onClick}
-      aria-pressed={on}
-      className={`min-h-11 rounded-md border-2 px-4 font-bold ${
+      aria-checked={on}
+      className={`min-h-12 rounded-md border-2 px-4 font-bold ${
         on ? 'border-teal-400 bg-teal-400 text-zinc-950' : invalid ? 'border-rose-500 text-zinc-200' : 'border-zinc-600 text-zinc-200 hover:border-zinc-400'
       } ${FOCUS_RING}`}
     >
@@ -667,8 +582,8 @@ interface TextInputProps {
 
 function TextInput({ label, value, onChange, invalid = false, autofocus = false, maxLength, placeholder, inputMode, mono = false }: TextInputProps) {
   return (
-    <label className="block">
-      <span className="text-sm font-semibold text-zinc-300">{label}</span>
+    <label className="block min-w-0">
+      <span className="block truncate text-sm font-semibold text-zinc-300">{label}</span>
       <input
         value={value}
         autoComplete="off"
@@ -683,26 +598,6 @@ function TextInput({ label, value, onChange, invalid = false, autofocus = false,
       />
     </label>
   )
-}
-
-function CellInput({ value, onChange, label, inputMode, invalid = false }: { value: string; onChange: (v: string) => void; label: string; inputMode?: 'decimal' | 'numeric'; invalid?: boolean }) {
-  return (
-    <input
-      value={value}
-      aria-label={label}
-      autoComplete="off"
-      inputMode={inputMode}
-      onChange={(e) => onChange(e.target.value)}
-      className={`min-h-12 w-full rounded-md border-2 bg-zinc-950 px-3 font-mono text-base font-normal tracking-normal text-zinc-100 tabular-nums outline-none focus:border-amber-400 ${
-        invalid ? 'border-rose-500' : 'border-zinc-700'
-      }`}
-    />
-  )
-}
-
-/** One size row of the new-liquor grid; dimmed until ticked. */
-function SizeRow({ on, children }: { on: boolean; children: ReactNode }) {
-  return <div className={`contents ${on ? '' : '[&>*:not(:first-child)]:opacity-50'}`}>{children}</div>
 }
 
 function RowButton({ label, onClick, disabled = false, iconOnly = false, children }: { label: string; onClick: () => void; disabled?: boolean; iconOnly?: boolean; children: ReactNode }) {

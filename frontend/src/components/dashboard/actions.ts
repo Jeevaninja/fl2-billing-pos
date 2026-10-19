@@ -3,6 +3,7 @@ import {
   CalendarCheck,
   ChartColumn,
   ClipboardList,
+  LayoutList,
   CreditCard,
   Landmark,
   PackagePlus,
@@ -27,6 +28,7 @@ export type PosActionId =
   | 'catalog'
   | 'orders'
   | 'expense-categories'
+  | 'item-categories'
   | 'day-end'
   | 'reports'
 
@@ -47,7 +49,8 @@ export const ACTIONS: Record<PosActionId, PosAction> = {
   expense: { id: 'expense', label: 'Expense', hint: 'Petty cash and daily spends', icon: Wallet },
   'bank-deposit': { id: 'bank-deposit', label: 'Bank Deposit', hint: 'Cash drops for bank / RTGS', icon: Landmark },
   purchase: { id: 'purchase', label: 'Purchase', hint: 'Stock inwarding (GRN)', icon: PackagePlus },
-  catalog: { id: 'catalog', label: 'Inventory Catalog', hint: 'Liquors, prices and case sizes', icon: Boxes },
+  catalog: { id: 'catalog', label: 'Inventory Catalog', hint: 'Items by category, prices and stock', icon: Boxes },
+  'item-categories': { id: 'item-categories', label: 'Item Categories', hint: 'FULL, HALF, QUARTER… and their order', icon: LayoutList },
   orders: { id: 'orders', label: 'Orders', hint: "Today's bills, receipts and reprints", icon: ClipboardList },
   'expense-categories': { id: 'expense-categories', label: 'Expense Categories', hint: 'Petty-cash categories and their order', icon: Tags },
   'day-end': { id: 'day-end', label: 'Day End', hint: 'Peak reconciliation and close', icon: CalendarCheck },
@@ -58,7 +61,7 @@ export const ACTIONS: Record<PosActionId, PosAction> = {
 export const MODULE_TILES: readonly PosActionId[] = ['billing', 'captain-orders', 'expense', 'bank-deposit', 'purchase', 'orders', 'day-end', 'reports']
 
 /** Header Settings menu entries: setup screens that don't need a grid tile. */
-export const SETTINGS_ACTIONS: readonly PosActionId[] = ['catalog', 'expense-categories']
+export const SETTINGS_ACTIONS: readonly PosActionId[] = ['catalog', 'item-categories', 'expense-categories']
 
 /** Rail contents before the operator has used anything this session. */
 export const DEFAULT_RECENT: readonly PosActionId[] = ['new-bill', 'member', 'pay', 'captain-orders', 'day-end']

@@ -13,6 +13,7 @@ import {
   DayEndService,
   DEPARTMENT_CODES,
   ExpenseCategoryService,
+  ItemCategoryService,
   KotService,
   NotFoundError,
   OrdersQueries,
@@ -25,6 +26,8 @@ import {
   WaiterService,
   type CounterPayment,
   type ExpenseCategoryPatch,
+  type ItemCategoryPatch,
+  type ItemPatch,
   type KotPrinter,
   type NewSkuInput,
   type ReceiptLineInput,
@@ -108,6 +111,7 @@ function buildRoutes({ db, cashierId, printer = new PrinterService(), kotPrinter
   const catalog = new CatalogService(db);
   const orders = new OrdersQueries(db);
   const expenseCategories = new ExpenseCategoryService(db);
+  const itemCategories = new ItemCategoryService(db);
   const kot = new KotService(db, kotPrinter);
   /** Sends a bill's pending Kitchen lines after the sale committed (the counter is the bar). */
   const sendKitchen = (billId: string, includeReversals = false) =>
@@ -324,6 +328,74 @@ function buildRoutes({ db, cashierId, printer = new PrinterService(), kotPrinter
 
     // ── Inventory catalog ──
     route('GET', '/api/departments', async () => ok(await catalog.listDepartments())),
+
+    // ── Item categories and flat items (Phase 20) ──
+    route('GET', '/api/item-categories', async ({ query }) =>
+      ok(await itemCategories.listCategories({ includeInactive: query.get('includeInactive') === '1' })),
+    ),
+    route('POST', '/api/item-categories', async ({ body }) => {
+      const defaultDepartment = optDepartment(body.defaultDepartment, 'defaultDepartment');
+      return created(
+        await itemCategories.createCategory({
+          name: str(body.name, 'name'),
+          defaultSizeCode: body.defaultSizeCode === null ? null : (optOneOf(body.defaultSizeCode, 'defaultSizeCode', SIZE_CODES) ?? null),
+          ...(defaultDepartment ? { defaultDepartment } : {}),
+        }),
+      );
+    }),
+    route('PATCH', '/api/item-categories/:categoryId', async ({ params, body }) => {
+      const patch: ItemCategoryPatch = {};
+      if (body.name !== undefined) patch.name = str(body.name, 'name');
+      if (body.defaultSizeCode === null) patch.defaultSizeCode = null;
+      else {
+        const size = optOneOf(body.defaultSizeCode, 'defaultSizeCode', SIZE_CODES);
+        if (size !== undefined) patch.defaultSizeCode = size;
+      }
+      const defaultDepartment = optDepartment(body.defaultDepartment, 'defaultDepartment');
+      if (defaultDepartment) patch.defaultDepartment = defaultDepartment;
+      const isActive = optBool(body.isActive, 'isActive');
+      if (isActive !== undefined) patch.isActive = isActive;
+      const move = optOneOf(body.move, 'move', ['up', 'down'] as const);
+      if (move !== undefined) patch.move = move;
+      return ok(await itemCategories.updateCategory(id(params.categoryId, 'categoryId'), patch));
+    }),
+    route('GET', '/api/catalog/items', async ({ query }) =>
+      ok(await catalog.listItems({ q: query.get('q') ?? '', includeInactive: query.get('includeInactive') === 'true' })),
+    ),
+    route('POST', '/api/catalog/items', async ({ body }) => {
+      const department = optDepartment(body.department, 'department');
+      const productCategory = optOneOf(body.productCategory, 'productCategory', PRODUCT_CATEGORIES);
+      return created(
+        await catalog.createItem(
+          {
+            categoryId: id(body.categoryId, 'categoryId'),
+            name: str(body.name, 'name'),
+            sizeCode: optOneOf(body.sizeCode, 'sizeCode', SIZE_CODES),
+            salePricePaise: paise(body.salePrice, 'salePrice'),
+            purchasePricePaise: body.purchasePrice === undefined || body.purchasePrice === null ? null : paise(body.purchasePrice, 'purchasePrice'),
+            caseSize: body.caseSize === undefined ? undefined : int(body.caseSize, 'caseSize'),
+            barcode: optNullableStr(body.barcode, 'barcode') ?? null,
+            codePrefix: body.codePrefix === undefined || body.codePrefix === null ? undefined : str(body.codePrefix, 'codePrefix'),
+            openingQty: body.openingQty === undefined ? undefined : int(body.openingQty, 'openingQty'),
+            ...(department ? { department } : {}),
+            ...(productCategory ? { productCategory } : {}),
+          },
+          cashierId,
+        ),
+      );
+    }),
+    route('PATCH', '/api/catalog/items/:skuId', async ({ params, body }) => {
+      const patch: ItemPatch = {};
+      if (body.name !== undefined) patch.name = str(body.name, 'name');
+      if (body.categoryId !== undefined) patch.categoryId = id(body.categoryId, 'categoryId');
+      if (body.salePrice !== undefined) patch.salePricePaise = paise(body.salePrice, 'salePrice');
+      if (body.purchasePrice !== undefined) patch.purchasePricePaise = body.purchasePrice === null ? null : paise(body.purchasePrice, 'purchasePrice');
+      if (body.caseSize !== undefined) patch.caseSize = int(body.caseSize, 'caseSize');
+      if (body.barcode !== undefined) patch.barcode = optNullableStr(body.barcode, 'barcode') ?? null;
+      const isActive = optBool(body.isActive, 'isActive');
+      if (isActive !== undefined) patch.isActive = isActive;
+      return ok(await catalog.updateItem(id(params.skuId, 'skuId'), patch));
+    }),
     route('GET', '/api/catalog', async ({ query }) =>
       ok(await catalog.listCatalog({ q: query.get('q') ?? '', includeInactive: query.get('includeInactive') === 'true' })),
     ),

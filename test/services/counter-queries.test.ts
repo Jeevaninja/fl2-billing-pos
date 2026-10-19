@@ -136,6 +136,7 @@ describe('CounterQueries', () => {
         isActive: true,
         department: 'LIQUOR',
         tracksStock: true,
+        itemCategory: { id: expect.any(String), name: 'FULL' },
       });
       expect((await queries.lookupSku('hlag-330'))?.id).toBe(fx.sku.beer330);
     });
