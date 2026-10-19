@@ -1,8 +1,8 @@
 # FL2 POS — Backend State Reference
 
-Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`), Phase 10 master catalog and case-based inwarding (`0009_catalog_case_size`, `CatalogService`; plan `docs/ui/phase10-catalog-case-grn-plan.md`), Phase 11 peak start baseline and Day End sales breakdown (no migration; plan `docs/ui/phase11-peak-day-end-visibility-plan.md`), Phase 12 server-side peak undo (no migration; plan `docs/ui/phase12-billing-speed-plan.md`), Phase 13 Day End tally adjustments and running peak analytics (`0010_tender_adjustments`; plan `docs/ui/phase13-peak-close-tally-plan.md`), Phase 14 bank deposits / cash drops (`0011_bank_deposits`; plan `docs/ui/phase14-bank-deposits-plan.md`), Phase 15 held bills in `/api/context` and per-waiter day stats (no migration; plan `docs/ui/phase15-billing-tabs-waiter-sidebar-plan.md`), Phase 16 waiter ledger, multi-bill and lump-sum waiter settlement and the Day End waiter-balance blocker (no migration; plan `docs/ui/phase16-waiter-ledger-plan.md`), Phase 17 Orders (bill-wise tracking) and DUPLICATE receipt reprints (no migration; plan `docs/ui/phase17-orders-plan.md`), Phase 18 custom expense categories (`0012_expense_categories`; plan `docs/ui/phase18-expense-categories-plan.md`), Phase 19 departments — unified billing, split ledger (`0013_departments`; plan `docs/ui/phase19-departments-plan.md`), Phase 20 custom item categories and the flat catalog (`0014_item_categories`; plan `docs/ui/phase20-item-categories-plan.md`), and Phase 21 Kitchen Kiosk, kitchen purchases, the Kitchen P&L and universal billing search (`0015_kitchen_purchases`; plan `docs/ui/phase21-kitchen-kiosk-plan.md`). Upcoming phases, not built: `docs/roadmap.md`. Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
+Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`), Phase 10 master catalog and case-based inwarding (`0009_catalog_case_size`, `CatalogService`; plan `docs/ui/phase10-catalog-case-grn-plan.md`), Phase 11 peak start baseline and Day End sales breakdown (no migration; plan `docs/ui/phase11-peak-day-end-visibility-plan.md`), Phase 12 server-side peak undo (no migration; plan `docs/ui/phase12-billing-speed-plan.md`), Phase 13 Day End tally adjustments and running peak analytics (`0010_tender_adjustments`; plan `docs/ui/phase13-peak-close-tally-plan.md`), Phase 14 bank deposits / cash drops (`0011_bank_deposits`; plan `docs/ui/phase14-bank-deposits-plan.md`), Phase 15 held bills in `/api/context` and per-waiter day stats (no migration; plan `docs/ui/phase15-billing-tabs-waiter-sidebar-plan.md`), Phase 16 waiter ledger, multi-bill and lump-sum waiter settlement and the Day End waiter-balance blocker (no migration; plan `docs/ui/phase16-waiter-ledger-plan.md`), Phase 17 Orders (bill-wise tracking) and DUPLICATE receipt reprints (no migration; plan `docs/ui/phase17-orders-plan.md`), Phase 18 custom expense categories (`0012_expense_categories`; plan `docs/ui/phase18-expense-categories-plan.md`), Phase 19 departments — unified billing, split ledger (`0013_departments`; plan `docs/ui/phase19-departments-plan.md`), Phase 20 custom item categories and the flat catalog (`0014_item_categories`; plan `docs/ui/phase20-item-categories-plan.md`), Phase 21 Kitchen Kiosk, kitchen purchases, the Kitchen P&L and universal billing search (`0015_kitchen_purchases`; plan `docs/ui/phase21-kitchen-kiosk-plan.md`), and Phase 22 Revenue Centers — managed departments and a P&L per center (`0016_revenue_centers`; plan `docs/ui/phase22-revenue-centers-plan.md`). Upcoming phases, not built: `docs/roadmap.md`. Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
 
-- **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`, `0006_expense_category`, `0007_peak_drawer_cash`, `0008_stock_receipts`, `0009_catalog_case_size`, `0010_tender_adjustments`, `0011_bank_deposits`, `0012_expense_categories`, `0013_departments`, `0014_item_categories`, `0015_kitchen_purchases`.
+- **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`, `0006_expense_category`, `0007_peak_drawer_cash`, `0008_stock_receipts`, `0009_catalog_case_size`, `0010_tender_adjustments`, `0011_bank_deposits`, `0012_expense_categories`, `0013_departments`, `0014_item_categories`, `0015_kitchen_purchases`, `0016_revenue_centers`.
 - **Money:** `BIGINT` whole paise in SQL, `bigint` in TypeScript (`type Paise = bigint`). No floats anywhere.
 - **Quantities:** `INTEGER` whole sealed bottles (whole units for Ancillary items; Kitchen dishes are not stock-tracked). No ml / peg columns.
 - **Append-only:** DELETE and TRUNCATE are blocked on every domain table. Ledger tables also block UPDATE. Corrections are made with reversing records.
@@ -16,7 +16,7 @@ Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local 
 | `staff` | Cashiers, managers, admins | — |
 | `members` | Member register (optional on bills, no KYC gate) | — |
 | `products` | An item: a liquor brand, a kitchen dish or an ancillary good (category: WHISKY, RUM, BEER… FOOD, BEVERAGE, TOBACCO). Phase 19 (0013): `department` (default `LIQUOR`; every size shares it) | `department → departments` |
-| `departments` | Phase 19 (0013). Fixed, read-only list (`code` PK): LIQUOR (BAR, stock-tracked), KITCHEN (KITCHEN station, **not** stock-tracked), ANCILLARY (BAR, stock-tracked). `kot_station`, `tracks_stock`, `sort_order`. UPDATE / DELETE / TRUNCATE → `PS001`; no outbox (seeded on every database) | — |
+| `departments` | Phase 19 (0013); **revenue centers since Phase 22 (0016)**: the manager's list. `code` PK (`^[A-Z][A-Z0-9_]{1,29}$`, generated from the name for new centers, immutable), `id` (outbox), `name` (unique, case-insensitive, ≤ 30), `kot_station` BAR / KITCHEN / **NONE** (no ticket), `tracks_stock`, `is_active`, `sort_order`, timestamps. Seeds: LIQUOR (BAR, tracked), KITCHEN (KITCHEN, untracked), CIGARETTES / COOL_DRINKS / WATER "Water Bottles" (BAR, tracked), AC_CHARGES (NONE, untracked), ANCILLARY renamed "Other items". Trigger: code / id immutable (`PS001`); LIQUOR stays active, BAR and tracked (`PS002`); stock tracking can't be turned off with stock on hand, and a center with active items can't be disabled (`PS002`). No DELETE; outbox on change | — |
 | `item_categories` | Phase 20 (0014). The manager's catalog groupings in stock-report order: `name` (unique, case-insensitive, ≤ 30), `sort_order`, `is_active`, `default_size_code` (nullable = ask), `default_department`, `system_key` (the seven seeds FULL, HALF, QUARTER, BEER, WINE, FOOD, OTHERS; immutable). Editable master data, no DELETE, outbox on change; disabling one with active items → `PS002` | `default_department → departments` |
 | `skus` | Phase 20: `item_category_id` (NOT NULL; back-filled by `pos_default_item_category`: Kitchen → FOOD, Ancillary → OTHERS, wine → WINE, beer sizes → BEER, Full / Half / Quarter → the same; a SKU inserted without one gets the same default by trigger). One row per size: `FULL`, `HALF`, `QUARTER`, `BEER_650`, `BEER_330`, and `UNIT` (0013, a single-size item; Kitchen items use `FULL` / `HALF` plates or `UNIT`). `price_paise` = default sale price; `case_size` (1–1000, required) and optional `purchase_price_paise` ≥ 0 (0009) | `product_id → products` |
 | `sku_stock` | Cached on-hand bottles, `≥ 0` (trigger-maintained) | `sku_id → skus` (PK) |
@@ -37,8 +37,8 @@ Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local 
 | `bank_deposits` | Cash taken out of the drawer to be banked, e.g. RTGS (append-only; a negative row with `reverses_deposit_id` voids one). Not an expense, not revenue. `reference` optional (0011) | `business_day_id → business_days`, `reverses_deposit_id → bank_deposits` (unique), `created_by_staff_id → staff` |
 | `kot_tickets` | Phase 19 (0013). One printed KOT: `station` BAR / KITCHEN, `ticket_no` per bill and station (`#12`, `#12/2`), `printed_at`, sent by `created_by_staff_id` or `captain_device_id` (append-only, outbox) | `bill_id → bills`, `created_by_staff_id → staff` |
 | `kot_ticket_lines` | Phase 19 (0013). What a ticket carried per original bill line: `qty` (negative = CANCEL). Trigger: the line must be an original line of the ticket's bill, and its department must print at the ticket's station (`PS002`). Append-only, outbox | `ticket_id → kot_tickets`, `bill_item_id → bill_items` |
-| `kitchen_purchases` | Phase 21 (0015). Raw materials bought for the kitchen, apart from the liquor GRN: `vendor_name` (optional), `paid_from` DRAWER / OUTSIDE, `amount_paise` (negative on a void), `note`. Stamped with the open day (`PS007`); a DRAWER purchase is refused while a peak runs (`PS007`). A void (`reverses_purchase_id`) exactly negates an original of the same day, once, never a void (`PS006`), and copies `paid_from`. Append-only, outbox | `business_day_id → business_days`, `reverses_purchase_id → kitchen_purchases` (unique), `created_by_staff_id → staff` |
-| `kitchen_purchase_lines` | Phase 21 (0015). `description` (≤ 60), `quantity` free text (≤ 20, e.g. "5 kg" — a label, never arithmetic), `amount_paise` > 0. Only on an original, only in the transaction that created it (`PS001`); the lines must add up to the purchase amount at commit (deferred, `PS005`). Append-only, outbox | `purchase_id → kitchen_purchases` |
+| `revenue_center_purchases` | Phase 21 (0015, as `kitchen_purchases`), renamed and tagged in Phase 22 (0016): `department` (an active, non-LIQUOR center, `PS002`; old rows KITCHEN; a void copies it). A center's supply purchases (ice, cups, packaging), apart from the GRN: `vendor_name` (optional), `paid_from` DRAWER / OUTSIDE, `amount_paise` (negative on a void), `note`. Stamped with the open day (`PS007`); a DRAWER purchase is refused while a peak runs (`PS007`). A void (`reverses_purchase_id`) exactly negates an original of the same day, once, never a void (`PS006`), and copies `paid_from`. Append-only, outbox | `business_day_id → business_days`, `reverses_purchase_id → kitchen_purchases` (unique), `created_by_staff_id → staff` |
+| `revenue_center_purchase_lines` | Phase 21 (0015, as `kitchen_purchase_lines`); renamed in 0016. `description` (≤ 60), `quantity` free text (≤ 20, e.g. "5 kg" — a label, never arithmetic), `amount_paise` > 0. Only on an original, only in the transaction that created it (`PS001`); the lines must add up to the purchase amount at commit (deferred, `PS005`). Append-only, outbox | `purchase_id → kitchen_purchases` |
 | `sync_outbox` | Transactional outbox for cloud sync (written by trigger) | — |
 | `schema_migrations` | Applied migration versions | — |
 
@@ -90,7 +90,7 @@ UPI is excluded. A peak sale actually paid by UPI makes the drawer lower by that
 - **Size stays (D2):** the category only groups and suggests a size; `size_code` still drives KOT labels, case sizes and excise reports. **Department stays on the brand (D3)**; a category's default department pre-selects it for a new brand.
 - Bills, stock, KOTs and Day End are untouched (tested from a 0013 database).
 
-**Kitchen purchases (0015):** `pos_day_expected_cash` subtracts Σ the day's `DRAWER` kitchen purchases (voids included); the peak functions and the close trigger are unchanged (drawer purchases can't happen inside a peak window). No kitchen stock is kept.
+**Revenue-center purchases (0015 / 0016):** `pos_day_expected_cash` subtracts Σ the day's `DRAWER` purchases (voids included), across every center; the peak functions and the close trigger are unchanged (drawer purchases can't happen inside a peak window). No stock is kept from these: stock-tracked goods come in through the GRN. 0016 renamed the tables (constraints, indexes, triggers and functions follow) and re-created the functions that named them; new outbox events carry `aggregate_type = 'revenue_center_purchases'`.
 
 **Captain orders (0004):**
 - `bills_request_id_unique` (partial unique index) is the idempotency guarantee.
@@ -298,7 +298,7 @@ interface DayEndSummary {
     waiterBalance: WaiterBalanceBlocker;      // Phase 16: { totalPaise, openBillsPaise (Σ due on OPEN waiter bills), creditPaise (Σ outstanding_balance), waiters }
   };                                          // canClose also requires waiterBalance.totalPaise = 0 (the close trigger already enforces both parts)
   canClose: boolean;
-  breakdown: CashBreakdown;                   // openingFloat, normalCash, peakCash, waiterCash, cashExpenses, tenderAdjustment (13), bankDeposits (14), kitchenPurchases (21, drawer only), expectedCash, upiTotal (info)
+  breakdown: CashBreakdown;                   // openingFloat, normalCash, peakCash, waiterCash, cashExpenses, tenderAdjustment (13), bankDeposits (14), centerPurchases (21 / 22, drawer only), expectedCash, upiTotal (info)
   sales: SalesBreakdown;                      // Phase 11
   peakSessions: PeakSessionCash[];            // ended sessions: cash / UPI deltas, frozen variance, salesPaise, inWindowUpiPaise, peakUpiPaise, peakCashPaise
   tenderAdjustments: TenderAdjustmentEntry[]; // Phase 13: originals, newest first, with voidedAt
@@ -308,14 +308,14 @@ interface SalesBreakdown {                    // ended peak sessions only; a run
   peak: { salesPaise; cashPaise; upiPaise; sessionCount; runningSessionNo: number | null };
   waiterRepayments: { cashPaise; upiPaise };                     // credit collected, not sales
   total: { cashPaise; upiPaise; creditPaise; salesPaise };
-  byDepartment: Array<{ code: DepartmentCode; name: string; salesPaise }>;   // Phase 19, info only: every department, display order
+  byDepartment: Array<{ code: DepartmentCode; name: string; salesPaise }>;   // Phase 19, info only: Liquor always, other centers only with sales (Phase 22), display order
   unallocatedPaise: Paise;                                               // counted tenders on bills not split yet (part-paid open, or settled in a running peak)
 }
 interface BankDeposit { id; businessDayId; amountPaise /* negative on a void */; reference: string | null; reversesDepositId: string | null; createdByStaffId; createdAt; }
 interface CashExpense { id; businessDayId; peakSessionId: string | null; amountPaise; reversesExpenseId: string | null; category: ExpenseCategory; description: string | null; createdByStaffId; createdAt; }
 ```
 
-- **Department split (Phase 19):** Σ `bill_items.line_total_paise` by the line's `department` over the bills the totals count — the day's SETTLED normal bills with no tender inside a still-running peak window, plus every bill of an ended peak session (reversals included, as negative lines). `unallocatedPaise` = counted tenders on every other bill of the day. Asserted: `Σ byDepartment + unallocated = total.salesPaise`; `closeBusinessDay` also asserts `unallocated = 0` (open bills and a running peak block the close). `CashBreakdown` and expected cash are untouched: one drawer.
+- **Department split (Phase 19; Phase 22: Liquor always, other centers only when they sold something):** Σ `bill_items.line_total_paise` by the line's `department` over the bills the totals count — the day's SETTLED normal bills with no tender inside a still-running peak window, plus every bill of an ended peak session (reversals included, as negative lines). `unallocatedPaise` = counted tenders on every other bill of the day. Asserted: `Σ byDepartment + unallocated = total.salesPaise`; `closeBusinessDay` also asserts `unallocated = 0` (open bills and a running peak block the close). `CashBreakdown` and expected cash are untouched: one drawer.
 - **Sales breakdown (Phase 11), per ended peak session:** `peakUpi = upiDelta − in-window UPI` (UPI bill tenders and UPI waiter repayments taken during the peak, which moved the reading too); `peakCash = sales − peakUpi`. The variance therefore lands in peak cash. `getDayFigures` (shared with the peak baseline) asserts `peakCash = cashDelta − in-window cash tenders − in-window waiter cash + in-window expenses − variance` and `total.upi + waiterRepayments.upi = breakdown.upiTotalPaise`, throwing on drift. Normal-bill tenders taken inside a peak count under `normal` here but stay inside the peak's cash delta in `CashBreakdown`. A negative derived peak cash (UPI readings above sales) is reported, not clamped.
 - **`closeBusinessDay`:** locks the day row first, so a sale racing the close either commits before it (and is counted) or fails `PS007`. The database re-checks every blocker. The returned breakdown is checked against the frozen expected figure.
 - **`openBusinessDay`:** refuses a second open day and a date that has already traded (`PS007`). A business date trades once, so closing and reopening on the same calendar day is refused.
@@ -409,7 +409,7 @@ interface PeakSessionView extends PeakSession { runningExpectedPaise: Paise; exp
 interface SkuLookup {
   id: string; skuCode: string; barcode: string | null; displayName: string; sizeCode: SizeCode;
   pricePaise: Paise; purchasePricePaise: Paise | null; caseSize: number; onHandQty: number; isActive: boolean;
-  department: DepartmentCode; tracksStock: boolean;   // Phase 19: the product's department; false for Kitchen
+  department: DepartmentCode; departmentName: string; tracksStock: boolean;   // Phase 19 / 22: the product's revenue center; false for untracked centers
   itemCategory: { id: string; name: string };          // Phase 20
 }
 interface MemberSummary { id: string; membershipNo: string; displayName: string; }
@@ -460,29 +460,47 @@ interface ItemCategory { id; name; sortOrder; isActive; defaultSizeCode: SizeCod
 
 - Names are trimmed and space-collapsed, stored as typed (shown upper-case), at most 30 characters (`RangeError`). Disabling a category with active items is `PS002`; `move` swaps `sort_order` with the neighbour under a table lock.
 
-### `KitchenService` (`src/services/kitchen.service.ts`, Phase 21)
+### `DepartmentService` (`src/services/department.service.ts`, Phase 22)
 
 ```ts
-class KitchenService {
-  recordPurchase(input: { vendorName?; paidFrom: 'DRAWER' | 'OUTSIDE'; note?; lines: [{ description; quantity?; amountPaise }] }, staffId: string): Promise<KitchenPurchase>;
-  voidPurchase(purchaseId: string, staffId: string): Promise<KitchenPurchase>;   // appends the negating row
-  listPurchases(businessDayId: string): Promise<KitchenPurchaseEntry[]>;        // originals newest first, with lines and voidedAt
-  getKitchenSummary(businessDayId: string): Promise<KitchenSummary>;
+class DepartmentService {
+  listDepartments(opts?: { includeInactive?: boolean }): Promise<Department[]>;   // sort_order, then name
+  createDepartment(input: { name: string; kotStation: 'BAR' | 'KITCHEN' | 'NONE'; tracksStock: boolean }): Promise<Department>;  // code from the name (COOL_DRINKS, then _2…); appended last; PS012 duplicate name
+  updateDepartment(code: string, patch: { name?; kotStation?; tracksStock?; isActive?; move?: 'up' | 'down' }): Promise<Department>;
 }
-interface KitchenSummary {
-  day: { id; businessDate; status };
-  salesPaise;            // KITCHEN lines on counted bills (asserted equal to Day End's byDepartment KITCHEN)
-  openTabsPaise;         // KITCHEN lines on the day's bills not counted yet (open, or in a running peak)
-  expensesPaise;         // Σ non-voided expenses whose category's department is KITCHEN (Shared excluded)
-  purchasesPaise; purchasesDrawerPaise;   // Σ non-voided kitchen purchases, and the drawer part
+interface Department { code; name; kotStation: 'BAR' | 'KITCHEN' | 'NONE'; tracksStock; isActive; sortOrder; itemCount /* active items */; onHandQty }
+function requireActiveDepartment(db, code): Promise<string>;   // NotFoundError / PS002 when disabled — used by the catalog, item and expense categories
+```
+
+- Codes come from `codeFromName` ("Cool Drinks" → `COOL_DRINKS`, a name not starting with a letter → `C_…`). The database enforces the Liquor lock and the stock / active rules.
+- Catalog, item-category and expense-category services check the shape (`RangeError`) and then that the center exists and is active (`NotFoundError` / `PS002`); there is no fixed list in code any more.
+
+### `RevenueCenterService` (`src/services/revenue-center.service.ts`, Phase 22; `KitchenService` in Phase 21)
+
+```ts
+class RevenueCenterService {
+  recordPurchase(input: { department; vendorName?; paidFrom: 'DRAWER' | 'OUTSIDE'; note?; lines: [{ description; quantity?; amountPaise }] }, staffId: string): Promise<CenterPurchase>;
+  voidPurchase(purchaseId: string, staffId: string): Promise<CenterPurchase>;          // appends the negating row
+  listPurchases(businessDayId: string, department?: string): Promise<CenterPurchaseEntry[]>;
+  getSummary(businessDayId: string, department: string): Promise<RevenueCenterSummary>;
+  getOverview(businessDayId: string): Promise<RevenueCenterOverview>;                  // every active non-liquor center + a total row
+}
+interface RevenueCenterSummary {
+  center: { code; name; tracksStock; kotStation }; day: { id; businessDate; status };
+  salesPaise;            // the center's lines on counted bills (asserted equal to Day End's byDepartment for its code)
+  openTabsPaise;         // its lines on the day's bills not counted yet
+  expensesPaise;         // Σ non-voided expenses whose category maps to the center (Shared excluded)
+  purchasesPaise;        // stockPurchasesPaise + supplyPurchasesPaise (D2)
+  stockPurchasesPaise;   // GRN lines received today for items whose brand is in the center (qty × unit cost; current brand department)
+  supplyPurchasesPaise; supplyDrawerPaise;   // its own purchase ledger, and the drawer part
   grossPaise;            // sales − expenses − purchases
-  itemsSold: Array<{ skuId; displayName; quantity; amountPaise }>;   // counted KITCHEN lines by SKU, best sellers first
-  expenses: ExpenseEntry[]; purchases: KitchenPurchaseEntry[];
+  itemsSold; expenses: ExpenseEntry[]; purchases: CenterPurchaseEntry[];
 }
 ```
 
-- Validation (`RangeError`): 1–30 lines, a description on each, amounts > 0, total ≤ ₹10,00,000, vendor ≤ 80, note ≤ 200, quantity ≤ 20; blank texts → null.
+- Validation (`RangeError`): a center code, 1–30 lines, a description on each, amounts > 0, total ≤ ₹10,00,000, vendor ≤ 80, note ≤ 200, quantity ≤ 20; blank texts → null. An unknown center is `NotFoundError`; LIQUOR or a disabled center `PS002`.
 - `COUNTED_BILLS` (exported from `day-end.service.ts`) is the shared counted-bill rule.
+- **KOT (Phase 22):** `KotService` matches a line's station through its center; a NONE center's lines never pend and never print (`BillDetailItem.kotStation = 'NONE'`).
 
 ### `OrdersQueries` (`src/services/orders.queries.ts`, Phase 17)
 
@@ -555,7 +573,7 @@ class CatalogService {
 
   listCatalog(filter?: { q?: string; includeInactive?: boolean }): Promise<CatalogProduct[]>;
   getProduct(productId: string): Promise<CatalogProduct>;                       // NotFoundError
-  listDepartments(): Promise<Department[]>;                                     // Phase 19: { code, name, kotStation, tracksStock }, display order
+  // Phase 22: the department list moved to DepartmentService.
   createProduct(input: NewProductInput): Promise<CatalogProduct>;               // product + 1–6 sizes, one transaction
   updateProduct(productId: string, patch: ProductPatch): Promise<CatalogProduct>;
   addSku(productId: string, input: NewSkuInput & { codePrefix?: string }): Promise<CatalogProduct>;
@@ -768,11 +786,13 @@ Migrations run on every boot (already-applied ones are skipped).
 | `GET /api/purchases` | | `listReceipts(open day)`; 404 when no day is open | 200 `StockReceipt[]` |
 | `GET /api/purchases/:receiptId` | | `getReceipt` | 200 `StockReceiptDetail` |
 | `POST /api/purchases` | `{ invoiceNo, vendorName?, lines: [{ skuId, cases, looseBottles?, caseSize, unitCost }] }` or the loose-only `{ skuId, quantity, unitCost }` (`unitCost` in paise, `"0"` allowed) | `recordReceipt(…, cashier)` | 201 `StockReceiptDetail` |
-| `GET /api/departments` | | `listDepartments` (Phase 19) | 200 `Department[]` |
-| `GET /api/kitchen/summary` | | `getKitchenSummary(getCurrentDayId())` (Phase 21): the open day, else the last closed one; 404 before any day | 200 |
-| `GET /api/kitchen/purchases` | | `listPurchases` of the current day | 200 |
-| `POST /api/kitchen/purchases` | `{ vendorName?, paidFrom: 'DRAWER'\|'OUTSIDE', note?, lines: [{ description, quantity?, amount }] }` | `recordPurchase(…, cashier)` | 201 |
-| `POST /api/kitchen/purchases/:purchaseId/void` | `{}` | `voidPurchase(…, cashier)` | 201 |
+| `GET /api/departments` | `?includeInactive=1` | `DepartmentService.listDepartments` (Phase 22: revenue centers with counts) | 200 `Department[]` |
+| `POST /api/departments` | `{ name, kotStation: 'BAR'\|'KITCHEN'\|'NONE', tracksStock }` | `createDepartment` (PS012 duplicate name) | 201 |
+| `PATCH /api/departments/:code` | `{ name?, kotStation?, tracksStock?, isActive?, move? }` | `updateDepartment` (PS002 Liquor lock / stock / active items) | 200 |
+| `GET /api/revenue-centers/overview` | | `getOverview(getCurrentDayId())` | 200 |
+| `GET /api/revenue-centers/:code/summary` | | `getSummary(getCurrentDayId(), code)`; 404 unknown center or no day | 200 |
+| `POST /api/revenue-centers/purchases` | `{ department, vendorName?, paidFrom, note?, lines: [{ description, quantity?, amount }] }` | `recordPurchase(…, cashier)` | 201 |
+| `POST /api/revenue-centers/purchases/:purchaseId/void` | `{}` | `voidPurchase(…, cashier)` (the Phase 21 `/api/kitchen/*` routes are gone) | 201 |
 | `GET /api/item-categories` | `?includeInactive=1` | `listCategories` (Phase 20) | 200 |
 | `POST /api/item-categories` | `{ name, defaultSizeCode? (null = ask), defaultDepartment? }` | `createCategory` (PS012 duplicate) | 201 |
 | `PATCH /api/item-categories/:categoryId` | `{ name?, defaultSizeCode?, defaultDepartment?, isActive?, move? }` | `updateCategory` (PS002 disabling one with items) | 200 |

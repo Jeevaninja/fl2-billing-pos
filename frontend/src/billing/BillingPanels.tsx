@@ -2,7 +2,8 @@ import type { ReactNode } from 'react'
 import { ChefHat, CheckCircle2, CircleAlert, CreditCard, ScanBarcode, UserRound, UsersRound } from 'lucide-react'
 import type { BillDetail, MemberSummary, PeakSessionView, SizeCode, SkuLookup, WaiterSummary } from '../api/types'
 import { Kbd } from '../components/ui'
-import { DEPARTMENT_CHIP, DEPARTMENT_NAME, FOCUS_RING, keepFocus } from '../lib/ui'
+import { departmentChip } from '../lib/departments'
+import { FOCUS_RING, keepFocus } from '../lib/ui'
 import type { SearchView } from './skuSearch'
 import type { ScanState } from '../hooks/scanBuffer'
 import { formatPaise } from '../lib/money'
@@ -84,7 +85,7 @@ function SearchResults({ view, onPick }: { view: SearchView; onPick?: ((sku: Sku
             <span className="min-w-0 flex-1 truncate font-semibold">{sku.displayName}</span>
             <SizeChip size={sku.sizeCode} />
             {sku.department !== 'LIQUOR' && (
-              <span className={`rounded border px-1.5 py-0.5 text-[11px] font-black uppercase ${DEPARTMENT_CHIP[sku.department]}`}>{DEPARTMENT_NAME[sku.department]}</span>
+              <span className={`rounded border px-1.5 py-0.5 text-[11px] font-black uppercase ${departmentChip(sku.department)}`}>{sku.departmentName}</span>
             )}
             <span className="w-20 shrink-0 text-right font-mono text-xs text-zinc-400">{sku.tracksStock ? `${sku.onHandQty} left` : 'no stock'}</span>
             <span className="w-28 shrink-0 text-right font-mono font-bold tabular-nums">{formatPaise(sku.pricePaise)}</span>

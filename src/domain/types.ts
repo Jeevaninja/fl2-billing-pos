@@ -5,10 +5,15 @@ export type BillKind = 'SALE' | 'REVERSAL';
 export type BillStatus = 'OPEN' | 'SETTLED' | 'PEAK_UNSETTLED' | 'PEAK_RECONCILED';
 export type BillSource = 'COUNTER' | 'WAITER_APP';
 export type SizeCode = 'FULL' | 'HALF' | 'QUARTER' | 'BEER_650' | 'BEER_330' | 'UNIT';
-/** P&L department (0013). Every line of a bill carries one; the drawer stays unified. */
-export type DepartmentCode = 'LIQUOR' | 'KITCHEN' | 'ANCILLARY';
-/** Where a department's KOT lines print. */
+/**
+ * P&L department / revenue center code (0013; manager-defined since 0016): LIQUOR, KITCHEN,
+ * CIGARETTES, COOL_DRINKS, … Every line of a bill carries one; the drawer stays unified.
+ */
+export type DepartmentCode = string;
+/** A KOT printer station. */
 export type KotStation = 'BAR' | 'KITCHEN';
+/** Where a department's KOT lines print; NONE = no ticket (a service such as AC charges). */
+export type DepartmentStation = KotStation | 'NONE';
 export type CounterTender = 'CASH' | 'UPI';
 export type Tender = CounterTender | 'WAITER_CREDIT';
 

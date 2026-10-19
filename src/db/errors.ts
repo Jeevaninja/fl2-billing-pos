@@ -44,8 +44,8 @@ const CONSTRAINT_CODES: Readonly<Record<string, PosErrorCode>> = {
   tender_adjustments_reverses_unique: PosErrorCode.REVERSAL_RULE,
   bank_deposits_reverses_unique: PosErrorCode.REVERSAL_RULE,
   bank_deposits_reversal_shape: PosErrorCode.REVERSAL_RULE,
-  kitchen_purchases_reverses_unique: PosErrorCode.REVERSAL_RULE,
-  kitchen_purchases_reversal_shape: PosErrorCode.REVERSAL_RULE,
+  revenue_center_purchases_reverses_unique: PosErrorCode.REVERSAL_RULE,
+  revenue_center_purchases_reversal_shape: PosErrorCode.REVERSAL_RULE,
   cash_expenses_reversal_shape: PosErrorCode.REVERSAL_RULE,
   business_days_cash_count_on_close: PosErrorCode.ILLEGAL_TRANSITION,
   bills_peak_counter_only: PosErrorCode.ILLEGAL_TRANSITION,
@@ -64,6 +64,7 @@ const CONSTRAINT_CODES: Readonly<Record<string, PosErrorCode>> = {
   skus_product_size_unique: PosErrorCode.DUPLICATE_CATALOG_ENTRY,
   expense_categories_name_unique: PosErrorCode.DUPLICATE_CATALOG_ENTRY,
   item_categories_name_unique: PosErrorCode.DUPLICATE_CATALOG_ENTRY,
+  departments_name_unique: PosErrorCode.DUPLICATE_CATALOG_ENTRY,
 };
 
 /** A POS business-rule violation, carrying one of the PS001–PS012 codes. */

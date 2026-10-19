@@ -14,6 +14,7 @@ const sku = (id: string, displayName: string): SkuLookup => ({
   onHandQty: 0,
   isActive: true,
   department: 'KITCHEN',
+  departmentName: 'Kitchen',
   tracksStock: false,
   itemCategory: { id: 'food', name: 'FOOD' },
 })

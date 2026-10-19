@@ -81,8 +81,8 @@ export interface CashBreakdown {
   tenderAdjustmentPaise: Paise;
   /** Cash taken out of the drawer to be banked (Phase 14; subtracted). Not an expense, not revenue. */
   bankDepositsPaise: Paise;
-  /** Kitchen purchases paid from the drawer (Phase 21; subtracted). */
-  kitchenPurchasesPaise: Paise;
+  /** Revenue-center purchases paid from the drawer (Phase 21 kitchen, Phase 22 every center; subtracted). */
+  centerPurchasesPaise: Paise;
   expectedCashPaise: Paise;
   /** Information only: UPI collected the same way (bill and waiter UPI outside peaks + peak UPI deltas). */
   upiTotalPaise: Paise;
@@ -124,8 +124,8 @@ export interface SalesBreakdown {
   total: { cashPaise: Paise; upiPaise: Paise; creditPaise: Paise; salesPaise: Paise };
   /**
    * Phase 19, info only: the same sales split by the department snapshotted on each bill line, over
-   * the bills the totals above count (settled normal bills, ended peak sessions). Every department
-   * is listed, in display order.
+   * the bills the totals above count (settled normal bills, ended peak sessions). Liquor is always
+   * listed; other revenue centers only when they sold something (Phase 22), in display order.
    */
   byDepartment: DepartmentSales[];
   /**
@@ -696,11 +696,15 @@ export const COUNTED_BILLS = `
 async function departmentSplit(db: SqlClient, dayId: string): Promise<Pick<SalesBreakdown, 'byDepartment' | 'unallocatedPaise'>> {
   const { rows } = await db.query<{ code: DepartmentCode; name: string; sales: DbInt }>(
     `WITH counted AS (${COUNTED_BILLS})
-     SELECT d.code, d.name,
-            coalesce((SELECT sum(i.line_total_paise) FROM bill_items i
-                       WHERE i.department = d.code AND i.bill_id IN (SELECT id FROM counted)), 0)::text AS sales
-       FROM departments d
-      ORDER BY d.sort_order`,
+     SELECT code, name, sales::text AS sales FROM (
+       SELECT d.code, d.name, d.sort_order,
+              coalesce((SELECT sum(i.line_total_paise) FROM bill_items i
+                         WHERE i.department = d.code AND i.bill_id IN (SELECT id FROM counted)), 0) AS sales
+         FROM departments d
+     ) x
+      -- Liquor always; any other revenue center only when it sold something (Phase 22: the list is open-ended).
+      WHERE code = 'LIQUOR' OR sales <> 0
+      ORDER BY sort_order, lower(name)`,
     [dayId],
   );
   const open = await one<{ total: DbInt }>(
@@ -763,11 +767,11 @@ export async function getDayFigures(db: SqlClient, day: DaySummary): Promise<Day
     [day.id],
   );
 
-  const adjusted = await one<{ cash: DbInt; deposits: DbInt; kitchen: DbInt }>(
+  const adjusted = await one<{ cash: DbInt; deposits: DbInt; centers: DbInt }>(
     db,
     `SELECT coalesce((SELECT sum(cash_delta_paise) FROM tender_adjustments WHERE business_day_id = $1), 0)::text AS cash,
             coalesce((SELECT sum(amount_paise) FROM bank_deposits WHERE business_day_id = $1), 0)::text AS deposits,
-            coalesce((SELECT sum(amount_paise) FROM kitchen_purchases WHERE business_day_id = $1 AND paid_from = 'DRAWER'), 0)::text AS kitchen`,
+            coalesce((SELECT sum(amount_paise) FROM revenue_center_purchases WHERE business_day_id = $1 AND paid_from = 'DRAWER'), 0)::text AS centers`,
     [day.id],
   );
   const tenderAdjustmentPaise = toPaise(adjusted.cash);
@@ -828,7 +832,7 @@ export async function getDayFigures(db: SqlClient, day: DaySummary): Promise<Day
     cashExpensesPaise: toPaise(sums.expenses),
     tenderAdjustmentPaise,
     bankDepositsPaise: toPaise(adjusted.deposits),
-    kitchenPurchasesPaise: toPaise(adjusted.kitchen),
+    centerPurchasesPaise: toPaise(adjusted.centers),
     expectedCashPaise: 0n,
     upiTotalPaise: toPaise(sums.normal_upi) + toPaise(sums.waiter_upi) + sumOf((s) => s.upiDeltaPaise) - tenderAdjustmentPaise,
   };
@@ -840,7 +844,7 @@ export async function getDayFigures(db: SqlClient, day: DaySummary): Promise<Day
     breakdown.cashExpensesPaise +
     breakdown.tenderAdjustmentPaise -
     breakdown.bankDepositsPaise -
-    breakdown.kitchenPurchasesPaise;
+    breakdown.centerPurchasesPaise;
   if (breakdown.expectedCashPaise !== toPaise(sums.expected)) {
     throw new Error(`day ${day.businessDate}: breakdown ${breakdown.expectedCashPaise} disagrees with pos_day_expected_cash ${sums.expected}`);
   }

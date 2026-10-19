@@ -328,11 +328,7 @@ describe('local HTTP API', () => {
       peak: { salesPaise: '0', cashPaise: '0', upiPaise: '0', sessionCount: 0, runningSessionNo: null },
       waiterRepayments: { cashPaise: '0', upiPaise: '0' },
       total: { cashPaise: '0', upiPaise: String(PRICE.half), creditPaise: '0', salesPaise: String(PRICE.half) },
-      byDepartment: [
-        { code: 'LIQUOR', name: 'Liquor', salesPaise: String(PRICE.half) },
-        { code: 'KITCHEN', name: 'Kitchen', salesPaise: '0' },
-        { code: 'ANCILLARY', name: 'Ancillary', salesPaise: '0' },
-      ],
+      byDepartment: [{ code: 'LIQUOR', name: 'Liquor', salesPaise: String(PRICE.half) }],
       unallocatedPaise: '0',
     });
 
@@ -407,6 +403,10 @@ describe('local HTTP API', () => {
     expect((await call('GET', '/api/departments')).body.map((d: { code: string; kotStation: string }) => [d.code, d.kotStation])).toEqual([
       ['LIQUOR', 'BAR'],
       ['KITCHEN', 'KITCHEN'],
+      ['CIGARETTES', 'BAR'],
+      ['COOL_DRINKS', 'BAR'],
+      ['WATER', 'BAR'],
+      ['AC_CHARGES', 'NONE'],
       ['ANCILLARY', 'BAR'],
     ]);
 
@@ -418,7 +418,7 @@ describe('local HTTP API', () => {
       skus: [{ sizeCode: 'UNIT', salePrice: '26000', caseSize: 1 }],
     });
     expect(dish).toMatchObject({ status: 201, body: { department: 'KITCHEN', skus: [{ skuCode: 'PTKA-U', displayName: 'Paneer Tikka', tracksStock: false }] } });
-    expect(await call('POST', '/api/catalog/products', { name: 'X', category: 'FOOD', department: 'BAR', codePrefix: 'XX', skus: [] })).toMatchObject({ status: 400 });
+    expect(await call('POST', '/api/catalog/products', { name: 'X', category: 'FOOD', department: 'bar', codePrefix: 'XX', skus: [] })).toMatchObject({ status: 400 });
     const dishSku = dish.body.skus[0].id;
 
     // Counter bill: rum + 2 dishes. F6 sends the dishes only; settle sends nothing more.
@@ -452,7 +452,8 @@ describe('local HTTP API', () => {
     const veg = await call('POST', '/api/expense-categories', { name: 'Vegetables', department: 'KITCHEN' });
     expect(veg).toMatchObject({ status: 201, body: { department: 'KITCHEN' } });
     expect(await call('PATCH', `/api/expense-categories/${veg.body.id}`, { department: null })).toMatchObject({ status: 200, body: { department: null } });
-    expect(await call('PATCH', `/api/expense-categories/${veg.body.id}`, { department: 'BAR' })).toMatchObject({ status: 400 });
+    expect(await call('PATCH', `/api/expense-categories/${veg.body.id}`, { department: 'bar' })).toMatchObject({ status: 400 });
+    expect(await call('PATCH', `/api/expense-categories/${veg.body.id}`, { department: 'BAKERY' })).toMatchObject({ status: 404 });
   });
 
   it('Phase 20: item categories and flat items', async () => {
@@ -478,9 +479,10 @@ describe('local HTTP API', () => {
     expect((await call('GET', '/api/skus/lookup?code=8901848')).body).toMatchObject({ id: item.body.id, itemCategory: { name: 'QUARTER' } });
   });
 
-  it('Phase 21: kitchen purchases, the kitchen summary and active-only search', async () => {
+  it('Phase 21 / 22: revenue-center purchases, summaries, centers and active-only search', async () => {
     const { fx, call, db } = await start();
-    const bought = await call('POST', '/api/kitchen/purchases', {
+    const bought = await call('POST', '/api/revenue-centers/purchases', {
+      department: 'KITCHEN',
       vendorName: 'Raju',
       paidFrom: 'DRAWER',
       lines: [
@@ -489,13 +491,31 @@ describe('local HTTP API', () => {
       ],
     });
     expect(bought).toMatchObject({ status: 201, body: { amountPaise: '180000', paidFrom: 'DRAWER', lines: [{ quantity: '5 kg' }, { quantity: null }] } });
-    expect(await call('POST', '/api/kitchen/purchases', { paidFrom: 'CARD', lines: [] })).toMatchObject({ status: 400 });
-    expect(await call('POST', '/api/kitchen/purchases', { paidFrom: 'OUTSIDE', lines: [{ description: 'x', amount: '1.5' }] })).toMatchObject({ status: 400 });
-    expect((await call('GET', '/api/kitchen/purchases')).body).toHaveLength(1);
-    const summary = await call('GET', '/api/kitchen/summary');
-    expect(summary).toMatchObject({ status: 200, body: { day: { id: fx.dayId }, purchasesPaise: '180000', purchasesDrawerPaise: '180000', grossPaise: '-180000' } });
-    expect((await call('GET', '/api/day-end')).body.breakdown).toMatchObject({ kitchenPurchasesPaise: '180000' });
-    expect(await call('POST', `/api/kitchen/purchases/${bought.body.id}/void`, {})).toMatchObject({ status: 201, body: { amountPaise: '-180000' } });
+    expect(await call('POST', '/api/revenue-centers/purchases', { department: 'KITCHEN', paidFrom: 'CARD', lines: [] })).toMatchObject({ status: 400 });
+    expect(await call('POST', '/api/revenue-centers/purchases', { department: 'KITCHEN', paidFrom: 'OUTSIDE', lines: [{ description: 'x', amount: '1.5' }] })).toMatchObject({ status: 400 });
+    expect(await call('POST', '/api/revenue-centers/purchases', { paidFrom: 'OUTSIDE', lines: [{ description: 'x', amount: '100' }] })).toMatchObject({ status: 400 });
+    expect(await call('POST', '/api/revenue-centers/purchases', { department: 'LIQUOR', paidFrom: 'OUTSIDE', lines: [{ description: 'x', amount: '100' }] })).toMatchObject({
+      status: 409,
+      body: { error: { code: 'PS002' } },
+    });
+    const summary = await call('GET', '/api/revenue-centers/KITCHEN/summary');
+    expect(summary).toMatchObject({
+      status: 200,
+      body: { center: { code: 'KITCHEN' }, day: { id: fx.dayId }, purchasesPaise: '180000', supplyDrawerPaise: '180000', grossPaise: '-180000', purchases: [{ id: bought.body.id }] },
+    });
+    expect(await call('GET', '/api/revenue-centers/NOPE/summary')).toMatchObject({ status: 404 });
+    expect((await call('GET', '/api/revenue-centers/overview')).body.centers.map((c: { code: string }) => c.code)).toEqual(['KITCHEN', 'CIGARETTES', 'COOL_DRINKS', 'WATER', 'AC_CHARGES', 'ANCILLARY']);
+    expect((await call('GET', '/api/day-end')).body.breakdown).toMatchObject({ centerPurchasesPaise: '180000' });
+    expect(await call('POST', `/api/revenue-centers/purchases/${bought.body.id}/void`, {})).toMatchObject({ status: 201, body: { amountPaise: '-180000' } });
+    expect(await call('GET', '/api/kitchen/summary')).toMatchObject({ status: 404 });
+
+    // Centers: add, edit, and the Liquor lock.
+    const paan = await call('POST', '/api/departments', { name: 'Paan', kotStation: 'NONE', tracksStock: false });
+    expect(paan).toMatchObject({ status: 201, body: { code: 'PAAN', sortOrder: 8 } });
+    expect(await call('POST', '/api/departments', { name: 'X', kotStation: 'BAR' })).toMatchObject({ status: 400 });
+    expect(await call('PATCH', '/api/departments/PAAN', { name: 'Paan Stall', kotStation: 'BAR' })).toMatchObject({ status: 200, body: { name: 'Paan Stall', kotStation: 'BAR' } });
+    expect(await call('PATCH', '/api/departments/LIQUOR', { isActive: false })).toMatchObject({ status: 409, body: { error: { code: 'PS002' } } });
+    expect((await call('GET', '/api/departments?includeInactive=1')).body).toHaveLength(8);
 
     await db.query(`UPDATE skus SET is_active = false WHERE id = $1`, [fx.sku.quarter]);
     const all = (await call('GET', '/api/skus?q=house%20rum&limit=8')).body.map((s: { skuCode: string }) => s.skuCode);

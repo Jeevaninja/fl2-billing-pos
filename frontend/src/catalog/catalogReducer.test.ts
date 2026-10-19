@@ -46,6 +46,7 @@ function item(id: string, brandName: string, cat: ItemCategory, over: Partial<Ca
     onHandQty: 10,
     isActive: true,
     department: cat.defaultDepartment,
+    departmentName: cat.defaultDepartment === 'KITCHEN' ? 'Kitchen' : 'Liquor',
     tracksStock: cat.defaultDepartment !== 'KITCHEN',
     itemCategory: { id: cat.id, name: cat.name },
     productId: `p-${brandName}`,

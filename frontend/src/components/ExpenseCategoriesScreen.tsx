@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react'
 import { ArrowDown, ArrowLeft, ArrowUp, Plus, Tags, WifiOff } from 'lucide-react'
 import { ApiError, api } from '../api/client'
-import type { DepartmentCode, ExpenseCategory } from '../api/types'
+import type { Department, DepartmentCode, ExpenseCategory } from '../api/types'
 import { FlashLine } from '../billing/BillingPanels'
 import type { Flash } from '../billing/billingReducer'
 import { counterErrorMessage } from '../billing/errors'
 import { Modal } from '../billing/Modal'
 import { beep } from '../lib/beep'
-import { DEPARTMENT_CHIP, DEPARTMENT_ORDER, FOCUS_RING, keepFocus } from '../lib/ui'
+import { useDepartments } from '../hooks/useDepartments'
+import { departmentChip } from '../lib/departments'
+import { FOCUS_RING, keepFocus } from '../lib/ui'
 import {
   categoryFormError,
   categoryPatch,
@@ -178,6 +180,8 @@ export default function ExpenseCategoriesScreen({ onExit }: { onExit: () => void
 
   const activeCount = state.categories.filter((c) => c.isActive).length
   const editing = state.form?.id ? state.categories.find((c) => c.id === state.form?.id) : undefined
+  // Phase 22: the revenue centers a category can map to (active ones, in display order).
+  const departments = useDepartments(true)
 
   return (
     <div className="flex h-full min-h-screen flex-col">
@@ -242,7 +246,7 @@ export default function ExpenseCategoriesScreen({ onExit }: { onExit: () => void
                   >
                     <span className="flex items-center gap-2 text-lg font-bold">
                       {c.name}
-                      <DepartmentBadge department={c.department} />
+                      <DepartmentBadge department={c.department} departments={departments} />
                       {c.noteRequired && <span className="rounded bg-sky-500 px-1.5 py-0.5 text-[11px] font-black text-zinc-950 uppercase">Note required</span>}
                       {!c.isActive && <span className="rounded bg-zinc-700 px-1.5 py-0.5 text-[11px] font-black text-zinc-200 uppercase">Disabled</span>}
                     </span>
@@ -292,6 +296,7 @@ export default function ExpenseCategoriesScreen({ onExit }: { onExit: () => void
         <CategoryModal
           form={state.form}
           original={editing}
+          departments={departments}
           error={state.saveError ?? categoryFormError(state.form, state.categories)}
           showError={state.saveError !== null}
           saving={state.saving}
@@ -307,6 +312,7 @@ export default function ExpenseCategoriesScreen({ onExit }: { onExit: () => void
 function CategoryModal({
   form,
   original,
+  departments,
   error,
   showError,
   saving,
@@ -316,6 +322,7 @@ function CategoryModal({
 }: {
   form: CategoryForm
   original: ExpenseCategory | undefined
+  departments: Department[]
   error: string | null
   /** The server refused the last save: outline the field. */
   showError: boolean
@@ -363,9 +370,9 @@ function CategoryModal({
         />
       </label>
       <div className="mt-4">
-        <span className="text-sm font-semibold text-zinc-300">Department (P&amp;L)</span>
+        <span className="text-sm font-semibold text-zinc-300">Revenue center (P&amp;L)</span>
         <div className="mt-1 grid grid-cols-4 gap-2" role="radiogroup" aria-label="Department">
-          {[...DEPARTMENT_ORDER, null].map((d) => (
+          {[...departments.filter((d) => d.isActive || d.code === form.department).map((d) => d.code), null].map((d) => (
             <button
               key={d ?? 'SHARED'}
               type="button"
@@ -373,17 +380,17 @@ function CategoryModal({
               aria-checked={form.department === d}
               onClick={() => onEdit({ department: d })}
               className={`min-h-14 rounded-lg border-2 px-3 text-lg font-bold ${
-                form.department === d ? (d ? DEPARTMENT_CHIP[d] : 'border-zinc-300 bg-zinc-700 text-zinc-50') : 'border-zinc-700 bg-zinc-950 text-zinc-300'
+                form.department === d ? (d ? departmentChip(d) : 'border-zinc-300 bg-zinc-700 text-zinc-50') : 'border-zinc-700 bg-zinc-950 text-zinc-300'
               } ${FOCUS_RING}`}
             >
-              {departmentLabel(d)}
+              {departmentLabel(d, departments)}
             </button>
           ))}
         </div>
         <p className="mt-1 text-sm text-zinc-500">Shared = overheads that belong to no single P&amp;L (rent, transport, repairs, wages).</p>
       </div>
-      {departmentMoveNote(original, form) && (
-        <p className="mt-3 rounded-md border-l-4 border-amber-500 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">{departmentMoveNote(original, form)}</p>
+      {departmentMoveNote(original, form, departments) && (
+        <p className="mt-3 rounded-md border-l-4 border-amber-500 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">{departmentMoveNote(original, form, departments)}</p>
       )}
       <div className="mt-4 grid grid-cols-2 gap-3">
         <Toggle on={form.noteRequired} onClick={() => onEdit({ noteRequired: !form.noteRequired })} title="Note required" hint="The cashier must add a note" />
@@ -401,7 +408,7 @@ function CategoryModal({
   )
 }
 
-function DepartmentBadge({ department }: { department: DepartmentCode | null }) {
-  const tone = department ? DEPARTMENT_CHIP[department] : 'border-zinc-600 bg-zinc-800 text-zinc-300'
-  return <span className={`rounded border px-1.5 py-0.5 text-[11px] font-black uppercase ${tone}`}>{departmentLabel(department)}</span>
+function DepartmentBadge({ department, departments }: { department: DepartmentCode | null; departments: Department[] }) {
+  const tone = department ? departmentChip(department) : 'border-zinc-600 bg-zinc-800 text-zinc-300'
+  return <span className={`rounded border px-1.5 py-0.5 text-[11px] font-black uppercase ${tone}`}>{departmentLabel(department, departments)}</span>
 }

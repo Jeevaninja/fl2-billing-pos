@@ -3,7 +3,6 @@ export type { BillLine, CounterPayment, PeakUndoResult, ReversalResult, ReverseB
 export {
   CatalogService,
   DEFAULT_CASE_SIZE,
-  DEPARTMENT_CODES,
   MAX_CASE_SIZE,
   MAX_OPENING_QTY,
   PRODUCT_CATEGORIES,
@@ -12,20 +11,24 @@ export {
   skuCodeFor,
   suggestPrefix,
 } from './catalog.service.js';
-export type { CatalogFilter, CatalogItem, CatalogProduct, CatalogSku, Department, ItemPatch, NewItemInput, NewProductInput, NewSkuInput, ProductCategory, ProductPatch, SkuPatch } from './catalog.service.js';
+export type { CatalogFilter, CatalogItem, CatalogProduct, CatalogSku, ItemPatch, NewItemInput, NewProductInput, NewSkuInput, ProductCategory, ProductPatch, SkuPatch } from './catalog.service.js';
 export { CaptainService, MAX_ORDER_LINES, orderFingerprint } from './captain.service.js';
 export type { OrderLine, OrderRequest, PlacedOrder, WaiterProfile } from './captain.service.js';
 export { KotService } from './kot.service.js';
-export { KitchenService, MAX_PURCHASE_LINES, MAX_PURCHASE_PAISE } from './kitchen.service.js';
+export { MAX_PURCHASE_LINES, MAX_PURCHASE_PAISE, RevenueCenterService } from './revenue-center.service.js';
 export type {
-  KitchenItemSold,
-  KitchenPaidFrom,
-  KitchenPurchase,
-  KitchenPurchaseEntry,
-  KitchenPurchaseInput,
-  KitchenPurchaseLine,
-  KitchenSummary,
-} from './kitchen.service.js';
+  CenterItemSold,
+  CenterPurchase,
+  CenterPurchaseEntry,
+  CenterPurchaseInput,
+  CenterPurchaseLine,
+  PurchasePaidFrom,
+  RevenueCenterOverview,
+  RevenueCenterOverviewRow,
+  RevenueCenterSummary,
+} from './revenue-center.service.js';
+export { cleanDepartmentName, codeFromName, DEPARTMENT_STATIONS, DepartmentService, MAX_DEPARTMENT_NAME } from './department.service.js';
+export type { Department, DepartmentPatch, NewDepartment } from './department.service.js';
 export type { KotSender, KotSendOptions, KotStatus } from './kot.service.js';
 export { CounterQueries } from './counter-queries.js';
 export type {

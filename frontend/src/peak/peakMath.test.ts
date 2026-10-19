@@ -47,7 +47,7 @@ describe('describeBaseline', () => {
     cashExpensesPaise: 350_00n,
     tenderAdjustmentPaise: 0n,
     bankDepositsPaise: 0n,
-    kitchenPurchasesPaise: 0n,
+    centerPurchasesPaise: 0n,
     expectedCashPaise: 12450_00n,
     billUpiPaise: 5700_00n,
     waiterUpiPaise: 500_00n,

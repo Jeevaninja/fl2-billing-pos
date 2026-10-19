@@ -24,15 +24,6 @@ export function sizeNameFor(size: SizeCode, department: DepartmentCode): string 
 /** Catalog display order. */
 export const SIZE_ORDER: readonly SizeCode[] = ['FULL', 'HALF', 'QUARTER', 'BEER_650', 'BEER_330', 'UNIT']
 
-/** Department labels and chip colours (Phase 19). */
-export const DEPARTMENT_NAME: Readonly<Record<DepartmentCode, string>> = { LIQUOR: 'Liquor', KITCHEN: 'Kitchen', ANCILLARY: 'Ancillary' }
-export const DEPARTMENT_ORDER: readonly DepartmentCode[] = ['LIQUOR', 'KITCHEN', 'ANCILLARY']
-export const DEPARTMENT_CHIP: Readonly<Record<DepartmentCode, string>> = {
-  LIQUOR: 'border-amber-700 bg-amber-950 text-amber-200',
-  KITCHEN: 'border-emerald-700 bg-emerald-950 text-emerald-200',
-  ANCILLARY: 'border-sky-700 bg-sky-950 text-sky-200',
-}
-
 export function formatTime(date: Date): string {
   return date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
 }

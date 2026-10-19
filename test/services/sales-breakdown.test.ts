@@ -6,13 +6,9 @@ import { makeServices, PAISE } from '../support/services.js';
 
 /** Phase 11: the peak start baseline and the Day End sales breakdown. */
 
-/** The Day End department split, every department listed (Phase 19). */
-function departments(liquor: bigint, kitchen = 0n, ancillary = 0n) {
-  return [
-    { code: 'LIQUOR', name: 'Liquor', salesPaise: liquor },
-    { code: 'KITCHEN', name: 'Kitchen', salesPaise: kitchen },
-    { code: 'ANCILLARY', name: 'Ancillary', salesPaise: ancillary },
-  ];
+/** The Day End department split: Liquor always, other centers only with sales (Phase 22). */
+function departments(liquor: bigint) {
+  return [{ code: 'LIQUOR', name: 'Liquor', salesPaise: liquor }];
 }
 
 describe('peak start baseline and sales breakdown', () => {
@@ -52,7 +48,7 @@ describe('peak start baseline and sales breakdown', () => {
       cashExpensesPaise: 150_00n,
       tenderAdjustmentPaise: 0n,
       bankDepositsPaise: 0n,
-      kitchenPurchasesPaise: 0n,
+      centerPurchasesPaise: 0n,
       expectedCashPaise: 2250_00n,
       billUpiPaise: 1200_00n,
       waiterUpiPaise: 100_00n,

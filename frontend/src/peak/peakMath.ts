@@ -62,7 +62,7 @@ export function describeBaseline(b: PeakStartBaseline): { cash: string; upi: str
     ['expenses', -b.cashExpensesPaise],
     ['tally', b.tenderAdjustmentPaise],
     ['bank deposits', -b.bankDepositsPaise],
-    ['kitchen purchases', -b.kitchenPurchasesPaise],
+    ['center purchases', -b.centerPurchasesPaise],
   ])
   const upiTerms: [string, Paise][] = [
     ['bills', b.billUpiPaise],

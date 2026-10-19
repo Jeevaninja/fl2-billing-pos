@@ -9,8 +9,11 @@ export type BillStatus = 'OPEN' | 'SETTLED' | 'PEAK_UNSETTLED' | 'PEAK_RECONCILE
 export type BillSource = 'COUNTER' | 'WAITER_APP'
 export type SizeCode = 'FULL' | 'HALF' | 'QUARTER' | 'BEER_650' | 'BEER_330' | 'UNIT'
 /** P&L department (Phase 19). Bills and the drawer stay unified; lines carry one each. */
-export type DepartmentCode = 'LIQUOR' | 'KITCHEN' | 'ANCILLARY'
+/** A revenue center code (Phase 22: manager-defined) — LIQUOR, KITCHEN, CIGARETTES, … */
+export type DepartmentCode = string
 export type KotStation = 'BAR' | 'KITCHEN'
+/** Where a center's KOT prints; NONE = no ticket (a service such as AC charges). */
+export type DepartmentStation = KotStation | 'NONE'
 export type CounterTender = 'CASH' | 'UPI'
 export type Tender = CounterTender | 'WAITER_CREDIT'
 
@@ -49,8 +52,8 @@ export interface BillItem {
 
 export interface BillDetailItem extends BillItem {
   remainingQuantity: number
-  /** Where the line's KOT prints. */
-  kotStation: KotStation
+  /** Where the line's KOT prints; NONE = never. */
+  kotStation: DepartmentStation
   /** Quantity already sent to that station on KOTs. */
   kotSentQuantity: number
 }
@@ -66,11 +69,24 @@ export interface KotStatus {
   error: string | null
 }
 
+/** A revenue center (Phase 22; a "department" in the data). */
 export interface Department {
   code: DepartmentCode
   name: string
-  kotStation: KotStation
+  kotStation: DepartmentStation
   tracksStock: boolean
+  isActive: boolean
+  sortOrder: number
+  itemCount: number
+  onHandQty: number
+}
+
+export interface DepartmentPatch {
+  name?: string
+  kotStation?: DepartmentStation
+  tracksStock?: boolean
+  isActive?: boolean
+  move?: 'up' | 'down'
 }
 
 export interface BillPayment {
@@ -215,6 +231,7 @@ export interface SkuLookup {
   onHandQty: number
   isActive: boolean
   department: DepartmentCode
+  departmentName: string
   /** false for Kitchen items: no stock is counted or needed. */
   tracksStock: boolean
   /** Phase 20: the catalog grouping (FULL, QUARTER, BEER…). */
@@ -279,8 +296,8 @@ export interface CashBreakdown {
   tenderAdjustmentPaise: Paise
   /** Cash taken out of the drawer to be banked (subtracted). Not an expense, not revenue. */
   bankDepositsPaise: Paise
-  /** Kitchen purchases paid from the drawer (Phase 21; subtracted). */
-  kitchenPurchasesPaise: Paise
+  /** Revenue-center purchases paid from the drawer (Phase 21 / 22; subtracted). */
+  centerPurchasesPaise: Paise
   expectedCashPaise: Paise
   upiTotalPaise: Paise
 }
@@ -370,7 +387,7 @@ export interface PeakStartBaseline {
   /** Σ Day End tally adjustments' cash deltas. */
   tenderAdjustmentPaise: Paise
   bankDepositsPaise: Paise
-  kitchenPurchasesPaise: Paise
+  centerPurchasesPaise: Paise
   expectedCashPaise: Paise
   billUpiPaise: Paise
   waiterUpiPaise: Paise
@@ -445,11 +462,11 @@ export interface ExpenseEntry extends CashExpense {
   voidedAt: string | null
 }
 
-// ── Kitchen Kiosk (Phase 21) ────────────────────────────────────────────────
+// ── Revenue centers (Phase 22; Kitchen Kiosk in Phase 21) ────────────────────
 
-export type KitchenPaidFrom = 'DRAWER' | 'OUTSIDE'
+export type PurchasePaidFrom = 'DRAWER' | 'OUTSIDE'
 
-export interface KitchenPurchaseLine {
+export interface CenterPurchaseLine {
   lineNo: number
   description: string
   /** Free text ("5 kg"): a label, never arithmetic. */
@@ -457,43 +474,64 @@ export interface KitchenPurchaseLine {
   amountPaise: Paise
 }
 
-export interface KitchenPurchase {
+export interface CenterPurchase {
   id: string
   businessDayId: string
+  department: DepartmentCode
   vendorName: string | null
-  paidFrom: KitchenPaidFrom
+  paidFrom: PurchasePaidFrom
   /** Negative on a void row. */
   amountPaise: Paise
   note: string | null
   reversesPurchaseId: string | null
   createdAt: string
-  lines: KitchenPurchaseLine[]
+  lines: CenterPurchaseLine[]
 }
 
-export interface KitchenPurchaseEntry extends KitchenPurchase {
+export interface CenterPurchaseEntry extends CenterPurchase {
   voidedAt: string | null
 }
 
-export interface KitchenPurchasePayload {
+export interface CenterPurchasePayload {
+  department: DepartmentCode
   vendorName: string | null
-  paidFrom: KitchenPaidFrom
+  paidFrom: PurchasePaidFrom
   note: string | null
   lines: Array<{ description: string; quantity: string | null; amount: Paise }>
 }
 
-export interface KitchenSummary {
+export interface RevenueCenterSummary {
+  center: { code: DepartmentCode; name: string; tracksStock: boolean; kotStation: DepartmentStation }
   day: { id: string; businessDate: string; status: 'OPEN' | 'CLOSED' }
-  /** KITCHEN lines on counted bills (= Day End's Kitchen figure). */
+  /** The center's lines on counted bills (= Day End's figure for it). */
   salesPaise: Paise
-  /** KITCHEN lines on bills not counted yet (open tabs, a running peak). */
+  /** Its lines on bills not counted yet (open tabs, a running peak). */
   openTabsPaise: Paise
   expensesPaise: Paise
+  /** stock (GRN) + supply purchases. */
   purchasesPaise: Paise
-  purchasesDrawerPaise: Paise
+  stockPurchasesPaise: Paise
+  supplyPurchasesPaise: Paise
+  supplyDrawerPaise: Paise
   grossPaise: Paise
   itemsSold: Array<{ skuId: string; displayName: string; quantity: number; amountPaise: Paise }>
   expenses: ExpenseEntry[]
-  purchases: KitchenPurchaseEntry[]
+  purchases: CenterPurchaseEntry[]
+}
+
+export interface RevenueCenterOverviewRow {
+  code: DepartmentCode
+  name: string
+  salesPaise: Paise
+  expensesPaise: Paise
+  purchasesPaise: Paise
+  grossPaise: Paise
+}
+
+export interface RevenueCenterOverview {
+  day: { id: string; businessDate: string; status: 'OPEN' | 'CLOSED' }
+  centers: RevenueCenterOverviewRow[]
+  total: { salesPaise: Paise; expensesPaise: Paise; purchasesPaise: Paise; grossPaise: Paise }
 }
 
 // ── Bank deposits (cash drops) ──────────────────────────────────────────────

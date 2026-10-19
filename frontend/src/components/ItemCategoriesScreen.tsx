@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react'
 import { ArrowDown, ArrowLeft, ArrowUp, LayoutList, Plus, WifiOff } from 'lucide-react'
 import { ApiError, api } from '../api/client'
-import type { ItemCategory, SizeCode } from '../api/types'
+import type { Department, ItemCategory, SizeCode } from '../api/types'
 import { FlashLine } from '../billing/BillingPanels'
 import type { Flash } from '../billing/billingReducer'
 import { counterErrorMessage } from '../billing/errors'
 import { Modal } from '../billing/Modal'
 import { beep } from '../lib/beep'
-import { DEPARTMENT_CHIP, DEPARTMENT_NAME, DEPARTMENT_ORDER, FOCUS_RING, keepFocus, SIZE_NAME, SIZE_ORDER } from '../lib/ui'
+import { useDepartments } from '../hooks/useDepartments'
+import { departmentChip, departmentName } from '../lib/departments'
+import { FOCUS_RING, keepFocus, SIZE_NAME, SIZE_ORDER } from '../lib/ui'
 import {
   itemCategoryFormError,
   itemCategoryFormFor,
@@ -174,6 +176,7 @@ export default function ItemCategoriesScreen({ onExit }: { onExit: () => void })
 
   const activeCount = state.categories.filter((c) => c.isActive).length
   const editing = state.form?.id ? state.categories.find((c) => c.id === state.form?.id) : undefined
+  const departments = useDepartments(true)
 
   return (
     <div className="flex h-full min-h-screen flex-col">
@@ -236,7 +239,7 @@ export default function ItemCategoriesScreen({ onExit }: { onExit: () => void })
                   >
                     <span className="flex items-center gap-2 text-lg font-black tracking-wide uppercase">
                       {c.name}
-                      <span className={`rounded border px-1.5 py-0.5 text-[11px] font-black ${DEPARTMENT_CHIP[c.defaultDepartment]}`}>{DEPARTMENT_NAME[c.defaultDepartment]}</span>
+                      <span className={`rounded border px-1.5 py-0.5 text-[11px] font-black ${departmentChip(c.defaultDepartment)}`}>{departmentName(departments, c.defaultDepartment)}</span>
                       {!c.isActive && <span className="rounded bg-zinc-700 px-1.5 py-0.5 text-[11px] font-black text-zinc-200">Disabled</span>}
                     </span>
                     <span className="text-sm text-zinc-400">
@@ -288,6 +291,7 @@ export default function ItemCategoriesScreen({ onExit }: { onExit: () => void })
         <CategoryModal
           form={state.form}
           original={editing}
+          departments={departments}
           error={state.saveError ?? itemCategoryFormError(state.form, state.categories)}
           showError={state.saveError !== null}
           saving={state.saving}
@@ -303,6 +307,7 @@ export default function ItemCategoriesScreen({ onExit }: { onExit: () => void })
 function CategoryModal({
   form,
   original,
+  departments,
   error,
   showError,
   saving,
@@ -312,6 +317,7 @@ function CategoryModal({
 }: {
   form: ItemCategoryForm
   original: ItemCategory | undefined
+  departments: Department[]
   error: string | null
   showError: boolean
   saving: boolean
@@ -376,18 +382,18 @@ function CategoryModal({
         </div>
       </div>
       <div className="mt-4">
-        <span className="text-sm font-semibold text-zinc-300">Default department for new brands</span>
-        <div className="mt-1 grid grid-cols-3 gap-2" role="radiogroup" aria-label="Default department">
-          {DEPARTMENT_ORDER.map((d) => (
+        <span className="text-sm font-semibold text-zinc-300">Default revenue center for new brands</span>
+        <div className="mt-1 grid grid-cols-4 gap-2" role="radiogroup" aria-label="Default department">
+          {departments.filter((d) => d.isActive || d.code === form.defaultDepartment).map(({ code: d }) => (
             <button
               key={d}
               type="button"
               role="radio"
               aria-checked={form.defaultDepartment === d}
               onClick={() => onEdit({ defaultDepartment: d })}
-              className={`min-h-14 rounded-lg border-2 px-3 text-lg font-bold ${form.defaultDepartment === d ? DEPARTMENT_CHIP[d] : 'border-zinc-700 bg-zinc-950 text-zinc-300'} ${FOCUS_RING}`}
+              className={`min-h-14 rounded-lg border-2 px-3 text-lg font-bold ${form.defaultDepartment === d ? departmentChip(d) : 'border-zinc-700 bg-zinc-950 text-zinc-300'} ${FOCUS_RING}`}
             >
-              {DEPARTMENT_NAME[d]}
+              {departmentName(departments, d)}
             </button>
           ))}
         </div>

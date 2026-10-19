@@ -11,10 +11,11 @@ import {
   CatalogService,
   CounterQueries,
   DayEndService,
-  DEPARTMENT_CODES,
+  DEPARTMENT_STATIONS,
+  DepartmentService,
   ExpenseCategoryService,
   ItemCategoryService,
-  KitchenService,
+  RevenueCenterService,
   KotService,
   NotFoundError,
   OrdersQueries,
@@ -66,10 +67,12 @@ const TENDERS = ['CASH', 'UPI', 'WAITER_CREDIT'] as const satisfies readonly Ten
 /** Loopback names only: blocks DNS-rebinding pages from reaching the till through a foreign Host. */
 const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
 
-/** Optional department; `null` is allowed only where it means Shared (expense categories). */
-function optDepartment(value: unknown, name: string, { nullable = false } = {}) {
+/** Optional revenue-center code (the service checks it exists); `null` only where it means Shared (expense categories). */
+function optDepartment(value: unknown, name: string, { nullable = false } = {}): string | null | undefined {
+  if (value === undefined) return undefined;
   if (value === null && nullable) return null;
-  return optOneOf(value, name, DEPARTMENT_CODES);
+  if (typeof value !== 'string' || !/^[A-Z][A-Z0-9_]{1,29}$/.test(value)) throw new BadRequestError(`${name} must be a revenue center code`);
+  return value;
 }
 
 /** Optional, nullable text: undefined = unchanged, null = clear. */
@@ -113,7 +116,8 @@ function buildRoutes({ db, cashierId, printer = new PrinterService(), kotPrinter
   const orders = new OrdersQueries(db);
   const expenseCategories = new ExpenseCategoryService(db);
   const itemCategories = new ItemCategoryService(db);
-  const kitchen = new KitchenService(db);
+  const centers = new RevenueCenterService(db);
+  const departments = new DepartmentService(db);
   const currentDayId = async () => {
     const dayId = await dayEnd.getCurrentDayId();
     if (!dayId) throw new NotFoundError('business day', 'current');
@@ -333,17 +337,46 @@ function buildRoutes({ db, cashierId, printer = new PrinterService(), kotPrinter
       return created(await purchases.recordReceipt({ invoiceNo: str(body.invoiceNo, 'invoiceNo'), vendorName, lines }, cashierId));
     }),
 
-    // ── Inventory catalog ──
-    route('GET', '/api/departments', async () => ok(await catalog.listDepartments())),
-
-    // ── Kitchen Kiosk (Phase 21) ──
-    route('GET', '/api/kitchen/summary', async () => ok(await kitchen.getKitchenSummary(await currentDayId()))),
-    route('GET', '/api/kitchen/purchases', async () => ok(await kitchen.listPurchases(await currentDayId()))),
-    route('POST', '/api/kitchen/purchases', async ({ body }) => {
-      if (!Array.isArray(body.lines)) throw new BadRequestError('lines must be an array');
+    // ── Revenue centers (Phase 22; departments are the manager's list) ──
+    route('GET', '/api/departments', async ({ query }) => ok(await departments.listDepartments({ includeInactive: query.get('includeInactive') === '1' }))),
+    route('POST', '/api/departments', async ({ body }) => {
+      const tracksStock = optBool(body.tracksStock, 'tracksStock');
+      if (tracksStock === undefined) throw new BadRequestError('tracksStock is required (true or false)');
       return created(
-        await kitchen.recordPurchase(
+        await departments.createDepartment({ name: str(body.name, 'name'), kotStation: oneOf(body.kotStation, 'kotStation', DEPARTMENT_STATIONS), tracksStock }),
+      );
+    }),
+    route('PATCH', '/api/departments/:code', async ({ params, body }) => {
+      const code = params.code ?? '';
+      if (!/^[A-Z][A-Z0-9_]{1,29}$/.test(code)) throw new BadRequestError('code must be a revenue center code');
+      const kotStation = optOneOf(body.kotStation, 'kotStation', DEPARTMENT_STATIONS);
+      const tracksStock = optBool(body.tracksStock, 'tracksStock');
+      const isActive = optBool(body.isActive, 'isActive');
+      const move = optOneOf(body.move, 'move', ['up', 'down'] as const);
+      return ok(
+        await departments.updateDepartment(code, {
+          ...(body.name !== undefined ? { name: str(body.name, 'name') } : {}),
+          ...(kotStation ? { kotStation } : {}),
+          ...(tracksStock !== undefined ? { tracksStock } : {}),
+          ...(isActive !== undefined ? { isActive } : {}),
+          ...(move ? { move } : {}),
+        }),
+      );
+    }),
+    route('GET', '/api/revenue-centers/overview', async () => ok(await centers.getOverview(await currentDayId()))),
+    route('GET', '/api/revenue-centers/:code/summary', async ({ params }) => {
+      const code = params.code ?? '';
+      if (!/^[A-Z][A-Z0-9_]{1,29}$/.test(code)) throw new BadRequestError('code must be a revenue center code');
+      return ok(await centers.getSummary(await currentDayId(), code));
+    }),
+    route('POST', '/api/revenue-centers/purchases', async ({ body }) => {
+      if (!Array.isArray(body.lines)) throw new BadRequestError('lines must be an array');
+      const department = optDepartment(body.department, 'department');
+      if (!department) throw new BadRequestError('department is required');
+      return created(
+        await centers.recordPurchase(
           {
+            department,
             vendorName: optNullableStr(body.vendorName, 'vendorName') ?? null,
             paidFrom: oneOf(body.paidFrom, 'paidFrom', ['DRAWER', 'OUTSIDE'] as const),
             note: optNullableStr(body.note, 'note') ?? null,
@@ -360,8 +393,8 @@ function buildRoutes({ db, cashierId, printer = new PrinterService(), kotPrinter
         ),
       );
     }),
-    route('POST', '/api/kitchen/purchases/:purchaseId/void', async ({ params }) =>
-      created(await kitchen.voidPurchase(id(params.purchaseId, 'purchaseId'), cashierId)),
+    route('POST', '/api/revenue-centers/purchases/:purchaseId/void', async ({ params }) =>
+      created(await centers.voidPurchase(id(params.purchaseId, 'purchaseId'), cashierId)),
     ),
 
     // ── Item categories and flat items (Phase 20) ──

@@ -19,7 +19,8 @@ const TILE_ACCENT: Record<PosActionId, string> = {
   expense: 'bg-rose-500 text-zinc-950',
   'bank-deposit': 'bg-indigo-400 text-zinc-950',
   purchase: 'bg-violet-400 text-zinc-950',
-  kitchen: 'bg-green-500 text-zinc-950',
+  'revenue-centers': 'bg-green-500 text-zinc-950',
+  'center-settings': 'bg-green-400 text-zinc-950',
   catalog: 'bg-teal-400 text-zinc-950',
   orders: 'bg-cyan-400 text-zinc-950',
   'expense-categories': 'bg-rose-400 text-zinc-950',
@@ -45,7 +46,8 @@ interface DashboardProps {
   onOpenPurchase: () => void
   onOpenCatalog: () => void
   onOpenOrders: () => void
-  onOpenKitchen: () => void
+  onOpenRevenueCenters: () => void
+  onOpenCenterSettings: () => void
   onOpenExpenseCategories: () => void
   onOpenItemCategories: () => void
 }
@@ -108,7 +110,8 @@ export default function Dashboard({
   onOpenPurchase,
   onOpenCatalog,
   onOpenOrders,
-  onOpenKitchen,
+  onOpenRevenueCenters,
+  onOpenCenterSettings,
   onOpenExpenseCategories,
   onOpenItemCategories,
 }: DashboardProps) {
@@ -162,8 +165,12 @@ export default function Dashboard({
         onOpenOrders()
         return
       }
-      if (id === 'kitchen') {
-        onOpenKitchen()
+      if (id === 'revenue-centers') {
+        onOpenRevenueCenters()
+        return
+      }
+      if (id === 'center-settings') {
+        onOpenCenterSettings()
         return
       }
       if (id === 'expense-categories') {
@@ -177,7 +184,7 @@ export default function Dashboard({
       runStub(id)
       setLastAction({ id, at: new Date() })
     },
-    [onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd, onOpenExpenses, onOpenBankDeposits, onOpenPurchase, onOpenCatalog, onOpenOrders, onOpenKitchen, onOpenExpenseCategories, onOpenItemCategories],
+    [onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd, onOpenExpenses, onOpenBankDeposits, onOpenPurchase, onOpenCatalog, onOpenOrders, onOpenRevenueCenters, onOpenCenterSettings, onOpenExpenseCategories, onOpenItemCategories],
   )
 
   useGlobalShortcuts(

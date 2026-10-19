@@ -8,7 +8,7 @@
 import type { SqlClient, SqlDatabase } from '../db/client.js';
 import { NotFoundError, PosError, PosErrorCode, withPosErrors } from '../db/errors.js';
 import type { DepartmentCode } from '../domain/types.js';
-import { DEPARTMENT_CODES } from './catalog.service.js';
+import { checkDepartmentCode, requireActiveDepartment } from './department.service.js';
 import { maybeOne, one } from './rows.js';
 
 export const MAX_CATEGORY_NAME = 40;
@@ -83,11 +83,7 @@ export function cleanCategoryName(name: string): string {
 }
 
 function checkDepartment(department: DepartmentCode | null | undefined): DepartmentCode | null | undefined {
-  if (department === undefined || department === null) return department;
-  if (!(DEPARTMENT_CODES as readonly string[]).includes(department)) {
-    throw new RangeError(`department must be one of ${DEPARTMENT_CODES.join(', ')}, or null for Shared`);
-  }
-  return department;
+  return department === undefined || department === null ? department : checkDepartmentCode(department);
 }
 
 async function getCategory(db: SqlClient, id: string): Promise<ExpenseCategory> {
@@ -114,6 +110,7 @@ export class ExpenseCategoryService {
     return withPosErrors(() =>
       this.db.transaction(async (tx) => {
         await tx.query(`LOCK TABLE expense_categories IN SHARE ROW EXCLUSIVE MODE`); // one sort_order per new row
+        if (department !== null) await requireActiveDepartment(tx, department);
         const row = await one<{ id: string }>(
           tx,
           `INSERT INTO expense_categories (name, note_required, department, sort_order)
@@ -135,6 +132,7 @@ export class ExpenseCategoryService {
     return withPosErrors(() =>
       this.db.transaction(async (tx) => {
         await tx.query(`LOCK TABLE expense_categories IN SHARE ROW EXCLUSIVE MODE`);
+        if (department !== undefined && department !== null) await requireActiveDepartment(tx, department);
         const current = await getCategory(tx, id);
 
         if (patch.isActive === false && current.isActive) {

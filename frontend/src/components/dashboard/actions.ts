@@ -1,7 +1,8 @@
 import {
   Boxes,
   CalendarCheck,
-  ChefHat,
+  Store,
+  Building2,
   ChartColumn,
   ClipboardList,
   LayoutList,
@@ -26,11 +27,12 @@ export type PosActionId =
   | 'expense'
   | 'bank-deposit'
   | 'purchase'
-  | 'kitchen'
+  | 'revenue-centers'
   | 'catalog'
   | 'orders'
   | 'expense-categories'
   | 'item-categories'
+  | 'center-settings'
   | 'day-end'
   | 'reports'
 
@@ -51,9 +53,10 @@ export const ACTIONS: Record<PosActionId, PosAction> = {
   expense: { id: 'expense', label: 'Expense', hint: 'Petty cash and daily spends', icon: Wallet },
   'bank-deposit': { id: 'bank-deposit', label: 'Bank Deposit', hint: 'Cash drops for bank / RTGS', icon: Landmark },
   purchase: { id: 'purchase', label: 'Purchase', hint: 'Stock inwarding (GRN)', icon: PackagePlus },
-  kitchen: { id: 'kitchen', label: 'Kitchen Kiosk', hint: 'Kitchen P&L and raw-material purchases', icon: ChefHat },
+  'revenue-centers': { id: 'revenue-centers', label: 'Revenue Centers', hint: 'P&L for Kitchen, Cigarettes, Cool Drinks…', icon: Store },
   catalog: { id: 'catalog', label: 'Inventory Catalog', hint: 'Items by category, prices and stock', icon: Boxes },
   'item-categories': { id: 'item-categories', label: 'Item Categories', hint: 'FULL, HALF, QUARTER… and their order', icon: LayoutList },
+  'center-settings': { id: 'center-settings', label: 'Revenue Centers', hint: 'Kitchen, Cigarettes… KOT and stock rules', icon: Building2 },
   orders: { id: 'orders', label: 'Orders', hint: "Today's bills, receipts and reprints", icon: ClipboardList },
   'expense-categories': { id: 'expense-categories', label: 'Expense Categories', hint: 'Petty-cash categories and their order', icon: Tags },
   'day-end': { id: 'day-end', label: 'Day End', hint: 'Peak reconciliation and close', icon: CalendarCheck },
@@ -64,10 +67,10 @@ export const ACTIONS: Record<PosActionId, PosAction> = {
  * Dashboard tiles, in grid order (5 × 2 since Phase 21: one slot is left for HR / Payroll). Inventory
  * Catalog lives in the header Settings menu (Phase 17).
  */
-export const MODULE_TILES: readonly PosActionId[] = ['billing', 'captain-orders', 'expense', 'bank-deposit', 'purchase', 'kitchen', 'orders', 'day-end', 'reports']
+export const MODULE_TILES: readonly PosActionId[] = ['billing', 'captain-orders', 'expense', 'bank-deposit', 'purchase', 'revenue-centers', 'orders', 'day-end', 'reports']
 
 /** Header Settings menu entries: setup screens that don't need a grid tile. */
-export const SETTINGS_ACTIONS: readonly PosActionId[] = ['catalog', 'item-categories', 'expense-categories']
+export const SETTINGS_ACTIONS: readonly PosActionId[] = ['catalog', 'item-categories', 'center-settings', 'expense-categories']
 
 /** Rail contents before the operator has used anything this session. */
 export const DEFAULT_RECENT: readonly PosActionId[] = ['new-bill', 'member', 'pay', 'captain-orders', 'day-end']

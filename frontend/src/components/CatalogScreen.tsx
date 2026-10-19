@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef, type ReactNode } from 'react'
 import { ArrowLeft, Pencil, Plus, RefreshCw, Search, WifiOff } from 'lucide-react'
 import { ApiError, api } from '../api/client'
-import type { CatalogItem, DepartmentCode, ItemCategory } from '../api/types'
+import type { CatalogItem, Department, DepartmentCode, ItemCategory } from '../api/types'
 import { FlashLine } from '../billing/BillingPanels'
 import { counterErrorMessage } from '../billing/errors'
 import { Modal } from '../billing/Modal'
@@ -28,7 +28,8 @@ import {
 } from '../catalog/catalogReducer'
 import { beep } from '../lib/beep'
 import { formatPaise } from '../lib/money'
-import { DEPARTMENT_CHIP, DEPARTMENT_NAME, DEPARTMENT_ORDER, FOCUS_RING, keepFocus, sizeNameFor } from '../lib/ui'
+import { departmentChip, departmentName } from '../lib/departments'
+import { FOCUS_RING, keepFocus, sizeNameFor } from '../lib/ui'
 import { Kbd, LiveClock } from './ui'
 
 interface CatalogScreenProps {
@@ -60,8 +61,8 @@ export default function CatalogScreen({ onExit }: CatalogScreenProps) {
 
   const load = useCallback(async () => {
     try {
-      const [items, categories] = await Promise.all([api.listItems(), api.listItemCategories(true)])
-      dispatch({ type: 'loaded', items, categories })
+      const [items, categories, departments] = await Promise.all([api.listItems(), api.listItemCategories(true), api.listDepartments(true)])
+      dispatch({ type: 'loaded', items, categories, departments })
     } catch (err) {
       dispatch({ type: 'failed', message: counterErrorMessage(err) })
     }
@@ -253,7 +254,7 @@ export default function CatalogScreen({ onExit }: CatalogScreenProps) {
                 return (
                   <li key={`h-${category.id}`} role="presentation" className="sticky top-0 z-10 flex min-h-12 items-center gap-3 border-y-2 border-zinc-700 bg-zinc-800 px-5">
                     <span className="text-xl font-black tracking-widest uppercase">{category.name}</span>
-                    <DepartmentChip department={category.defaultDepartment} />
+                    <DepartmentChip department={category.defaultDepartment} name={departmentName(state.departments, category.defaultDepartment)} />
                     <span className="ml-auto font-mono text-sm text-zinc-300 tabular-nums">
                       {row.count} item{row.count === 1 ? '' : 's'}
                       {category.defaultDepartment !== 'KITCHEN' && ` · ${row.onHand} on hand`}
@@ -418,7 +419,7 @@ function NewItemFields({ state, form, conflict, onField }: FieldsProps<NewItemFo
       </div>
       <p className="-mt-2 text-sm text-zinc-400">
         {brand
-          ? `Adds a ${form.sizeCode ? sizeNameFor(form.sizeCode, department) : 'size'} to ${brand.name} (${DEPARTMENT_NAME[brand.department]}) — it already has ${brand.sizes.map((s) => sizeNameFor(s, brand.department)).join(', ')}.`
+          ? `Adds a ${form.sizeCode ? sizeNameFor(form.sizeCode, department) : 'size'} to ${brand.name} (${departmentName(state.departments, brand.department)}) — it already has ${brand.sizes.map((s) => sizeNameFor(s, brand.department)).join(', ')}.`
           : form.name.trim()
             ? `New brand “${form.name.trim()}”.`
             : 'Type the brand name; an existing brand gets this as another size.'}
@@ -443,7 +444,7 @@ function NewItemFields({ state, form, conflict, onField }: FieldsProps<NewItemFo
         )
       )}
 
-      {!brand && <DepartmentPicker value={form.department} onChange={(value) => onField({ field: 'department', value })} />}
+      {!brand && <DepartmentPicker departments={state.departments} value={form.department} onChange={(value) => onField({ field: 'department', value })} />}
 
       <div className={`grid gap-4 ${kitchen ? 'grid-cols-3' : 'grid-cols-5'}`}>
         <TextInput label="Sale ₹" value={form.sale} onChange={(value) => onField({ field: 'sale', value })} inputMode="decimal" mono />
@@ -469,7 +470,7 @@ function EditItemFields({ state, form, conflict, onField }: FieldsProps<EditItem
   return (
     <div className="flex flex-col gap-4">
       <p className="text-zinc-300">
-        <span className="font-mono">{item.skuCode}</span> · {sizeNameFor(item.sizeCode, item.department)} · <DepartmentChip department={item.department} /> ·{' '}
+        <span className="font-mono">{item.skuCode}</span> · {sizeNameFor(item.sizeCode, item.department)} · <DepartmentChip department={item.department} name={item.departmentName} /> ·{' '}
         {item.tracksStock ? `${item.onHandQty} on hand (changes only through Purchase)` : 'stock not tracked'}
       </p>
       <TextInput label="Item name" value={form.name} onChange={(value) => onField({ field: 'name', value })} invalid={conflict === 'name' || conflict === 'size'} autofocus maxLength={80} />
@@ -478,7 +479,7 @@ function EditItemFields({ state, form, conflict, onField }: FieldsProps<EditItem
           {name.toLowerCase() === item.brandName.toLowerCase()
             ? `Renames the brand on every size of ${item.brandName}.`
             : other
-              ? `Moves this item to the existing brand ${other.name} (${DEPARTMENT_NAME[other.department]}); other sizes of ${item.brandName} stay.`
+              ? `Moves this item to the existing brand ${other.name} (${departmentName(state.departments, other.department)}); other sizes of ${item.brandName} stay.`
               : `Moves this item to a new brand “${name}”; other sizes of ${item.brandName} stay.`}
         </p>
       )}
@@ -491,7 +492,7 @@ function EditItemFields({ state, form, conflict, onField }: FieldsProps<EditItem
       </div>
       <ActiveToggle on={form.isActive} onChange={(value) => onField({ field: 'isActive', value })} />
       <p className="text-sm text-zinc-400">
-        A new sale price applies from the next scan; bills already rung up keep their price and name. The department ({DEPARTMENT_NAME[item.department]}) belongs to the brand
+        A new sale price applies from the next scan; bills already rung up keep their price and name. The revenue center ({item.departmentName}) belongs to the brand
         and applies to every size of {item.brandName}. Size and SKU code can&rsquo;t be changed.
       </p>
     </div>
@@ -516,22 +517,22 @@ function CategoryPicker({ categories, value, onChange }: { categories: ItemCateg
   )
 }
 
-/** Three-way switch for a new brand: which P&L its sales go to, and where its KOT prints. */
-function DepartmentPicker({ value, onChange }: { value: DepartmentCode; onChange: (value: DepartmentCode) => void }) {
+/** Revenue-center switch for a new brand: which P&L its sales go to, and where its KOT prints. */
+function DepartmentPicker({ departments, value, onChange }: { departments: Department[]; value: DepartmentCode; onChange: (value: DepartmentCode) => void }) {
   return (
     <div>
-      <span className="text-sm font-semibold text-zinc-300">Department (P&amp;L) — from the category, change if needed</span>
-      <div className="mt-1 grid grid-cols-3 gap-2" role="radiogroup" aria-label="Department">
-        {DEPARTMENT_ORDER.map((d) => (
+      <span className="text-sm font-semibold text-zinc-300">Revenue center (P&amp;L) — from the category, change if needed</span>
+      <div className="mt-1 grid grid-cols-4 gap-2" role="radiogroup" aria-label="Department">
+        {departments.filter((d) => d.isActive || d.code === value).map(({ code: d, name }) => (
           <button
             key={d}
             type="button"
             role="radio"
             aria-checked={value === d}
             onClick={() => onChange(d)}
-            className={`min-h-12 rounded-md border-2 px-3 text-lg font-black ${value === d ? DEPARTMENT_CHIP[d] : 'border-zinc-600 text-zinc-300 hover:border-zinc-400'} ${FOCUS_RING}`}
+            className={`min-h-12 rounded-md border-2 px-3 text-lg font-black ${value === d ? departmentChip(d) : 'border-zinc-600 text-zinc-300 hover:border-zinc-400'} ${FOCUS_RING}`}
           >
-            {DEPARTMENT_NAME[d]}
+            {name}
           </button>
         ))}
       </div>
@@ -539,8 +540,8 @@ function DepartmentPicker({ value, onChange }: { value: DepartmentCode; onChange
   )
 }
 
-function DepartmentChip({ department }: { department: DepartmentCode }) {
-  return <span className={`rounded border px-2 py-0.5 text-xs font-bold tracking-widest uppercase ${DEPARTMENT_CHIP[department]}`}>{DEPARTMENT_NAME[department]}</span>
+function DepartmentChip({ department, name }: { department: DepartmentCode; name: string }) {
+  return <span className={`rounded border px-2 py-0.5 text-xs font-bold tracking-widest uppercase ${departmentChip(department)}`}>{name}</span>
 }
 
 function ChoiceChip({ on, onClick, invalid = false, children }: { on: boolean; onClick: () => void; invalid?: boolean; children: ReactNode }) {

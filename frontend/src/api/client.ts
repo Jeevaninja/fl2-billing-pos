@@ -20,9 +20,12 @@ import type {
   ItemCategory,
   ItemCategoryPatch,
   ItemPatchPayload,
-  KitchenPurchase,
-  KitchenPurchasePayload,
-  KitchenSummary,
+  CenterPurchase,
+  CenterPurchasePayload,
+  RevenueCenterOverview,
+  RevenueCenterSummary,
+  DepartmentPatch,
+  DepartmentStation,
   KotStatus,
   NewItemPayload,
   MemberSummary,
@@ -111,9 +114,10 @@ export const api = {
   searchSkus: (q: string) => call<SkuLookup[]>('GET', `/api/skus?q=${encodeURIComponent(q)}&limit=12`),
   /** Phase 21 billing search: active items only, every typed word matched. */
   searchActiveSkus: (q: string, limit = 8) => call<SkuLookup[]>('GET', `/api/skus?q=${encodeURIComponent(q)}&limit=${limit}&active=1`),
-  kitchenSummary: () => call<KitchenSummary>('GET', '/api/kitchen/summary'),
-  recordKitchenPurchase: (payload: KitchenPurchasePayload) => call<KitchenPurchase>('POST', '/api/kitchen/purchases', payload),
-  voidKitchenPurchase: (purchaseId: string) => call<KitchenPurchase>('POST', `/api/kitchen/purchases/${encodeURIComponent(purchaseId)}/void`, {}),
+  centersOverview: () => call<RevenueCenterOverview>('GET', '/api/revenue-centers/overview'),
+  centerSummary: (code: string) => call<RevenueCenterSummary>('GET', `/api/revenue-centers/${encodeURIComponent(code)}/summary`),
+  recordCenterPurchase: (payload: CenterPurchasePayload) => call<CenterPurchase>('POST', '/api/revenue-centers/purchases', payload),
+  voidCenterPurchase: (purchaseId: string) => call<CenterPurchase>('POST', `/api/revenue-centers/purchases/${encodeURIComponent(purchaseId)}/void`, {}),
   searchMembers: (q: string) => call<MemberSummary[]>('GET', `/api/members?q=${encodeURIComponent(q)}&limit=12`),
   listWaiters: () => call<WaiterSummary[]>('GET', '/api/waiters'),
   waiterStats: () => call<WaiterStatsReport>('GET', '/api/waiters/stats'),
@@ -193,7 +197,9 @@ export const api = {
     call<StockReceiptDetail>('POST', '/api/purchases', { invoiceNo, vendorName, lines }),
 
   /** Liquors with their sizes; inactive ones only with `includeInactive`. */
-  listDepartments: () => call<Department[]>('GET', '/api/departments'),
+  listDepartments: (includeInactive = false) => call<Department[]>('GET', `/api/departments${includeInactive ? '?includeInactive=1' : ''}`),
+  createDepartment: (payload: { name: string; kotStation: DepartmentStation; tracksStock: boolean }) => call<Department>('POST', '/api/departments', payload),
+  updateDepartment: (code: string, patch: DepartmentPatch) => call<Department>('PATCH', `/api/departments/${encodeURIComponent(code)}`, patch),
   listItemCategories: (includeInactive = false) =>
     call<ItemCategory[]>('GET', `/api/item-categories${includeInactive ? '?includeInactive=1' : ''}`),
   createItemCategory: (payload: { name: string; defaultSizeCode: SizeCode | null; defaultDepartment: DepartmentCode }) =>

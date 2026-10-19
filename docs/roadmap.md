@@ -1,8 +1,9 @@
 # FL2 POS — Upcoming Roadmap (logged 2026-10-18)
 
 These phases were logged alongside Phase 17 so that today's architecture leaves room for them. Item 1 is built
-(Phase 18). Item 3's department architecture landed in Phase 19 (unified billing, split ledger), and the Kitchen Kiosk
-(Kitchen P&L, kitchen purchases) in Phase 21; kitchen ingredient stock and item 2 are **not** implemented yet. Each will get its own schema and component plan, approved before any code is written
+(Phase 18). Item 3's department architecture landed in Phase 19 (unified billing, split ledger), the Kitchen Kiosk
+(Kitchen P&L, kitchen purchases) in Phase 21, and Revenue Centers (a P&L per micro-business, manager-defined
+centers) in Phase 22; kitchen ingredient stock and item 2 are **not** implemented yet. Each will get its own schema and component plan, approved before any code is written
 (CLAUDE.md protocol).
 
 ## 1. Settings expansion — custom expense categories ✅ Done in Phase 18

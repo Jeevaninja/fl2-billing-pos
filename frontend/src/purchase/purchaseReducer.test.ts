@@ -30,6 +30,7 @@ function sku(over: Partial<SkuLookup> = {}): SkuLookup {
     onHandQty: 48,
     isActive: true,
     department: 'LIQUOR',
+    departmentName: 'Liquor',
     tracksStock: true,
     itemCategory: { id: 'c-full', name: 'FULL' },
     ...over,

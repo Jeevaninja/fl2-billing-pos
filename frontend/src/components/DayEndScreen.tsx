@@ -519,7 +519,7 @@ function CashCount({ summary, counted, variance, block, busy, onCounted, onLock,
         <Row label="Waiter cash repayments" value={b.waiterCashPaise} />
         <Row label="Cash expenses" value={-b.cashExpensesPaise} />
         <Row label="Bank deposits" value={-b.bankDepositsPaise} />
-        <Row label="Kitchen purchases (drawer)" value={-b.kitchenPurchasesPaise} />
+        <Row label="Revenue-center purchases (drawer)" value={-b.centerPurchasesPaise} />
         {b.tenderAdjustmentPaise !== 0n && <Row label="Tally adjustments (Cash ⇄ UPI)" value={b.tenderAdjustmentPaise} />}
         <div className="mt-2 flex items-baseline justify-between border-t-2 border-zinc-700 pt-2">
           <dt className="font-sans text-sm font-bold tracking-widest text-zinc-400 uppercase">Expected cash</dt>
@@ -617,7 +617,7 @@ function ClosedDayCard({ summary }: { summary: DayEndSummary }) {
         <Row label="Waiter cash repayments" value={breakdown.waiterCashPaise} />
         <Row label="Cash expenses" value={-breakdown.cashExpensesPaise} />
         <Row label="Bank deposits" value={-breakdown.bankDepositsPaise} />
-        <Row label="Kitchen purchases (drawer)" value={-breakdown.kitchenPurchasesPaise} />
+        <Row label="Revenue-center purchases (drawer)" value={-breakdown.centerPurchasesPaise} />
         {breakdown.tenderAdjustmentPaise !== 0n && <Row label="Tally adjustments (Cash ⇄ UPI)" value={breakdown.tenderAdjustmentPaise} />}
         <div className="mt-2 border-t-2 border-zinc-700 pt-2">
           <Row label="Expected cash" value={day.expectedCashPaise ?? breakdown.expectedCashPaise} />

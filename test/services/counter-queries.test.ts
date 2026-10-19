@@ -135,6 +135,7 @@ describe('CounterQueries', () => {
         onHandQty: OPENING_QTY - 2,
         isActive: true,
         department: 'LIQUOR',
+        departmentName: 'Liquor',
         tracksStock: true,
         itemCategory: { id: expect.any(String), name: 'FULL' },
       });

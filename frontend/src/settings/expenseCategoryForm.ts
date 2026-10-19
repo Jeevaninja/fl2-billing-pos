@@ -2,8 +2,8 @@
  * Settings → Expense Categories (Phase 18): pure helpers behind the list and the add / edit modal.
  * The server is the judge (PS012 duplicate, PS002 last active); these catch the obvious early.
  */
-import type { DepartmentCode, ExpenseCategory, ExpenseCategoryPatch } from '../api/types'
-import { DEPARTMENT_NAME } from '../lib/ui'
+import type { Department, DepartmentCode, ExpenseCategory, ExpenseCategoryPatch } from '../api/types'
+import { departmentName } from '../lib/departments'
 
 export const MAX_NAME = 40
 
@@ -23,16 +23,16 @@ export function formFor(category: ExpenseCategory): CategoryForm {
   return { id: category.id, name: category.name, noteRequired: category.noteRequired, isActive: category.isActive, department: category.department }
 }
 
-/** "Liquor", "Kitchen", "Ancillary" or "Shared". */
-export function departmentLabel(department: DepartmentCode | null): string {
-  return department === null ? 'Shared' : DEPARTMENT_NAME[department]
+/** A revenue center's name (from the list, else its code), or "Shared". */
+export function departmentLabel(department: DepartmentCode | null, departments: readonly Department[] = []): string {
+  return department === null ? 'Shared' : departmentName(departments, department)
 }
 
-/** The warning shown when a used category changes department (its past expenses follow), or null. */
-export function departmentMoveNote(original: ExpenseCategory | undefined, form: CategoryForm): string | null {
+/** The warning shown when a used category changes center (its past expenses follow), or null. */
+export function departmentMoveNote(original: ExpenseCategory | undefined, form: CategoryForm, departments: readonly Department[] = []): string | null {
   if (!original || original.department === form.department || original.usedCount === 0) return null
   const n = original.usedCount
-  return `Moves its ${n} past expense${n === 1 ? '' : 's'} from ${departmentLabel(original.department)} to ${departmentLabel(form.department)}.`
+  return `Moves its ${n} past expense${n === 1 ? '' : 's'} from ${departmentLabel(original.department, departments)} to ${departmentLabel(form.department, departments)}.`
 }
 
 /** Trimmed, inner runs of spaces collapsed — the server stores names the same way. */

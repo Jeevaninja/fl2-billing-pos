@@ -7,7 +7,8 @@
 import type { SqlClient, SqlDatabase } from '../db/client.js';
 import { NotFoundError, withPosErrors } from '../db/errors.js';
 import type { DepartmentCode, SizeCode } from '../domain/types.js';
-import { DEPARTMENT_CODES, SIZE_CODES } from './catalog.service.js';
+import { SIZE_CODES } from './catalog.service.js';
+import { checkDepartmentCode, requireActiveDepartment } from './department.service.js';
 import { maybeOne, one } from './rows.js';
 
 export const MAX_ITEM_CATEGORY_NAME = 30;
@@ -93,10 +94,7 @@ function checkSize(size: SizeCode | null | undefined): SizeCode | null | undefin
 }
 
 function checkDepartment(department: DepartmentCode | undefined): DepartmentCode | undefined {
-  if (department !== undefined && !(DEPARTMENT_CODES as readonly string[]).includes(department)) {
-    throw new RangeError(`defaultDepartment must be one of ${DEPARTMENT_CODES.join(', ')}`);
-  }
-  return department;
+  return department === undefined ? undefined : checkDepartmentCode(department, 'defaultDepartment');
 }
 
 export async function getItemCategory(db: SqlClient, id: string): Promise<ItemCategory> {
@@ -124,6 +122,7 @@ export class ItemCategoryService {
     return withPosErrors(() =>
       this.db.transaction(async (tx) => {
         await tx.query(`LOCK TABLE item_categories IN SHARE ROW EXCLUSIVE MODE`); // one sort_order per new row
+        await requireActiveDepartment(tx, department);
         const row = await one<{ id: string }>(
           tx,
           `INSERT INTO item_categories (name, default_size_code, default_department, sort_order)
@@ -146,6 +145,7 @@ export class ItemCategoryService {
     return withPosErrors(() =>
       this.db.transaction(async (tx) => {
         await tx.query(`LOCK TABLE item_categories IN SHARE ROW EXCLUSIVE MODE`);
+        if (department !== undefined) await requireActiveDepartment(tx, department);
         const current = await getItemCategory(tx, id);
         if (name !== undefined || size !== undefined || department !== undefined || patch.isActive !== undefined) {
           await tx.query(

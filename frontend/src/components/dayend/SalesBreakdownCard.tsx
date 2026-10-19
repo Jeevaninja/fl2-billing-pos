@@ -80,7 +80,7 @@ export function SalesBreakdownCard({ sales, adjustments, onAdjust, onVoid }: Sal
         </tbody>
       </table>
       <div className="mt-3 border-t border-zinc-800 pt-2">
-        <h3 className="text-xs font-bold tracking-widest text-zinc-500 uppercase">By department</h3>
+        <h3 className="text-xs font-bold tracking-widest text-zinc-500 uppercase">By revenue center</h3>
         <dl className="mt-1 grid grid-cols-[1fr_auto] gap-x-4 font-mono text-sm tabular-nums">
           {card.departments.map((d) => (
             <div key={d.key} className={`contents ${d.key === 'total' ? 'text-base font-black' : d.key === 'open' ? 'text-amber-300' : ''}`}>
@@ -89,7 +89,7 @@ export function SalesBreakdownCard({ sales, adjustments, onAdjust, onVoid }: Sal
             </div>
           ))}
         </dl>
-        <p className="mt-1 text-xs text-zinc-500">For the P&amp;L only — every department&rsquo;s cash goes to the one drawer and one Expected cash.</p>
+        <p className="mt-1 text-xs text-zinc-500">For the P&amp;L only — every center&rsquo;s cash goes to the one drawer and one Expected cash. Centers with no sales are left out.</p>
       </div>
       {adjustments.length > 0 && (
         <div className="mt-3 border-t border-zinc-800 pt-2">

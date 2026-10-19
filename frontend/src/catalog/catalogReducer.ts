@@ -4,7 +4,7 @@
  * selection over item rows, and the New Item / Edit Item forms. Prices are parsed to whole paise and
  * quantities to whole numbers; no floats.
  */
-import type { CatalogItem, DepartmentCode, ItemCategory, ItemPatchPayload, NewItemPayload, Paise, SizeCode } from '../api/types'
+import type { CatalogItem, Department, DepartmentCode, ItemCategory, ItemPatchPayload, NewItemPayload, Paise, SizeCode } from '../api/types'
 import type { Flash } from '../billing/billingReducer'
 import { paiseToRupeeInput, parseRupeesToPaise } from '../lib/money'
 import { SIZE_ORDER, sizeNameFor } from '../lib/ui'
@@ -145,6 +145,8 @@ export interface CatalogState {
   items: CatalogItem[]
   /** Every category, disabled included, in report order. */
   categories: ItemCategory[]
+  /** Every revenue center (Phase 22), disabled included, for the department switch and labels. */
+  departments: Department[]
   query: string
   includeInactive: boolean
   selectedId: string | null
@@ -160,6 +162,7 @@ export const initialCatalogState: CatalogState = {
   load: 'loading',
   items: [],
   categories: [],
+  departments: [],
   query: '',
   includeInactive: false,
   selectedId: null,
@@ -171,7 +174,7 @@ export const initialCatalogState: CatalogState = {
 }
 
 export type CatalogAction =
-  | { type: 'loaded'; items: CatalogItem[]; categories: ItemCategory[] }
+  | { type: 'loaded'; items: CatalogItem[]; categories: ItemCategory[]; departments?: Department[] }
   | { type: 'failed'; message: string }
   | { type: 'query'; text: string }
   | { type: 'includeInactive'; on: boolean }
@@ -458,7 +461,13 @@ function upsert(state: CatalogState, item: CatalogItem): CatalogItem[] {
 export function catalogReducer(state: CatalogState, action: CatalogAction): CatalogState {
   switch (action.type) {
     case 'loaded':
-      return { ...state, load: 'ready', items: action.items, categories: [...action.categories].sort((a, b) => a.sortOrder - b.sortOrder) }
+      return {
+        ...state,
+        load: 'ready',
+        items: action.items,
+        categories: [...action.categories].sort((a, b) => a.sortOrder - b.sortOrder),
+        departments: action.departments ?? state.departments,
+      }
     case 'failed':
       return { ...state, load: state.load === 'ready' ? 'ready' : 'offline', flash: flash(state, 'error', action.message) }
     case 'query':

@@ -12,6 +12,7 @@ import {
   CatalogService,
   CounterQueries,
   DayEndService,
+  DepartmentService,
   ExpenseCategoryService,
   KotService,
   PurchaseService,
@@ -95,16 +96,21 @@ describe('departments (0013)', () => {
   }
 
   describe('schema and catalog', () => {
-    it('seeds three read-only departments; existing products, lines and Ice are Liquor', async () => {
-      const { db, fx, catalog } = await setup();
-      expect(await catalog.listDepartments()).toEqual([
-        { code: 'LIQUOR', name: 'Liquor', kotStation: 'BAR', tracksStock: true },
-        { code: 'KITCHEN', name: 'Kitchen', kotStation: 'KITCHEN', tracksStock: false },
-        { code: 'ANCILLARY', name: 'Ancillary', kotStation: 'BAR', tracksStock: true },
+    it('seeds the departments (revenue centers since 0016); existing products, lines and Ice are Liquor', async () => {
+      const { db, fx } = await setup();
+      const list = await new DepartmentService(db).listDepartments();
+      expect(list.map((d) => [d.code, d.name, d.kotStation, d.tracksStock])).toEqual([
+        ['LIQUOR', 'Liquor', 'BAR', true],
+        ['KITCHEN', 'Kitchen', 'KITCHEN', false],
+        ['CIGARETTES', 'Cigarettes', 'BAR', true],
+        ['COOL_DRINKS', 'Cool Drinks', 'BAR', true],
+        ['WATER', 'Water Bottles', 'BAR', true],
+        ['AC_CHARGES', 'AC Charges', 'NONE', false],
+        ['ANCILLARY', 'Other items', 'BAR', true],
       ]);
-      await expectSqlError(db.query(`UPDATE departments SET tracks_stock = true WHERE code = 'KITCHEN'`), 'PS001');
+      await expectSqlError(db.query(`UPDATE departments SET tracks_stock = false WHERE code = 'LIQUOR'`), 'PS002');
       await expectSqlError(db.query(`DELETE FROM departments WHERE code = 'ANCILLARY'`), 'PS001');
-      await expectSqlError(db.query(`INSERT INTO departments VALUES ('BAKERY', 'Bakery', 'KITCHEN', false, 4)`), '23514');
+      await expectSqlError(db.query(`INSERT INTO departments (code, name, kot_station, tracks_stock, sort_order) VALUES ('bakery', 'Bakery', 'KITCHEN', false, 9)`), '23514');
 
       const rum = await one<{ department: string }>(db, `SELECT p.department FROM products p JOIN skus k ON k.product_id = p.id WHERE k.id = $1`, [fx.sku.full]);
       expect(rum.department).toBe('LIQUOR');
@@ -131,7 +137,8 @@ describe('departments (0013)', () => {
       // Kitchen → Ancillary starts counting from zero; back to Kitchen is fine while nothing is on hand.
       expect(await catalog.updateProduct(products.peanuts.id, { department: 'ANCILLARY' })).toMatchObject({ department: 'ANCILLARY' });
       expect(await catalog.updateProduct(products.peanuts.id, { department: 'KITCHEN' })).toMatchObject({ department: 'KITCHEN' });
-      await expect(catalog.updateProduct(products.peanuts.id, { department: 'BAR' as never })).rejects.toThrow(RangeError);
+      await expect(catalog.updateProduct(products.peanuts.id, { department: 'bar' })).rejects.toThrow(RangeError);
+      await expect(catalog.updateProduct(products.peanuts.id, { department: 'BAKERY' })).rejects.toThrow(/not found/i);
     });
   });
 
@@ -321,7 +328,8 @@ describe('departments (0013)', () => {
       expect(await categories.updateCategory(fx.expenseCategory.TRANSPORT, { department: 'ANCILLARY' })).toMatchObject({ department: 'ANCILLARY' });
       expect(await categories.updateCategory(fx.expenseCategory.TRANSPORT, { name: 'Transport & fuel' })).toMatchObject({ department: 'ANCILLARY' });
       expect((await dayEnd.listCashExpenses(fx.dayId)).map((e) => e.category.department)).toEqual(['ANCILLARY', null]);
-      await expect(categories.createCategory({ name: 'Bad', department: 'BAR' as never })).rejects.toThrow(RangeError);
+      await expect(categories.createCategory({ name: 'Bad', department: 'bar' })).rejects.toThrow(RangeError);
+      await expect(categories.createCategory({ name: 'Bad', department: 'BAKERY' })).rejects.toThrow(/not found/i);
     });
   });
 

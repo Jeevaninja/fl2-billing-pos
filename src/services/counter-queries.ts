@@ -5,7 +5,7 @@
 import type { SqlClient } from '../db/client.js';
 import { NotFoundError } from '../db/errors.js';
 import { type DbInt, type Paise, toPaise, toPaiseOrNull } from '../domain/money.js';
-import type { Bill, BillItem, BillPayment, DepartmentCode, KotStation, PeakSession, SizeCode } from '../domain/types.js';
+import type { Bill, BillItem, BillPayment, DepartmentCode, DepartmentStation, PeakSession, SizeCode } from '../domain/types.js';
 import {
   type BillItemRow,
   type BillPaymentRow,
@@ -89,8 +89,9 @@ export interface SkuLookup {
   caseSize: number;
   onHandQty: number;
   isActive: boolean;
-  /** The product's department (0013). */
+  /** The product's department / revenue center (0013 / 0016). */
   department: DepartmentCode;
+  departmentName: string;
   /** false for Kitchen items: no stock is counted and none is needed to sell them. */
   tracksStock: boolean;
   /** Phase 20: the catalog grouping it sits in (FULL, QUARTER, BEER, …). */
@@ -100,8 +101,8 @@ export interface SkuLookup {
 export interface BillDetailItem extends BillItem {
   /** Bottles still sold on a positive line after cancellations and reversals; 0 for negative lines. */
   remainingQuantity: number;
-  /** Where the line's KOT prints (its department's station). */
-  kotStation: KotStation;
+  /** Where the line's KOT prints (its department's station; NONE = never). */
+  kotStation: DepartmentStation;
   /** Net quantity already sent to that station on KOTs (0 for negative lines). */
   kotSentQuantity: number;
 }
@@ -212,6 +213,7 @@ export interface SkuLookupRow {
   on_hand_qty: number;
   is_active: boolean;
   department: DepartmentCode;
+  department_name: string;
   tracks_stock: boolean;
   item_category_id: string;
   item_category_name: string;
@@ -219,7 +221,7 @@ export interface SkuLookupRow {
 
 /** SkuLookupRow columns over SKU_FROM. */
 export const SKU_COLUMNS = `k.id, k.sku_code, k.barcode, k.display_name, k.size_code, k.price_paise, k.purchase_price_paise, k.case_size,
-       k.is_active, coalesce(s.on_hand_qty, 0) AS on_hand_qty, p.department, d.tracks_stock,
+       k.is_active, coalesce(s.on_hand_qty, 0) AS on_hand_qty, p.department, d.name AS department_name, d.tracks_stock,
        k.item_category_id, ic.name AS item_category_name`;
 
 /** The joins SKU_COLUMNS reads from. */
@@ -242,6 +244,7 @@ export function mapSkuLookup(row: SkuLookupRow): SkuLookup {
     onHandQty: row.on_hand_qty,
     isActive: row.is_active,
     department: row.department,
+    departmentName: row.department_name,
     tracksStock: row.tracks_stock,
     itemCategory: { id: row.item_category_id, name: row.item_category_name },
   };
@@ -542,7 +545,7 @@ export class CounterQueries {
 
   async getBillDetail(billId: string): Promise<BillDetail> {
     const bill = await getBill(this.db, billId);
-    const { rows: itemRows } = await this.db.query<BillItemRow & { remaining_qty: number; kot_station: KotStation; kot_sent: number }>(
+    const { rows: itemRows } = await this.db.query<BillItemRow & { remaining_qty: number; kot_station: DepartmentStation; kot_sent: number }>(
       `SELECT i.*,
               CASE WHEN i.qty > 0
                    THEN (i.qty + coalesce((SELECT sum(c.qty) FROM bill_items c WHERE c.reverses_item_id = i.id), 0))::int

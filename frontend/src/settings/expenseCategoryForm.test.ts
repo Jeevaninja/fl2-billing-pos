@@ -75,6 +75,7 @@ describe('departments (Phase 19)', () => {
     expect(departmentMoveNote(ice, { ...formFor(ice), department: null })).toBe('Moves its 4 past expenses from Liquor to Shared.')
     expect(departmentMoveNote({ ...ice, usedCount: 0 }, { ...formFor(ice), department: null })).toBeNull()
     expect(departmentMoveNote(undefined, NEW_CATEGORY)).toBeNull()
-    expect(departmentLabel('ANCILLARY')).toBe('Ancillary')
+    expect(departmentLabel('ANCILLARY', [{ code: 'ANCILLARY', name: 'Other items' } as never])).toBe('Other items')
+    expect(departmentLabel('COOL_DRINKS')).toBe('Cool Drinks')
   })
 })
