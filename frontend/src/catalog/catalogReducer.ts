@@ -4,7 +4,7 @@
  * selection over item rows, and the New Item / Edit Item forms. Prices are parsed to whole paise and
  * quantities to whole numbers; no floats.
  */
-import type { CatalogItem, Department, DepartmentCode, ItemCategory, ItemPatchPayload, NewItemPayload, Paise, SizeCode } from '../api/types'
+import type { CatalogItem, Department, DepartmentCode, ExciseGroup, ItemCategory, ItemPatchPayload, NewItemPayload, Paise, SizeCode } from '../api/types'
 import type { Flash } from '../billing/billingReducer'
 import { paiseToRupeeInput, parseRupeesToPaise } from '../lib/money'
 import { SIZE_ORDER, sizeNameFor } from '../lib/ui'
@@ -106,12 +106,27 @@ export interface EditItemForm {
   caseSize: string
   barcode: string
   isActive: boolean
+  /** Nominal ml of one sealed bottle, for the excise ML summary ('' = not a bottle). */
+  volume: string
+  /** '' = not in the excise ML summary. */
+  exciseGroup: ExciseGroup | ''
 }
 
 export type ItemForm = NewItemForm | EditItemForm
 
+/** Excise ML-summary groups (Phase 24 R2), in report order. */
+export const EXCISE_GROUP_OPTIONS: ReadonlyArray<{ value: ExciseGroup; label: string }> = [
+  { value: 'LIQUOR', label: 'Liquor' },
+  { value: 'BEER', label: 'Beer' },
+  { value: 'TIN_BEER', label: 'Tin beer' },
+  { value: 'WINE', label: 'Wine' },
+]
+
+export const MAX_VOLUME_ML = 5000
+
 export type ItemField =
-  | { field: 'categoryId' | 'name' | 'sale' | 'buy' | 'caseSize' | 'barcode' | 'codePrefix' | 'opening'; value: string }
+  | { field: 'categoryId' | 'name' | 'sale' | 'buy' | 'caseSize' | 'barcode' | 'codePrefix' | 'opening' | 'volume'; value: string }
+  | { field: 'exciseGroup'; value: ExciseGroup | '' }
   | { field: 'sizeCode'; value: SizeCode }
   | { field: 'department'; value: DepartmentCode }
   | { field: 'isActive'; value: boolean }
@@ -326,6 +341,13 @@ export function itemPatch(form: EditItemForm, categories: readonly ItemCategory[
   if (parsed.caseSize !== item.caseSize) patch.caseSize = parsed.caseSize
   if (parsed.barcode !== item.barcode) patch.barcode = parsed.barcode
   if (form.isActive !== item.isActive) patch.isActive = form.isActive
+  const volumeText = form.volume.trim()
+  const volume = volumeText === '' ? null : Number(volumeText)
+  if (volume !== null && (!/^\d+$/.test(volumeText) || volume < 1 || volume > MAX_VOLUME_ML)) return `Bottle volume must be a whole number of ml, 1 to ${MAX_VOLUME_ML}`
+  if (volume !== item.volumeMl) patch.volumeMl = volume
+  const group = form.exciseGroup === '' ? null : form.exciseGroup
+  if (group !== null && volume === null) return 'Enter the bottle volume for an excise group'
+  if (group !== item.exciseGroup) patch.exciseGroup = group
   return patch
 }
 
@@ -378,6 +400,8 @@ function editItemForm(item: CatalogItem): EditItemForm {
     caseSize: String(item.caseSize),
     barcode: item.barcode ?? '',
     isActive: item.isActive,
+    volume: item.volumeMl === null ? '' : String(item.volumeMl),
+    exciseGroup: item.exciseGroup ?? '',
   }
 }
 
@@ -401,6 +425,10 @@ function applyField(state: CatalogState, form: ItemForm, change: ItemField): Ite
         return { ...form, caseSize: cleanInput('caseSize', change.value) }
       case 'isActive':
         return { ...form, isActive: change.value }
+      case 'volume':
+        return { ...form, volume: change.value.replace(/\D/g, '').slice(0, 4) }
+      case 'exciseGroup':
+        return { ...form, exciseGroup: change.value }
       default:
         return form
     }

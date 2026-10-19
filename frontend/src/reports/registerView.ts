@@ -1,16 +1,21 @@
 /**
- * Reports screen view helpers (Phase 23): the tab model, sales-register labels, search and paging,
- * and the stock register grouped by item category. Pure and unit-tested.
+ * Reports screen view helpers (Phase 23 → Phase 24): the eight-tab model, order-register labels,
+ * search and paging, sales and stock grouping, and ML formatting. Pure and unit-tested.
  */
-import type { SalesRegisterItem, SalesRegisterRow, StockRegisterRow } from '../api/types'
+import type { OrderSummaryRow, SalesRegisterItem, SalesRegisterRow, SalesSummaryRow, StockSummaryRow, StockSummaryTotals } from '../api/types'
 
-export type ReportTab = 'ledger' | 'sales' | 'stock' | 'payments'
+export type ReportTab = 'sales' | 'orders' | 'stock' | 'expenses' | 'purchases' | 'bank' | 'dayEnd' | 'full'
 
-export const REPORT_TABS: ReadonlyArray<{ id: ReportTab; label: string }> = [
-  { id: 'ledger', label: 'Ledger balances' },
-  { id: 'sales', label: 'Sales register' },
-  { id: 'stock', label: 'Stock register' },
-  { id: 'payments', label: 'Payments' },
+/** D5: the eight Phase 24 modules, keys 1–8 in this order. */
+export const REPORT_TABS: ReadonlyArray<{ id: ReportTab; label: string; title: string }> = [
+  { id: 'sales', label: 'Sales', title: 'Sales Summary' },
+  { id: 'orders', label: 'Orders', title: 'Order Summary' },
+  { id: 'stock', label: 'Stock', title: 'Stock Summary' },
+  { id: 'expenses', label: 'Expenses', title: 'Expenses Summary' },
+  { id: 'purchases', label: 'Purchases', title: 'Purchase Summary' },
+  { id: 'bank', label: 'Bank deposits', title: 'Bank Deposits' },
+  { id: 'dayEnd', label: 'Day End', title: 'Day End & Variance' },
+  { id: 'full', label: 'Full report', title: 'Full Report' },
 ]
 
 export function stepReportTab(current: ReportTab, delta: number): ReportTab {
@@ -38,15 +43,40 @@ export function paidByLabel(row: Pick<SalesRegisterRow, 'mode' | 'cashPaise' | '
   return parts.length === 0 ? '—' : parts.join(' + ')
 }
 
-/** A number matches the bill number exactly; any text matches an item name or the waiter. */
-export function filterSales(rows: readonly SalesRegisterRow[], query: string): SalesRegisterRow[] {
+/** "KITCHEN #12", then "KITCHEN #12/2" for the bill's second ticket at that station. */
+export function kotLabel(billNo: number, kot: OrderSummaryRow['kots'][number]): string {
+  return `${kot.station} #${billNo}${kot.ticketNo > 1 ? `/${kot.ticketNo}` : ''}`
+}
+
+/** VOID / CANCEL tags for the Order Summary. */
+export function orderTags(row: OrderSummaryRow): string[] {
+  const tags: string[] = []
+  if (row.kind === 'REVERSAL') tags.push(`VOID of #${row.reverses?.billNo ?? '?'}`)
+  if (row.voidedBy) tags.push(`VOIDED by #${row.voidedBy.billNo}`)
+  if (row.cancelledQty > 0) tags.push(`CANCEL ${row.cancelledQty}`)
+  return tags
+}
+
+/** Who rang the bill: the cashier, or the waiter for a Captain order. */
+export function rungBy(row: OrderSummaryRow): string {
+  if (row.source === 'WAITER_APP') return row.waiterName ? `Captain · ${row.waiterName}` : 'Captain'
+  return row.cashierName ?? '—'
+}
+
+/** A number matches the bill number exactly; any text matches an item, waiter or cashier. */
+export function filterOrders<T extends SalesRegisterRow & { cashierName?: string | null }>(rows: readonly T[], query: string): T[] {
   const q = query.trim().toLowerCase()
   if (q === '') return [...rows]
   if (/^#?\d+$/.test(q)) {
     const no = Number(q.replace('#', ''))
     return rows.filter((r) => r.billNo === no)
   }
-  return rows.filter((r) => r.items.some((i) => i.name.toLowerCase().includes(q)) || (r.waiterName ?? '').toLowerCase().includes(q))
+  return rows.filter(
+    (r) =>
+      r.items.some((i) => i.name.toLowerCase().includes(q)) ||
+      (r.waiterName ?? '').toLowerCase().includes(q) ||
+      (r.cashierName ?? '').toLowerCase().includes(q),
+  )
 }
 
 export const PAGE_SIZE = 200
@@ -61,59 +91,118 @@ export function pageOf<T>(rows: readonly T[], page: number, size = PAGE_SIZE): T
   return rows.slice(at * size, at * size + size)
 }
 
-export interface StockTotals {
-  openingQty: number
-  inwardQty: number
-  salesQty: number
-  otherQty: number
-  closingQty: number
+// ── Sales Summary ──
+
+export interface SalesCenterGroup {
+  code: string
+  name: string
+  qty: number
+  amountPaise: bigint
+  categories: Array<{ categoryName: string; rows: SalesSummaryRow[]; qty: number; amountPaise: bigint }>
 }
 
-export interface StockGroup {
-  categoryName: string
-  rows: StockRegisterRow[]
-  totals: StockTotals
+/** Server order kept: center → item category → item; a query matches the item name or code. */
+export function groupSalesSummary(rows: readonly SalesSummaryRow[], query = ''): SalesCenterGroup[] {
+  const q = query.trim().toLowerCase()
+  const centers: SalesCenterGroup[] = []
+  for (const r of rows) {
+    if (q !== '' && !r.name.toLowerCase().includes(q) && !r.skuCode.toLowerCase().includes(q)) continue
+    let center = centers.find((c) => c.code === r.centerCode)
+    if (!center) {
+      center = { code: r.centerCode, name: r.centerName, qty: 0, amountPaise: 0n, categories: [] }
+      centers.push(center)
+    }
+    let category = center.categories.find((c) => c.categoryName === r.categoryName)
+    if (!category) {
+      category = { categoryName: r.categoryName, rows: [], qty: 0, amountPaise: 0n }
+      center.categories.push(category)
+    }
+    category.rows.push(r)
+    category.qty += r.qty
+    category.amountPaise += r.amountPaise
+    center.qty += r.qty
+    center.amountPaise += r.amountPaise
+  }
+  return centers
 }
 
-const ZERO: StockTotals = { openingQty: 0, inwardQty: 0, salesQty: 0, otherQty: 0, closingQty: 0 }
+// ── Stock Summary ──
 
 /** Nothing held and nothing moved in the range. */
-export function isIdle(r: StockRegisterRow): boolean {
-  return r.openingQty === 0 && r.inwardQty === 0 && r.salesQty === 0 && r.otherQty === 0 && r.closingQty === 0
+export function isIdleStock(r: StockSummaryRow): boolean {
+  return r.opStk === 0 && r.purch === 0 && r.sale === 0 && r.adj === 0 && r.closing === 0
 }
 
-function addTotals(t: StockTotals, r: StockTotals): StockTotals {
-  return {
-    openingQty: t.openingQty + r.openingQty,
-    inwardQty: t.inwardQty + r.inwardQty,
-    salesQty: t.salesQty + r.salesQty,
-    otherQty: t.otherQty + r.otherQty,
-    closingQty: t.closingQty + r.closingQty,
+/** Totals over the given rows (the same rules as the server: unrated rows stay out of Clo.Purch Val). */
+export function stockTotals(rows: readonly StockSummaryRow[]): StockSummaryTotals {
+  const t: StockSummaryTotals = {
+    opStk: 0,
+    purch: 0,
+    total: 0,
+    sale: 0,
+    adj: 0,
+    closing: 0,
+    cloPurchValPaise: 0n,
+    cloSalesValPaise: 0n,
+    salesTotalPaise: 0n,
+    openingValPaise: 0n,
+    unratedCount: 0,
+    unratedClosingQty: 0,
   }
-}
-
-/**
- * Rows grouped by item category, keeping the server's report order; a text query matches the item
- * name or code. With `hideIdle`, items with no stock and no movement are left out (and so are empty
- * categories).
- */
-export function groupStock(rows: readonly StockRegisterRow[], { hideIdle, query = '' }: { hideIdle: boolean; query?: string }): StockGroup[] {
-  const q = query.trim().toLowerCase()
-  const groups: StockGroup[] = []
   for (const r of rows) {
-    if (hideIdle && isIdle(r)) continue
-    if (q !== '' && !r.name.toLowerCase().includes(q) && !r.skuCode.toLowerCase().includes(q)) continue
-    let group = groups.find((g) => g.categoryName === r.categoryName)
-    if (!group) {
-      group = { categoryName: r.categoryName, rows: [], totals: ZERO }
-      groups.push(group)
+    t.opStk += r.opStk
+    t.purch += r.purch
+    t.total += r.total
+    t.sale += r.sale
+    t.adj += r.adj
+    t.closing += r.closing
+    t.cloSalesValPaise += r.cloSalesValPaise
+    t.salesTotalPaise += r.salesTotalPaise
+    if (r.cloPurchValPaise !== null) t.cloPurchValPaise += r.cloPurchValPaise
+    else if (r.closing !== 0) {
+      t.unratedCount += 1
+      t.unratedClosingQty += r.closing
     }
-    group.rows.push(r)
-    group.totals = addTotals(group.totals, r)
+    if (r.openingValPaise !== null) t.openingValPaise += r.openingValPaise
   }
-  return groups
+  return t
 }
 
-export function grandTotals(groups: readonly StockGroup[]): StockTotals {
-  return groups.reduce((t, g) => addTotals(t, g.totals), ZERO)
+export interface StockViewGroup {
+  categoryName: string
+  rows: StockSummaryRow[]
+  totals: StockSummaryTotals
+}
+
+/** Category groups after the "hide idle" toggle and a name / code search; totals follow what is shown. */
+export function filterStockGroups(
+  groups: ReadonlyArray<{ categoryName: string; rows: StockSummaryRow[] }>,
+  { hideIdle, query = '' }: { hideIdle: boolean; query?: string },
+): StockViewGroup[] {
+  const q = query.trim().toLowerCase()
+  const out: StockViewGroup[] = []
+  for (const g of groups) {
+    const rows = g.rows.filter(
+      (r) => !(hideIdle && isIdleStock(r)) && (q === '' || r.name.toLowerCase().includes(q) || r.skuCode.toLowerCase().includes(q)),
+    )
+    if (rows.length > 0) out.push({ categoryName: g.categoryName, rows, totals: stockTotals(rows) })
+  }
+  return out
+}
+
+// ── ML ──
+
+const GROUPING = new Intl.NumberFormat('en-IN')
+
+/** 49500 → "49,500" (integer ml, Indian grouping). */
+export function formatMl(ml: number): string {
+  return GROUPING.format(ml)
+}
+
+/** 49500 → "49.500 L", from integer ml (no float division). */
+export function formatLitres(ml: number): string {
+  const negative = ml < 0
+  const abs = Math.abs(ml)
+  const rest = abs % 1000
+  return `${negative ? '−' : ''}${GROUPING.format((abs - rest) / 1000)}.${String(rest).padStart(3, '0')} L`
 }

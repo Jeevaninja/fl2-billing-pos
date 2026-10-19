@@ -1,40 +1,48 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { AlertTriangle, ArrowLeft, ChartColumn, Download, Printer, RefreshCw, Search, WifiOff } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, ChartColumn, Download, Printer, RefreshCw, WifiOff } from 'lucide-react'
 import { ApiError, api } from '../api/client'
-import type { LedgerReport, Paise, PaymentsReport, RangeAnchor, ReportHeader, ReportRange, SalesRegister, StockRegister } from '../api/types'
+import type {
+  BankDepositLog,
+  DayEndLog,
+  ExpenseSummary,
+  FullReport,
+  MemberSales,
+  OrderSummaryReport,
+  PurchaseSummary,
+  RangeAnchor,
+  ReportHeader,
+  ReportRange,
+  SalesSummary,
+  StockSummary,
+} from '../api/types'
 import { counterErrorMessage } from '../billing/errors'
-import { departmentChip } from '../lib/departments'
-import { formatPaise } from '../lib/money'
 import { FOCUS_RING, keepFocus } from '../lib/ui'
-import { ledgerCsv, paymentsCsv, salesCsv, stockCsv } from '../reports/csv'
+import { bankDepositsCsv, dayEndCsv, expensesCsv, fullReportCsv, memberSalesCsv, ordersCsv, purchasesCsv, salesSummaryCsv, stockSummaryCsv } from '../reports/csv'
 import { PRESETS, presetRange, rangeError, rangeLabel, formatBusinessDate, type PresetId } from '../reports/dateRange'
-import {
-  filterSales,
-  grandTotals,
-  groupStock,
-  isReportTab,
-  itemsSummary,
-  PAGE_SIZE,
-  pageCount,
-  paidByLabel,
-  REPORT_TABS,
-  stepReportTab,
-  type ReportTab,
-  type StockTotals,
-} from '../reports/registerView'
+import { isReportTab, REPORT_TABS, stepReportTab, type ReportTab } from '../reports/registerView'
+import { BankDepositsView, DayEndView, ExpensesView, FullReportView, PurchasesView } from './reports/LedgerViews'
+import { OrdersView } from './reports/OrdersView'
+import { printStamp, timeOf } from '../reports/format'
+import { SalesSummaryView, type SalesMode } from './reports/SalesSummaryView'
+import { StockSummaryView } from './reports/StockSummaryView'
 import { Kbd, LiveClock } from './ui'
 
 /**
- * Settings → Reports (Phase 23): one business-date range drives four tabs — ledger balances for
- * manual Tally entry, the sales register, the stock register and the payment split. Read-only;
- * no net-profit figure anywhere.
+ * Settings → Reports (Phase 24): one business-date range drives eight modules — Sales (by item and
+ * member-wise), Orders, Stock (the TN FL2 register with valuations and ML), Expenses, Purchases, Bank
+ * deposits, Day End & Variance, and the Full Report. Read-only; CSV and Print on every tab; grouped
+ * ledger totals only, no profit figure anywhere.
  */
 
 type Loaded =
-  | { tab: 'ledger'; data: LedgerReport }
-  | { tab: 'sales'; data: SalesRegister }
-  | { tab: 'stock'; data: StockRegister }
-  | { tab: 'payments'; data: PaymentsReport }
+  | { tab: 'sales'; data: SalesSummary; members: MemberSales }
+  | { tab: 'orders'; data: OrderSummaryReport }
+  | { tab: 'stock'; data: StockSummary }
+  | { tab: 'expenses'; data: ExpenseSummary }
+  | { tab: 'purchases'; data: PurchaseSummary }
+  | { tab: 'bank'; data: BankDepositLog }
+  | { tab: 'dayEnd'; data: DayEndLog }
+  | { tab: 'full'; data: FullReport }
 
 const RANGE_KEY = 'fl2.reports.range'
 const TAB_KEY = 'fl2.reports.tab'
@@ -66,38 +74,57 @@ function remember(key: string, value: string): void {
 function rememberedTab(): ReportTab {
   try {
     const tab = localStorage.getItem(TAB_KEY)
-    return isReportTab(tab) ? tab : 'ledger'
+    return isReportTab(tab) ? tab : 'sales'
   } catch {
-    return 'ledger'
+    return 'sales'
   }
 }
 
-const IST_TIME = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false })
-const timeOf = (iso: string) => IST_TIME.format(new Date(iso))
+/** Expenses / Purchases can be narrowed to one revenue center (or Shared for expenses). */
+interface Filters {
+  expenseCenter: string | null
+  purchaseCenter: string | null
+}
 
-function fetchReport(tab: ReportTab, range: ReportRange): Promise<Loaded> {
+function fetchReport(tab: ReportTab, range: ReportRange, filters: Filters): Promise<Loaded> {
   switch (tab) {
-    case 'ledger':
-      return api.reportLedger(range).then((data) => ({ tab, data }))
     case 'sales':
-      return api.reportSales(range).then((data) => ({ tab, data }))
+      return Promise.all([api.reportSalesSummary(range), api.reportMemberSales(range)]).then(([data, members]) => ({ tab, data, members }))
+    case 'orders':
+      return api.reportOrders(range).then((data) => ({ tab, data }))
     case 'stock':
-      return api.reportStock(range).then((data) => ({ tab, data }))
-    case 'payments':
-      return api.reportPayments(range).then((data) => ({ tab, data }))
+      return api.reportStockSummary(range).then((data) => ({ tab, data }))
+    case 'expenses':
+      return api.reportExpenses(range, filters.expenseCenter).then((data) => ({ tab, data }))
+    case 'purchases':
+      return api.reportPurchases(range, filters.purchaseCenter).then((data) => ({ tab, data }))
+    case 'bank':
+      return api.reportBankDeposits(range).then((data) => ({ tab, data }))
+    case 'dayEnd':
+      return api.reportDayEnd(range).then((data) => ({ tab, data }))
+    case 'full':
+      return api.reportFull(range).then((data) => ({ tab, data }))
   }
 }
 
-function csvFor(loaded: Loaded): string {
+function csvFor(loaded: Loaded, salesMode: SalesMode): string {
   switch (loaded.tab) {
-    case 'ledger':
-      return ledgerCsv(loaded.data)
     case 'sales':
-      return salesCsv(loaded.data, timeOf)
+      return salesMode === 'members' ? memberSalesCsv(loaded.members, timeOf) : salesSummaryCsv(loaded.data)
+    case 'orders':
+      return ordersCsv(loaded.data, timeOf)
     case 'stock':
-      return stockCsv(loaded.data)
-    case 'payments':
-      return paymentsCsv(loaded.data)
+      return stockSummaryCsv(loaded.data)
+    case 'expenses':
+      return expensesCsv(loaded.data, timeOf)
+    case 'purchases':
+      return purchasesCsv(loaded.data)
+    case 'bank':
+      return bankDepositsCsv(loaded.data, timeOf)
+    case 'dayEnd':
+      return dayEndCsv(loaded.data, timeOf)
+    case 'full':
+      return fullReportCsv(loaded.data)
   }
 }
 
@@ -111,7 +138,8 @@ function downloadCsv(name: string, text: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-const keyOf = (tab: ReportTab, range: ReportRange) => `${tab}|${range.startDate}|${range.endDate}`
+const keyOf = (tab: ReportTab, range: ReportRange, filters: Filters) =>
+  `${tab}|${range.startDate}|${range.endDate}|${tab === 'expenses' ? (filters.expenseCenter ?? '') : tab === 'purchases' ? (filters.purchaseCenter ?? '') : ''}`
 
 export default function ReportsScreen({ onExit }: { onExit: () => void }) {
   const [anchor, setAnchor] = useState<RangeAnchor | null>(null)
@@ -121,7 +149,18 @@ export default function ReportsScreen({ onExit }: { onExit: () => void }) {
   const [loaded, setLoaded] = useState<{ key: string; report: Loaded } | null>(null)
   const [status, setStatus] = useState<{ kind: 'loading' | 'ready' } | { kind: 'error'; message: string; offline: boolean }>({ kind: 'loading' })
   const [reloadToken, setReloadToken] = useState(0)
+  const [filters, setFilters] = useState<Filters>({ expenseCenter: null, purchaseCenter: null })
+  const [salesMode, setSalesMode] = useState<SalesMode>('items')
+  const [centers, setCenters] = useState<Array<{ code: string; name: string }>>([])
   const cache = useRef(new Map<string, Loaded>())
+
+  // Revenue centers for the Expenses / Purchases filters (inactive ones too: history can name them).
+  useEffect(() => {
+    api
+      .listDepartments(true)
+      .then((list) => setCenters(list.map((d) => ({ code: d.code, name: d.name }))))
+      .catch(() => setCenters([]))
+  }, [])
 
   const range: ReportRange | null = useMemo(() => {
     if (preset === 'custom') return custom
@@ -147,7 +186,7 @@ export default function ReportsScreen({ onExit }: { onExit: () => void }) {
   // Load the current tab for the range (cached per tab and range until R).
   useEffect(() => {
     if (!range || invalid) return
-    const key = keyOf(tab, range)
+    const key = keyOf(tab, range, filters)
     const hit = cache.current.get(key)
     if (hit) {
       setLoaded({ key, report: hit })
@@ -156,7 +195,7 @@ export default function ReportsScreen({ onExit }: { onExit: () => void }) {
     }
     let live = true
     setStatus({ kind: 'loading' })
-    fetchReport(tab, range)
+    fetchReport(tab, range, filters)
       .then((report) => {
         cache.current.set(key, report)
         if (!live) return
@@ -167,7 +206,7 @@ export default function ReportsScreen({ onExit }: { onExit: () => void }) {
     return () => {
       live = false
     }
-  }, [tab, range, invalid, reloadToken])
+  }, [tab, range, invalid, reloadToken, filters])
 
   const refresh = useCallback(() => {
     cache.current.clear()
@@ -175,12 +214,13 @@ export default function ReportsScreen({ onExit }: { onExit: () => void }) {
     setReloadToken((t) => t + 1)
   }, [loadAnchor])
 
-  const current = range && loaded?.key === keyOf(tab, range) ? loaded.report : null
+  const current = range && loaded?.key === keyOf(tab, range, filters) ? loaded.report : null
 
   const exportCsv = useCallback(() => {
     if (!current || !range) return
-    downloadCsv(`fl2-${current.tab}-${range.startDate}_${range.endDate}.csv`, csvFor(current))
-  }, [current, range])
+    const name = current.tab === 'sales' && salesMode === 'members' ? 'member-sales' : current.tab
+    downloadCsv(`fl2-${name}-${range.startDate}_${range.endDate}.csv`, csvFor(current, salesMode))
+  }, [current, range, salesMode])
 
   // Page keys; typing in a field keeps its keys (Esc leaves the field).
   useEffect(() => {
@@ -194,7 +234,7 @@ export default function ReportsScreen({ onExit }: { onExit: () => void }) {
         }
         return
       }
-      if (/^[1-4]$/.test(event.key)) {
+      if (/^[1-8]$/.test(event.key)) {
         event.preventDefault()
         setTab(REPORT_TABS[Number(event.key) - 1]!.id)
         return
@@ -220,7 +260,9 @@ export default function ReportsScreen({ onExit }: { onExit: () => void }) {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [onExit, refresh])
 
-  const tabLabel = REPORT_TABS.find((t) => t.id === tab)?.label ?? ''
+  const tabInfo = REPORT_TABS.find((t) => t.id === tab)
+  const tabLabel = tab === 'sales' && salesMode === 'members' ? 'Member-wise Sales' : (tabInfo?.title ?? '')
+  const printedAt = usePrintedAt()
   return (
     <div className="flex h-full min-h-screen flex-col print:block print:min-h-0 print:bg-white print:text-black">
       <header className="flex h-14 shrink-0 items-center gap-4 border-b-2 border-emerald-500 bg-zinc-900 px-5 print:hidden">
@@ -308,7 +350,12 @@ export default function ReportsScreen({ onExit }: { onExit: () => void }) {
       {range && (
         <div className="hidden print:block print:px-2 print:pb-2">
           <p className="text-lg font-bold">FL2 — {tabLabel}</p>
-          <p className="text-sm">Business dates {rangeLabel(range)}{current?.data.provisional ? ' · PROVISIONAL (a day is still open)' : ''}</p>
+          <p className="text-sm">
+            Business dates {rangeLabel(range)}{printedAt ? ` · Printed ${printedAt}` : ''}
+            {current?.tab === 'expenses' && current.data.center ? ` · Center: ${centers.find((c) => c.code === current.data.center)?.name ?? (current.data.center === 'SHARED' ? 'Shared' : current.data.center)}` : ''}
+            {current?.tab === 'purchases' && current.data.center ? ` · Center: ${centers.find((c) => c.code === current.data.center)?.name ?? current.data.center}` : ''}
+          </p>
+          {current?.data.provisional && <p className="mt-1 border-2 border-black px-2 py-1 text-sm font-black">PROVISIONAL — a day in this range is still open; figures change until Day End.</p>}
         </div>
       )}
 
@@ -325,12 +372,21 @@ export default function ReportsScreen({ onExit }: { onExit: () => void }) {
       {!invalid && status.kind === 'ready' && current && (
         <main className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5 print:overflow-visible print:p-2" aria-label={tabLabel}>
           <DaysLine header={current.data} />
-          {current.tab === 'ledger' && <LedgerView report={current.data} />}
-          {current.tab === 'sales' && <SalesView report={current.data} />}
-          {current.tab === 'stock' && <StockView report={current.data} />}
-          {current.tab === 'payments' && <PaymentsView report={current.data} />}
+          {current.tab === 'sales' && <SalesSummaryView summary={current.data} members={current.members} mode={salesMode} onMode={setSalesMode} />}
+          {current.tab === 'orders' && <OrdersView report={current.data} />}
+          {current.tab === 'stock' && <StockSummaryView report={current.data} />}
+          {current.tab === 'expenses' && (
+            <ExpensesView report={current.data} centers={centers} center={filters.expenseCenter} onCenter={(c) => setFilters((f) => ({ ...f, expenseCenter: c }))} />
+          )}
+          {current.tab === 'purchases' && (
+            <PurchasesView report={current.data} centers={centers} center={filters.purchaseCenter} onCenter={(c) => setFilters((f) => ({ ...f, purchaseCenter: c }))} />
+          )}
+          {current.tab === 'bank' && <BankDepositsView report={current.data} />}
+          {current.tab === 'dayEnd' && <DayEndView report={current.data} />}
+          {current.tab === 'full' && <FullReportView report={current.data} />}
+          <Signatures />
           <p className="text-sm text-zinc-500 print:hidden">
-            Dates are business (trading) days: a bill rung after midnight counts on the evening it was sold. <Kbd>1</Kbd>–<Kbd>4</Kbd> or <Kbd>←</Kbd>/<Kbd>→</Kbd> switch
+            Dates are business (trading) days: a bill rung after midnight counts on the evening it was sold. <Kbd>1</Kbd>–<Kbd>8</Kbd> or <Kbd>←</Kbd>/<Kbd>→</Kbd> switch
             reports · <Kbd>R</Kbd> reload · <Kbd>Esc</Kbd> dashboard.
           </p>
         </main>
@@ -359,7 +415,7 @@ function DaysLine({ header }: { header: ReportHeader }) {
           : `${header.days.length} trading day${header.days.length === 1 ? '' : 's'} · ${header.days.length - open} closed${open ? ` · ${open} open` : ''}`}
       </p>
       {header.provisional && (
-        <p className="flex items-center gap-2 rounded-md border-2 border-amber-500 bg-amber-500/10 px-3 py-2 font-semibold text-amber-200 print:text-black">
+        <p className="flex items-center gap-2 rounded-md border-2 border-amber-500 bg-amber-500/10 px-3 py-2 font-semibold text-amber-200 print:hidden">
           <AlertTriangle className="size-5 shrink-0 text-amber-400" aria-hidden />
           {header.days.find((d) => d.status === 'OPEN')?.businessDate === undefined
             ? 'A day in this range is still open'
@@ -371,343 +427,26 @@ function DaysLine({ header }: { header: ReportHeader }) {
   )
 }
 
-const money = (p: Paise) => formatPaise(p)
+/** The moment the page was last sent to the printer (stamped on `beforeprint`, never during render). */
+function usePrintedAt(): string {
+  const [at, setAt] = useState<string>('')
+  useEffect(() => {
+    const stamp = () => setAt(printStamp(new Date()))
+    window.addEventListener('beforeprint', stamp)
+    return () => window.removeEventListener('beforeprint', stamp)
+  }, [])
+  return at
+}
 
-function Card({ title, children, total, totalLabel = 'Total' }: { title: string; children: ReactNode; total?: Paise; totalLabel?: string }) {
+/** On paper only: sign-off lines for the auditor / excise officer copy. */
+function Signatures() {
   return (
-    <section className="flex flex-col rounded-lg border-2 border-zinc-800 bg-zinc-900 print:break-inside-avoid print:border-zinc-400 print:bg-white" aria-label={title}>
-      <h2 className="border-b border-zinc-800 px-4 py-2 text-xs font-bold tracking-widest text-zinc-400 uppercase print:text-black">{title}</h2>
-      <div className="flex flex-1 flex-col">{children}</div>
-      {total !== undefined && (
-        <div className="flex items-baseline justify-between border-t-2 border-zinc-700 px-4 py-3 text-lg font-black">
-          <span>{totalLabel}</span>
-          <span className="font-mono tabular-nums">{money(total)}</span>
+    <div className="hidden print:mt-10 print:grid print:grid-cols-3 print:gap-10 print:break-inside-avoid">
+      {['Prepared by', 'Checked by', 'Manager'].map((label) => (
+        <div key={label} className="border-t border-black pt-1 text-sm">
+          {label}
         </div>
-      )}
-    </section>
-  )
-}
-
-function Line({ label, value, hint, strong = false }: { label: ReactNode; value: Paise; hint?: ReactNode; strong?: boolean }) {
-  return (
-    <div className="flex items-baseline justify-between gap-3 border-b border-zinc-800/60 px-4 py-2 last:border-b-0">
-      <span className="flex min-w-0 flex-col">
-        <span className={strong ? 'font-bold' : ''}>{label}</span>
-        {hint && <span className="text-xs text-zinc-500 print:text-black">{hint}</span>}
-      </span>
-      <span className={`shrink-0 font-mono tabular-nums ${strong ? 'font-black' : 'font-semibold'}`}>{money(value)}</span>
-    </div>
-  )
-}
-
-const Empty = ({ text }: { text: string }) => <p className="px-4 py-3 text-sm text-zinc-500">{text}</p>
-
-function LedgerView({ report }: { report: LedgerReport }) {
-  const { sales, purchases, expenses, contra } = report
-  return (
-    <>
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-        <Card title="Sales accounts" total={sales.totalPaise}>
-          {sales.byCenter.map((c) => (
-            <Line key={c.code} label={<span className={`rounded border px-2 py-0.5 font-bold ${departmentChip(c.code)} print:border-0 print:bg-transparent print:p-0 print:text-black`}>{c.name} Sales</span>} value={c.salesPaise} />
-          ))}
-          {sales.unallocatedPaise !== 0n && <Line label="Not yet split (open day)" hint="Part-paid tabs and a running peak; split once settled" value={sales.unallocatedPaise} />}
-        </Card>
-        <Card title="Purchase accounts" total={purchases.totalPaise}>
-          <Line label="Liquor purchases" hint="Stock received (GRN)" value={purchases.liquorGrnPaise} />
-          {purchases.byCenter.map((c) => (
-            <Line
-              key={c.code}
-              label={`${c.name} purchases`}
-              hint={`GRN ${money(c.grnPaise)} · supplies ${money(c.suppliesPaise)}${c.suppliesDrawerPaise !== 0n ? ` (${money(c.suppliesDrawerPaise)} from the drawer)` : ''}`}
-              value={c.totalPaise}
-            />
-          ))}
-        </Card>
-        <Card title="Expense accounts (petty cash)" total={expenses.totalPaise}>
-          {expenses.byCategory.length === 0 && <Empty text="No expenses in this range." />}
-          {expenses.byCategory.map((e) => (
-            <Line key={e.categoryId} label={e.name} hint={`${e.centerName ?? 'Shared'} · ${e.count} entr${e.count === 1 ? 'y' : 'ies'}`} value={e.amountPaise} />
-          ))}
-        </Card>
-      </div>
-      <Card title="Contra">
-        <Line label="Cash deposited to bank" hint="Cash → bank; not an expense" value={contra.bankDepositsPaise} />
-      </Card>
-      <p className="text-sm text-zinc-500 print:hidden">
-        Grouped totals for manual Tally entry. Sales follow each bill line&rsquo;s revenue center; GRN cost follows the item&rsquo;s current center. No profit line is
-        calculated.
-      </p>
-    </>
-  )
-}
-
-function SalesView({ report }: { report: SalesRegister }) {
-  const [query, setQuery] = useState('')
-  const [page, setPage] = useState(0)
-  const rows = useMemo(() => filterSales(report.rows, query), [report.rows, query])
-  const pages = pageCount(rows.length)
-  const at = Math.min(page, pages - 1)
-  const showDate = report.range.startDate !== report.range.endDate
-  return (
-    <section className="flex flex-col gap-3" aria-label="Sales register">
-      <div className="flex flex-wrap items-center gap-3 print:hidden">
-        <label className="flex min-h-11 flex-1 items-center gap-2 rounded-md border-2 border-zinc-700 bg-zinc-950 px-3 focus-within:border-amber-400">
-          <Search className="size-4 text-zinc-500" aria-hidden />
-          <input
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value)
-              setPage(0)
-            }}
-            placeholder="Bill no., item or waiter"
-            className="min-w-0 flex-1 bg-transparent outline-none"
-            aria-label="Search the sales register"
-          />
-        </label>
-        {pages > 1 && (
-          <span className="flex items-center gap-2">
-            <button type="button" onClick={() => setPage(Math.max(0, at - 1))} disabled={at === 0} className="min-h-11 rounded-md border-2 border-zinc-700 px-3 font-bold disabled:opacity-40">
-              ‹ Prev
-            </button>
-            <span className="text-sm text-zinc-400">
-              Page {at + 1} of {pages}
-            </span>
-            <button type="button" onClick={() => setPage(Math.min(pages - 1, at + 1))} disabled={at >= pages - 1} className="min-h-11 rounded-md border-2 border-zinc-700 px-3 font-bold disabled:opacity-40">
-              Next ›
-            </button>
-          </span>
-        )}
-      </div>
-      <table className="w-full rounded-lg border-2 border-zinc-800 bg-zinc-900 text-sm print:border-zinc-400 print:bg-white">
-        <thead className="text-xs tracking-widest text-zinc-500 uppercase print:text-black">
-          <tr className="border-b border-zinc-800">
-            {showDate && <th className="px-3 py-2 text-left">Date</th>}
-            <th className="px-3 py-2 text-right">Bill</th>
-            <th className="px-3 py-2 text-left">Time</th>
-            <th className="px-3 py-2 text-left">Items</th>
-            <th className="px-3 py-2 text-left">Paid by</th>
-            <th className="px-3 py-2 text-right">Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.length === 0 && (
-            <tr>
-              <td colSpan={showDate ? 6 : 5} className="px-3 py-4 text-zinc-500">
-                {report.rows.length === 0 ? 'No bills in this range.' : 'No bill matches.'}
-              </td>
-            </tr>
-          )}
-          {/* On screen one page; on paper every bill. */}
-          {rows.map((r, i) => {
-            const reversal = r.kind === 'REVERSAL'
-            const onPage = Math.floor(i / PAGE_SIZE) === at
-            return (
-              <tr key={r.billId} className={`border-b border-zinc-800/60 align-top ${onPage ? '' : 'hidden print:table-row'} ${reversal ? 'text-rose-300 print:text-black' : ''}`}>
-                {showDate && <td className="px-3 py-2 whitespace-nowrap text-zinc-400 print:text-black">{formatBusinessDate(r.businessDate)}</td>}
-                <td className="px-3 py-2 text-right font-mono font-bold tabular-nums">#{r.billNo}</td>
-                <td className="px-3 py-2 font-mono tabular-nums">{timeOf(r.createdAt)}</td>
-                <td className="px-3 py-2">
-                  {reversal && (
-                    <span className="mr-2 rounded bg-rose-500/20 px-1.5 py-0.5 text-xs font-black uppercase">
-                      Void of #{r.reverses?.billNo}
-                      {r.reverses && r.reverses.businessDate !== r.businessDate ? ` (${formatBusinessDate(r.reverses.businessDate)})` : ''}
-                    </span>
-                  )}
-                  {r.voidedBy && <span className="mr-2 rounded bg-zinc-700 px-1.5 py-0.5 text-xs font-bold uppercase text-zinc-300">Voided by #{r.voidedBy.billNo}</span>}
-                  <span className={r.voidedBy ? 'line-through decoration-zinc-500' : ''}>{itemsSummary(r.items)}</span>
-                </td>
-                <td className="px-3 py-2 whitespace-nowrap text-zinc-300 print:text-black">
-                  {paidByLabel(r)}
-                  {r.waiterName ? ` · ${r.waiterName}` : ''}
-                </td>
-                <td className="px-3 py-2 text-right font-mono font-bold whitespace-nowrap tabular-nums">{money(r.totalPaise)}</td>
-              </tr>
-            )
-          })}
-        </tbody>
-        <tfoot className="font-bold">
-          <tr className="border-t-2 border-zinc-700">
-            <td colSpan={showDate ? 5 : 4} className="px-3 py-2 text-right">
-              {report.totals.billCount} bills
-            </td>
-            <td className="px-3 py-2 text-right font-mono tabular-nums">{money(report.totals.salesPaise)}</td>
-          </tr>
-          <tr>
-            <td colSpan={showDate ? 5 : 4} className="px-3 py-1 text-right text-rose-300 print:text-black">
-              {report.totals.reversalCount} void{report.totals.reversalCount === 1 ? '' : 's'}
-            </td>
-            <td className="px-3 py-1 text-right font-mono text-rose-300 tabular-nums print:text-black">{money(report.totals.reversalsPaise)}</td>
-          </tr>
-          <tr className="text-lg font-black">
-            <td colSpan={showDate ? 5 : 4} className="px-3 py-2 text-right">
-              Net sales
-            </td>
-            <td className="px-3 py-2 text-right font-mono tabular-nums">{money(report.totals.netPaise)}</td>
-          </tr>
-        </tfoot>
-      </table>
-      {report.openBillCount > 0 && (
-        <p className="text-sm text-amber-300 print:text-black">
-          {report.openBillCount} open tab{report.openBillCount === 1 ? '' : 's'} not listed: not a sale until settled.
-        </p>
-      )}
-    </section>
-  )
-}
-
-const QTY_COLUMNS: ReadonlyArray<{ key: keyof StockTotals; label: string }> = [
-  { key: 'openingQty', label: 'Opening' },
-  { key: 'inwardQty', label: 'Inward' },
-  { key: 'salesQty', label: 'Sales' },
-  { key: 'otherQty', label: 'Other' },
-  { key: 'closingQty', label: 'Closing' },
-]
-
-function QtyCells({ totals, strong = false }: { totals: StockTotals; strong?: boolean }) {
-  return (
-    <>
-      {QTY_COLUMNS.map((c) => (
-        <td key={c.key} className={`px-3 py-1.5 text-right font-mono tabular-nums ${strong || c.key === 'closingQty' ? 'font-bold' : ''} ${totals[c.key] === 0 && !strong ? 'text-zinc-600 print:text-black' : ''}`}>
-          {totals[c.key]}
-        </td>
       ))}
-    </>
-  )
-}
-
-function StockView({ report }: { report: StockRegister }) {
-  const [hideIdle, setHideIdle] = useState(true)
-  const [query, setQuery] = useState('')
-  const groups = useMemo(() => groupStock(report.rows, { hideIdle, query }), [report.rows, hideIdle, query])
-  const totals = grandTotals(groups)
-  return (
-    <section className="flex flex-col gap-3" aria-label="Stock register">
-      <div className="flex flex-wrap items-center gap-3 print:hidden">
-        <label className="flex min-h-11 flex-1 items-center gap-2 rounded-md border-2 border-zinc-700 bg-zinc-950 px-3 focus-within:border-amber-400">
-          <Search className="size-4 text-zinc-500" aria-hidden />
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Item or code" className="min-w-0 flex-1 bg-transparent outline-none" aria-label="Search the stock register" />
-        </label>
-        <label className="flex min-h-11 items-center gap-2 font-semibold text-zinc-300">
-          <input type="checkbox" checked={hideIdle} onChange={(e) => setHideIdle(e.target.checked)} className="size-5 accent-emerald-500" />
-          Hide items with no stock and no movement
-        </label>
-      </div>
-      <table className="w-full rounded-lg border-2 border-zinc-800 bg-zinc-900 text-sm print:border-zinc-400 print:bg-white">
-        <thead className="text-xs tracking-widest text-zinc-500 uppercase print:text-black">
-          <tr className="border-b border-zinc-800">
-            <th className="px-3 py-2 text-left">Item</th>
-            <th className="px-3 py-2 text-left">Center</th>
-            {QTY_COLUMNS.map((c) => (
-              <th key={c.key} className="px-3 py-2 text-right">
-                {c.label}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {groups.length === 0 && (
-            <tr>
-              <td colSpan={7} className="px-3 py-4 text-zinc-500">
-                Nothing to show for this range.
-              </td>
-            </tr>
-          )}
-          {groups.map((g) => [
-            <tr key={`h-${g.categoryName}`} className="bg-zinc-800/60 print:bg-white">
-              <td colSpan={2} className="px-3 py-1.5 text-xs font-black tracking-widest uppercase">
-                {g.categoryName}
-              </td>
-              <QtyCells totals={g.totals} strong />
-            </tr>,
-            ...g.rows.map((r) => (
-              <tr key={r.skuId} className="border-b border-zinc-800/60">
-                <td className="px-3 py-1.5">
-                  {r.name}
-                  <span className="ml-2 font-mono text-xs text-zinc-500">{r.skuCode}</span>
-                  {!r.isActive && <span className="ml-2 text-xs text-zinc-500">(inactive)</span>}
-                </td>
-                <td className="px-3 py-1.5 text-zinc-400 print:text-black">{r.centerName}</td>
-                <QtyCells totals={r} />
-              </tr>
-            )),
-          ])}
-        </tbody>
-        <tfoot>
-          <tr className="border-t-2 border-zinc-700 text-base">
-            <td colSpan={2} className="px-3 py-2 font-black">
-              All items (bottles / units)
-            </td>
-            <QtyCells totals={totals} strong />
-          </tr>
-        </tfoot>
-      </table>
-      <p className="text-sm text-zinc-500 print:hidden">
-        Closing = Opening + Inward (GRN) − Sales + Other. Sales are net of voids put back on the shelf; Other is a new item&rsquo;s opening count. Untracked centers (e.g.
-        Kitchen) are not listed.
-      </p>
-    </section>
-  )
-}
-
-function PaymentsView({ report }: { report: PaymentsReport }) {
-  const { revenue, split, waiterLedger, received } = report
-  return (
-    <>
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-4">
-        <Card title="Sales by tender" total={revenue.totalSalesPaise} totalLabel="Total sales">
-          <Line label="Cash" value={revenue.cashPaise} />
-          <Line label="UPI" value={revenue.upiPaise} />
-          <Line label="Waiter credit" hint="Settled “collect later” through the waiter ledger" value={revenue.waiterCreditPaise} />
-        </Card>
-        <Card title="Where it came from">
-          <Line label="Counter & Captain — cash" hint="After tally adjustments" value={split.normal.cashPaise} />
-          <Line label="Counter & Captain — UPI" value={split.normal.upiPaise} />
-          <Line label={`Peak — cash (${split.peak.sessionCount} session${split.peak.sessionCount === 1 ? '' : 's'})`} hint="From the peak readings; any variance sits here" value={split.peak.cashPaise} />
-          <Line label="Peak — UPI" value={split.peak.upiPaise} />
-        </Card>
-        <Card title="Waiter ledger">
-          <Line label="Credit given" value={waiterLedger.creditGivenPaise} />
-          <Line label="Repaid in cash" value={waiterLedger.repaidCashPaise} />
-          <Line label="Repaid in UPI" value={waiterLedger.repaidUpiPaise} />
-          <Line label="Change in outstanding" hint="Zero once every day is closed" value={waiterLedger.outstandingChangePaise} strong />
-        </Card>
-        <Card title="Money received">
-          <Line label="Cash received" hint="Cash sales + waiter cash repayments" value={received.cashPaise} strong />
-          <Line label="UPI received" hint="UPI sales + waiter UPI repayments" value={received.upiPaise} strong />
-        </Card>
-      </div>
-      {report.byDay.length > 1 && (
-        <table className="w-full rounded-lg border-2 border-zinc-800 bg-zinc-900 text-sm print:border-zinc-400 print:bg-white">
-          <thead className="text-xs tracking-widest text-zinc-500 uppercase print:text-black">
-            <tr className="border-b border-zinc-800">
-              <th className="px-3 py-2 text-left">Day</th>
-              <th className="px-3 py-2 text-right">Cash</th>
-              <th className="px-3 py-2 text-right">UPI</th>
-              <th className="px-3 py-2 text-right">Waiter credit</th>
-              <th className="px-3 py-2 text-right">Total sales</th>
-              <th className="px-3 py-2 text-right">Repaid (cash / UPI)</th>
-            </tr>
-          </thead>
-          <tbody className="font-mono tabular-nums">
-            {report.byDay.map((d) => (
-              <tr key={d.businessDate} className="border-b border-zinc-800/60">
-                <td className="px-3 py-1.5 font-sans">
-                  {formatBusinessDate(d.businessDate)}
-                  {d.status === 'OPEN' && <span className="ml-2 text-xs font-bold text-amber-300 uppercase">open</span>}
-                </td>
-                <td className="px-3 py-1.5 text-right">{money(d.cashPaise)}</td>
-                <td className="px-3 py-1.5 text-right">{money(d.upiPaise)}</td>
-                <td className="px-3 py-1.5 text-right">{money(d.waiterCreditPaise)}</td>
-                <td className="px-3 py-1.5 text-right font-bold">{money(d.totalSalesPaise)}</td>
-                <td className="px-3 py-1.5 text-right text-zinc-400 print:text-black">
-                  {money(d.repaidCashPaise)} / {money(d.repaidUpiPaise)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </>
+    </div>
   )
 }

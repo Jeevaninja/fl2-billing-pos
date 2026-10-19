@@ -53,6 +53,8 @@ function item(id: string, brandName: string, cat: ItemCategory, over: Partial<Ca
     brandName,
     productCategory: 'WHISKY',
     brandActive: true,
+    volumeMl: null,
+    exciseGroup: null,
     ...over,
   }
 }
@@ -185,6 +187,19 @@ describe('edit item and save results', () => {
     )
     expect(itemPatch(edited.form as EditItemForm, CATEGORIES)).toEqual({ name: '1848 Gold', categoryId: 'c-full', salePrice: 420_00n, isActive: false })
     expect(deactivates(edited.form!)).toBe(true)
+  })
+
+  it('edits the excise bottle volume and group (whole ml only)', () => {
+    const tin = { ...ITEMS[2]!, volumeMl: 330, exciseGroup: 'TIN_BEER' as const }
+    const state = run(ready, { type: 'openEdit', item: tin })
+    expect(state.form).toMatchObject({ volume: '330', exciseGroup: 'TIN_BEER' })
+    const tin500 = run(state, { type: 'field', field: 'volume', value: '500 ml' })
+    expect((tin500.form as EditItemForm).volume).toBe('500')
+    expect(itemPatch(tin500.form as EditItemForm, CATEGORIES)).toEqual({ volumeMl: 500 })
+    const none = run(state, { type: 'field', field: 'volume', value: '' }, { type: 'field', field: 'exciseGroup', value: '' })
+    expect(itemPatch(none.form as EditItemForm, CATEGORIES)).toEqual({ volumeMl: null, exciseGroup: null })
+    expect(itemPatch(run(state, { type: 'field', field: 'volume', value: '' }).form as EditItemForm, CATEGORIES)).toMatch(/bottle volume/)
+    expect(itemPatch(run(state, { type: 'field', field: 'volume', value: '0' }).form as EditItemForm, CATEGORIES)).toMatch(/whole number of ml/)
   })
 
   it('a save replaces the item in report order and selects it; a duplicate marks the field', () => {

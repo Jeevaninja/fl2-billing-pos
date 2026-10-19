@@ -36,4 +36,32 @@ describe('reports API (Phase 23)', () => {
       expect((await call('GET', path)).status, path).toBe(400);
     }
   });
+
+  it('serves the eight Phase 24 modules, with center filters and catalog volume edits', async () => {
+    const { fx, call } = await start();
+    const bill = await call('POST', '/api/bills', { mode: 'NORMAL' });
+    await call('POST', `/api/bills/${bill.body.id}/items`, { skuId: fx.sku.full, quantity: 3 });
+    await call('POST', `/api/bills/${bill.body.id}/settle`, { payments: [{ mode: 'CASH', amount: String(3 * PRICE.full) }] });
+
+    const summary = await call('GET', `/api/reports/sales-summary${q}`);
+    expect(summary).toMatchObject({ status: 200, body: { rows: [{ skuId: fx.sku.full, qty: 3, sRatePaise: String(PRICE.full), amountPaise: String(3 * PRICE.full) }] } });
+    expect(summary.body.ml.groups[0]).toMatchObject({ label: 'LIQUOR', saleUnits: 3, saleMl: 2250 });
+
+    const stock = await call('GET', `/api/reports/stock-summary${q}`);
+    const full = stock.body.groups.flatMap((g: { rows: Array<{ skuId: string }> }) => g.rows).find((r: { skuId: string }) => r.skuId === fx.sku.full);
+    expect(full).toMatchObject({ opStk: 50, sale: 3, closing: 47, pRatePaise: null, salesTotalPaise: String(3 * PRICE.full) });
+
+    for (const path of ['member-sales', 'orders', 'expenses?center=SHARED&', 'purchases?center=LIQUOR&', 'bank-deposits', 'day-end', 'full']) {
+      const url = path.includes('?') ? `/api/reports/${path}${q.slice(1)}` : `/api/reports/${path}${q}`;
+      expect((await call('GET', url)).status, url).toBe(200);
+    }
+    expect((await call('GET', `/api/reports/full${q}`)).body.sales.totalPaise).toBe(String(3 * PRICE.full));
+    expect((await call('GET', `/api/reports/purchases${q}&center=SHARED`)).status).toBe(400);
+    expect((await call('GET', `/api/reports/expenses${q}&center=no%20such`)).status).toBe(400);
+
+    const patched = await call('PATCH', `/api/catalog/items/${fx.sku.beer330}`, { volumeMl: 500, exciseGroup: 'TIN_BEER' });
+    expect(patched).toMatchObject({ status: 200, body: { volumeMl: 500, exciseGroup: 'TIN_BEER' } });
+    expect((await call('PATCH', `/api/catalog/items/${fx.sku.beer330}`, { exciseGroup: 'RUM' })).status).toBe(400);
+    expect((await call('PATCH', `/api/catalog/items/${fx.sku.beer330}`, { volumeMl: 7.5 })).status).toBe(400);
+  });
 });

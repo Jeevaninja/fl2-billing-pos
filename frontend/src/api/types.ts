@@ -636,6 +636,9 @@ export interface CatalogItem extends SkuLookup {
   brandName: string
   productCategory: ProductCategory
   brandActive: boolean
+  /** Nominal ml of one sealed bottle (excise ML summary label; stock stays whole bottles). */
+  volumeMl: number | null
+  exciseGroup: ExciseGroup | null
 }
 
 export interface NewItemPayload {
@@ -663,6 +666,8 @@ export interface ItemPatchPayload {
   caseSize?: number
   barcode?: string | null
   isActive?: boolean
+  volumeMl?: number | null
+  exciseGroup?: ExciseGroup | null
 }
 
 // ── Orders (Phase 17, GET /api/orders) ───────────────────────────────────────
@@ -738,25 +743,6 @@ export interface RangeAnchor {
   firstBusinessDate: string | null
 }
 
-export interface LedgerReport extends ReportHeader {
-  sales: {
-    byCenter: Array<{ code: DepartmentCode; name: string; salesPaise: Paise }>
-    /** Open day only: tenders not yet split by center (part-paid tabs). */
-    unallocatedPaise: Paise
-    totalPaise: Paise
-  }
-  purchases: {
-    liquorGrnPaise: Paise
-    byCenter: Array<{ code: DepartmentCode; name: string; grnPaise: Paise; suppliesPaise: Paise; suppliesDrawerPaise: Paise; totalPaise: Paise }>
-    totalPaise: Paise
-  }
-  expenses: {
-    byCategory: Array<{ categoryId: string; name: string; centerName: string | null; amountPaise: Paise; count: number }>
-    totalPaise: Paise
-  }
-  contra: { bankDepositsPaise: Paise }
-}
-
 export interface SalesRegisterItem {
   name: string
   sizeCode: SizeCode
@@ -785,47 +771,240 @@ export interface SalesRegisterRow {
   totalPaise: Paise
 }
 
-export interface SalesRegister extends ReportHeader {
-  rows: SalesRegisterRow[]
-  totals: { billCount: number; reversalCount: number; salesPaise: Paise; reversalsPaise: Paise; netPaise: Paise }
-  openBillCount: number
+
+// ── Reports (Phase 24: the eight-module suite; TN FL2 statutory registers) ──
+
+/** Statutory ML-summary group of a liquor SKU. */
+export type ExciseGroup = 'LIQUOR' | 'BEER' | 'TIN_BEER' | 'WINE'
+
+export interface MlFigures {
+  saleUnits: number
+  saleMl: number
+  closingUnits: number
+  closingMl: number
 }
 
-export interface StockRegisterRow {
+export interface MlSummary {
+  groups: Array<MlFigures & { group: ExciseGroup; label: string; bySize: Array<MlFigures & { volumeMl: number }> }>
+  total: MlFigures
+  /** Liquor items with stock or sales but no volume / excise group (left out), by SKU code. */
+  missing: string[]
+}
+
+export interface SalesSummaryRow {
   skuId: string
   skuCode: string
   name: string
   sizeCode: SizeCode
   categoryName: string
+  centerCode: DepartmentCode
+  centerName: string
+  qty: number
+  /** Billed unit price; null = the price changed inside the range ("Mixed"). */
+  sRatePaise: Paise | null
+  amountPaise: Paise
+}
+
+export interface SalesSummary extends ReportHeader {
+  rows: SalesSummaryRow[]
+  byCenter: Array<{ code: DepartmentCode; name: string; qty: number; amountPaise: Paise }>
+  totalQty: number
+  totalPaise: Paise
+  ml: MlSummary
+}
+
+export interface MemberVisit {
+  businessDate: string
+  firstBillAt: string
+  lastBillAt: string
+  billNos: number[]
+  items: Array<{ name: string; sizeCode: SizeCode; qty: number; amountPaise: Paise }>
+  totalPaise: Paise
+}
+
+export interface MemberSales extends ReportHeader {
+  members: Array<{ memberId: string; membershipNo: string; name: string; visits: MemberVisit[]; totalQty: number; totalPaise: Paise }>
+  untagged: { billCount: number; qty: number; totalPaise: Paise }
+  totalPaise: Paise
+}
+
+export interface OrderSummaryRow extends SalesRegisterRow {
+  cashierName: string | null
+  source: 'COUNTER' | 'WAITER_APP'
+  settledByName: string | null
+  peakSessionNo: number | null
+  kots: Array<{ station: 'BAR' | 'KITCHEN'; ticketNo: number }>
+  cancelledQty: number
+}
+
+export interface OrderSummaryReport extends ReportHeader {
+  rows: OrderSummaryRow[]
+  totals: { billCount: number; reversalCount: number; salesPaise: Paise; reversalsPaise: Paise; netPaise: Paise; cancelledQty: number }
+  openBillCount: number
+}
+
+export interface StockSummaryRow {
+  skuId: string
+  skuCode: string
+  name: string
+  sizeCode: SizeCode
+  categoryName: string
+  centerCode: DepartmentCode
   centerName: string
   isActive: boolean
-  openingQty: number
-  inwardQty: number
-  salesQty: number
-  otherQty: number
-  closingQty: number
+  volumeMl: number | null
+  exciseGroup: ExciseGroup | null
+  opStk: number
+  purch: number
+  total: number
+  sale: number
+  adj: number
+  closing: number
+  pRatePaise: Paise | null
+  pRateSource: 'GRN' | 'CATALOG' | null
+  sRatePaise: Paise
+  cloPurchValPaise: Paise | null
+  cloSalesValPaise: Paise
+  salesTotalPaise: Paise
+  openingValPaise: Paise | null
 }
 
-export interface StockRegister extends ReportHeader {
-  rows: StockRegisterRow[]
+export interface StockSummaryTotals {
+  opStk: number
+  purch: number
+  total: number
+  sale: number
+  adj: number
+  closing: number
+  cloPurchValPaise: Paise
+  cloSalesValPaise: Paise
+  salesTotalPaise: Paise
+  openingValPaise: Paise
+  unratedCount: number
+  unratedClosingQty: number
 }
 
-export interface PaymentsReport extends ReportHeader {
-  revenue: { cashPaise: Paise; upiPaise: Paise; waiterCreditPaise: Paise; totalSalesPaise: Paise }
-  split: {
-    normal: { cashPaise: Paise; upiPaise: Paise }
-    peak: { cashPaise: Paise; upiPaise: Paise; sessionCount: number }
-  }
-  waiterLedger: { creditGivenPaise: Paise; repaidCashPaise: Paise; repaidUpiPaise: Paise; outstandingChangePaise: Paise }
-  received: { cashPaise: Paise; upiPaise: Paise }
-  byDay: Array<{
-    businessDate: string
-    status: 'OPEN' | 'CLOSED'
-    cashPaise: Paise
-    upiPaise: Paise
-    waiterCreditPaise: Paise
-    totalSalesPaise: Paise
-    repaidCashPaise: Paise
-    repaidUpiPaise: Paise
+export interface StockSummary extends ReportHeader {
+  groups: Array<{ categoryName: string; rows: StockSummaryRow[]; totals: StockSummaryTotals }>
+  totals: StockSummaryTotals
+  hasAdjustments: boolean
+  ml: MlSummary
+}
+
+export interface ExpenseReportEntry {
+  id: string
+  businessDate: string
+  at: string
+  description: string
+  amountPaise: Paise
+  isVoid: boolean
+  voided: boolean
+  byName: string
+}
+
+export interface ExpenseSummary extends ReportHeader {
+  center: string | null
+  byCategory: Array<{
+    categoryId: string
+    name: string
+    centerCode: DepartmentCode | null
+    centerName: string | null
+    amountPaise: Paise
+    count: number
+    entries: ExpenseReportEntry[]
   }>
+  /** code 'SHARED' = categories with no center. */
+  byCenter: Array<{ code: string; name: string; amountPaise: Paise }>
+  totalPaise: Paise
+}
+
+export interface PurchaseGrn {
+  receiptId: string
+  businessDate: string
+  at: string
+  invoiceNo: string
+  vendorName: string | null
+  receivedByName: string
+  lines: Array<{ name: string; sizeCode: SizeCode; qty: number; unitCostPaise: Paise; amountPaise: Paise }>
+  amountPaise: Paise
+}
+
+export interface PurchaseSupply {
+  purchaseId: string
+  businessDate: string
+  at: string
+  vendorName: string | null
+  paidFrom: 'DRAWER' | 'OUTSIDE'
+  note: string | null
+  lines: Array<{ description: string; quantity: string | null; amountPaise: Paise }>
+  amountPaise: Paise
+  isVoid: boolean
+  voided: boolean
+  byName: string
+}
+
+export interface PurchaseSummary extends ReportHeader {
+  center: string | null
+  centers: Array<{
+    code: DepartmentCode
+    name: string
+    grn: PurchaseGrn[]
+    supplies: PurchaseSupply[]
+    grnPaise: Paise
+    suppliesPaise: Paise
+    suppliesDrawerPaise: Paise
+    totalPaise: Paise
+  }>
+  totalPaise: Paise
+}
+
+export interface BankDepositLog extends ReportHeader {
+  rows: Array<{ id: string; businessDate: string; at: string; amountPaise: Paise; reference: string | null; depositorName: string; isVoid: boolean; voided: boolean }>
+  totalPaise: Paise
+}
+
+export interface DayEndLogRow {
+  businessDate: string
+  status: 'OPEN' | 'CLOSED'
+  openingFloatPaise: Paise
+  expectedCashPaise: Paise
+  recomputedExpectedPaise: Paise
+  countedCashPaise: Paise | null
+  variancePaise: Paise | null
+  peakVariancePaise: Paise
+  cashSalesPaise: Paise
+  upiPaise: Paise
+  waiterCreditPaise: Paise
+  totalSalesPaise: Paise
+  closedAt: string | null
+  closedByName: string | null
+  closedByRole: string | null
+}
+
+export interface DayEndLog extends ReportHeader {
+  rows: DayEndLogRow[]
+  totals: { expectedCashPaise: Paise; countedCashPaise: Paise; variancePaise: Paise; peakVariancePaise: Paise; upiPaise: Paise; totalSalesPaise: Paise }
+}
+
+export interface FullReport extends ReportHeader {
+  cash: {
+    openingBalancePaise: Paise
+    cashSalesPaise: Paise
+    waiterCashRepaidPaise: Paise
+    cashExpensesPaise: Paise
+    drawerPurchasesPaise: Paise
+    bankDepositsPaise: Paise
+    peakVariancePaise: Paise
+    unreconciledPaise: Paise
+    dayEndVariancePaise: Paise
+    betweenDaysPaise: Paise
+    closingBalancePaise: Paise
+    runningPeakExpensesPaise: Paise
+  }
+  sales: { byCenter: Array<{ code: DepartmentCode; name: string; salesPaise: Paise }>; unallocatedPaise: Paise; totalPaise: Paise }
+  payments: { cashPaise: Paise; upiPaise: Paise; waiterCreditPaise: Paise }
+  expenses: { byCenter: Array<{ code: string; name: string; amountPaise: Paise }>; totalPaise: Paise }
+  purchases: { byCenter: Array<{ code: DepartmentCode; name: string; grnPaise: Paise; suppliesPaise: Paise; totalPaise: Paise }>; totalPaise: Paise }
+  bankDepositsPaise: Paise
+  stock: { openingValuePaise: Paise; closingValuePaise: Paise; unratedCount: number }
 }

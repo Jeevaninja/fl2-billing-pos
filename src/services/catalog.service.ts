@@ -7,7 +7,7 @@
 import type { SqlClient, SqlDatabase } from '../db/client.js';
 import { InactiveError, NotFoundError, PosError, PosErrorCode, withPosErrors } from '../db/errors.js';
 import { assertPaise, type Paise, paiseParam } from '../domain/money.js';
-import type { DepartmentCode, SizeCode } from '../domain/types.js';
+import type { DepartmentCode, ExciseGroup, SizeCode } from '../domain/types.js';
 import { mapSkuLookup, SKU_COLUMNS, SKU_FROM, type SkuLookup, type SkuLookupRow } from './counter-queries.js';
 import { checkDepartmentCode, requireActiveDepartment } from './department.service.js';
 import { getItemCategory } from './item-category.service.js';
@@ -18,6 +18,9 @@ export type ProductCategory = (typeof PRODUCT_CATEGORIES)[number];
 
 /** Display order of sizes everywhere in the catalog. UNIT is the single size of a dish or a soda. */
 export const SIZE_CODES = ['FULL', 'HALF', 'QUARTER', 'BEER_650', 'BEER_330', 'UNIT'] as const satisfies readonly SizeCode[];
+export const EXCISE_GROUPS = ['LIQUOR', 'BEER', 'TIN_BEER', 'WINE'] as const satisfies readonly ExciseGroup[];
+/** Upper bound for a bottle's nominal volume (a 4.5 L jar is the largest sealed size sold). */
+export const MAX_VOLUME_ML = 5000;
 
 /** Bottles per case pre-filled for a new size (Indian distribution cases); editable per SKU. */
 export const DEFAULT_CASE_SIZE: Readonly<Record<SizeCode, number>> = { FULL: 12, HALF: 32, QUARTER: 64, BEER_650: 12, BEER_330: 24, UNIT: 1 };
@@ -94,6 +97,9 @@ export interface CatalogItem extends SkuLookup {
   productCategory: ProductCategory;
   /** The brand is active (an item of an inactive brand can't be sold). */
   brandActive: boolean;
+  /** Nominal ml of one sealed bottle (0017): a label for the excise ML summary, never tracked stock. */
+  volumeMl: number | null;
+  exciseGroup: ExciseGroup | null;
 }
 
 export interface NewItemInput {
@@ -121,6 +127,10 @@ export interface ItemPatch extends SkuPatch {
   /** Moves this item to the brand of that name (found or created); a case-only change renames the brand. */
   name?: string | undefined;
   categoryId?: string | undefined;
+  /** `null` clears (not a bottle). */
+  volumeMl?: number | null | undefined;
+  /** `null` = not in the excise ML summary. */
+  exciseGroup?: ExciseGroup | null | undefined;
 }
 
 export const MAX_OPENING_QTY = 100_000;
@@ -506,6 +516,7 @@ export class CatalogService {
   async updateItem(skuId: string, patch: ItemPatch): Promise<CatalogItem> {
     const barcode = checkSkuPatch(patch);
     const name = patch.name === undefined ? undefined : checkName(patch.name);
+    checkVolume(patch);
 
     return withPosErrors(() =>
       this.db.transaction(async (tx) => {
@@ -527,6 +538,8 @@ export class CatalogService {
           await tx.query(`UPDATE products SET is_active = true WHERE id = (SELECT product_id FROM skus WHERE id = $1) AND NOT is_active`, [skuId]);
         }
         await applySkuFields(tx, skuId, patch, barcode);
+        if (patch.volumeMl !== undefined) await tx.query(`UPDATE skus SET volume_ml = $2 WHERE id = $1`, [skuId, patch.volumeMl]);
+        if (patch.exciseGroup !== undefined) await tx.query(`UPDATE skus SET excise_group = $2 WHERE id = $1`, [skuId, patch.exciseGroup]);
         return loadItem(tx, skuId);
       }),
     );
@@ -540,14 +553,25 @@ interface ItemRow extends SkuLookupRow {
   brand_name: string;
   product_category: ProductCategory;
   brand_active: boolean;
+  volume_ml: number | null;
+  excise_group: ExciseGroup | null;
 }
 
 const ITEM_SELECT = `
-  SELECT ${SKU_COLUMNS}, k.product_id, p.name AS brand_name, p.category AS product_category, p.is_active AS brand_active
+  SELECT ${SKU_COLUMNS}, k.product_id, p.name AS brand_name, p.category AS product_category, p.is_active AS brand_active,
+         k.volume_ml, k.excise_group
     FROM ${SKU_FROM}`;
 
 function mapItem(r: ItemRow): CatalogItem {
-  return { ...mapSkuLookup(r), productId: r.product_id, brandName: r.brand_name, productCategory: r.product_category, brandActive: r.brand_active };
+  return {
+    ...mapSkuLookup(r),
+    productId: r.product_id,
+    brandName: r.brand_name,
+    productCategory: r.product_category,
+    brandActive: r.brand_active,
+    volumeMl: r.volume_ml === null ? null : Number(r.volume_ml),
+    exciseGroup: r.excise_group,
+  };
 }
 
 async function loadItem(db: SqlClient, skuId: string): Promise<CatalogItem> {
@@ -585,6 +609,18 @@ async function lockSku(tx: SqlClient, skuId: string): Promise<LockedSku> {
   );
   if (!current) throw new NotFoundError('sku', skuId);
   return current;
+}
+
+/** Volume: a whole number of ml (no fractions, no floats); excise group from the fixed list. */
+function checkVolume(patch: ItemPatch): void {
+  const ml = patch.volumeMl;
+  if (ml !== undefined && ml !== null && (!Number.isInteger(ml) || ml < 1 || ml > MAX_VOLUME_ML)) {
+    throw new RangeError(`volumeMl must be a whole number of ml from 1 to ${MAX_VOLUME_ML}`);
+  }
+  const group = patch.exciseGroup;
+  if (group !== undefined && group !== null && !(EXCISE_GROUPS as readonly string[]).includes(group)) {
+    throw new RangeError(`exciseGroup must be one of ${EXCISE_GROUPS.join(', ')}`);
+  }
 }
 
 /** Validates a SKU patch before any write; returns the cleaned barcode (undefined = unchanged). */

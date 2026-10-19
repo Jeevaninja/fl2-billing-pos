@@ -3,6 +3,7 @@ export type { BillLine, CounterPayment, PeakUndoResult, ReversalResult, ReverseB
 export {
   CatalogService,
   DEFAULT_CASE_SIZE,
+  EXCISE_GROUPS,
   MAX_CASE_SIZE,
   MAX_OPENING_QTY,
   PRODUCT_CATEGORIES,
@@ -11,6 +12,7 @@ export {
   skuCodeFor,
   suggestPrefix,
 } from './catalog.service.js';
+export type { ExciseGroup } from '../domain/types.js';
 export type { CatalogFilter, CatalogItem, CatalogProduct, CatalogSku, ItemPatch, NewItemInput, NewProductInput, NewSkuInput, ProductCategory, ProductPatch, SkuPatch } from './catalog.service.js';
 export { CaptainService, MAX_ORDER_LINES, orderFingerprint } from './captain.service.js';
 export type { OrderLine, OrderRequest, PlacedOrder, WaiterProfile } from './captain.service.js';
@@ -83,7 +85,7 @@ export type { KotFormat, KotPrinter, KotPrintResult, KotStation, KotTicket, Rece
 export { OrdersQueries, receiptFor } from './orders.queries.js';
 export type { OrderDetail, OrderPayment, OrderStatus, OrderSummary } from './orders.queries.js';
 export type { PeakBreakdown, PeakReconciliation, PeakStartBaseline } from './peak-session.service.js';
-export { checkRange, MAX_REPORT_DAYS, ReportService } from './report.service.js';
+export { checkRange, MAX_REPORT_DAYS, ReportService, SHARED_CENTER } from './report.service.js';
 export type {
   LedgerCenterPurchases,
   LedgerCenterSales,
@@ -100,6 +102,40 @@ export type {
   SalesRegisterRow,
   StockRegister,
   StockRegisterRow,
+  BankDepositLog,
+  BankDepositRow,
+  DayEndLog,
+  DayEndLogRow,
+  ExpenseCategoryGroup,
+  ExpenseCenterTotal,
+  ExpenseReportEntry,
+  ExpenseSummary,
+  FullReport,
+  MemberSales,
+  MemberSalesRow,
+  MemberVisit,
+  MemberVisitItem,
+  MlFigures,
+  MlGroup,
+  MlSizeLine,
+  MlSummary,
+  OrderKot,
+  OrderSummaryReport,
+  OrderSummaryRow,
+  PurchaseCenter,
+  PurchaseGrn,
+  PurchaseGrnLine,
+  PurchaseSummary,
+  PurchaseSupply,
+  PurchaseSupplyLine,
+  RateSource,
+  SalesSummary,
+  SalesSummaryCenter,
+  SalesSummaryRow,
+  StockSummary,
+  StockSummaryGroup,
+  StockSummaryRow,
+  StockSummaryTotals,
 } from './report.service.js';
 export { WaiterService } from './waiter.service.js';
 export type { ReceiptAllocation, WaiterBillsSettlement, WaiterReceipt, WaiterRepayment, WaiterSettlement } from './waiter.service.js';

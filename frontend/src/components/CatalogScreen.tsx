@@ -11,6 +11,7 @@ import {
   conflictField,
   deactivates,
   effectiveDepartment,
+  EXCISE_GROUP_OPTIONS,
   existingBrand,
   formError,
   initialCatalogState,
@@ -490,9 +491,31 @@ function EditItemFields({ state, form, conflict, onField }: FieldsProps<EditItem
         {!kitchen && <TextInput label="Per case" value={form.caseSize} onChange={(value) => onField({ field: 'caseSize', value })} inputMode="numeric" mono />}
         <TextInput label="Barcode (opt.)" value={form.barcode} onChange={(value) => onField({ field: 'barcode', value })} invalid={conflict === 'barcode'} maxLength={40} mono />
       </div>
+      {!kitchen && (
+        <div className="grid grid-cols-[10rem_1fr] items-end gap-4">
+          <TextInput label="Bottle ml (excise)" value={form.volume} onChange={(value) => onField({ field: 'volume', value })} inputMode="numeric" placeholder="none" mono />
+          <div>
+            <span className="text-sm font-semibold text-zinc-300">Excise ML group</span>
+            <div className="mt-1 flex flex-wrap gap-2" role="radiogroup" aria-label="Excise ML group">
+              {[{ value: '' as const, label: 'None' }, ...EXCISE_GROUP_OPTIONS].map((o) => (
+                <button
+                  key={o.value || 'none'}
+                  type="button"
+                  role="radio"
+                  aria-checked={form.exciseGroup === o.value}
+                  onClick={() => onField({ field: 'exciseGroup', value: o.value })}
+                  className={`min-h-11 rounded-md border-2 px-3 font-bold ${form.exciseGroup === o.value ? 'border-amber-400 bg-amber-400 text-zinc-950' : 'border-zinc-700 text-zinc-300 hover:border-zinc-400'}`}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
       <ActiveToggle on={form.isActive} onChange={(value) => onField({ field: 'isActive', value })} />
       <p className="text-sm text-zinc-400">
-        A new sale price applies from the next scan; bills already rung up keep their price and name. The revenue center ({item.departmentName}) belongs to the brand
+        Bottle ml is a label for the excise ML summary in Reports; stock is always counted in whole sealed bottles. A new sale price applies from the next scan; bills already rung up keep their price and name. The revenue center ({item.departmentName}) belongs to the brand
         and applies to every size of {item.brandName}. Size and SKU code can&rsquo;t be changed.
       </p>
     </div>

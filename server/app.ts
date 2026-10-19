@@ -26,6 +26,7 @@ import {
   PurchaseService,
   receiptFor,
   SIZE_CODES,
+  EXCISE_GROUPS,
   WaiterService,
   type CounterPayment,
   type ExpenseCategoryPatch,
@@ -407,6 +408,16 @@ function buildRoutes({ db, cashierId, printer = new PrinterService(), kotPrinter
     route('GET', '/api/reports/sales', async ({ query }) => ok(await reports.getSalesRegister(reportRange(query)))),
     route('GET', '/api/reports/stock', async ({ query }) => ok(await reports.getStockRegister(reportRange(query)))),
     route('GET', '/api/reports/payments', async ({ query }) => ok(await reports.getPayments(reportRange(query)))),
+    // Phase 24: the eight-module reporting suite (every one takes the same range; Expenses / Purchases take ?center=).
+    route('GET', '/api/reports/sales-summary', async ({ query }) => ok(await reports.getSalesSummary(reportRange(query)))),
+    route('GET', '/api/reports/member-sales', async ({ query }) => ok(await reports.getMemberSales(reportRange(query)))),
+    route('GET', '/api/reports/orders', async ({ query }) => ok(await reports.getOrderSummary(reportRange(query)))),
+    route('GET', '/api/reports/stock-summary', async ({ query }) => ok(await reports.getStockSummary(reportRange(query)))),
+    route('GET', '/api/reports/expenses', async ({ query }) => ok(await reports.getExpenseSummary(reportRange(query), query.get('center') ?? undefined))),
+    route('GET', '/api/reports/purchases', async ({ query }) => ok(await reports.getPurchaseSummary(reportRange(query), query.get('center') ?? undefined))),
+    route('GET', '/api/reports/bank-deposits', async ({ query }) => ok(await reports.getBankDeposits(reportRange(query)))),
+    route('GET', '/api/reports/day-end', async ({ query }) => ok(await reports.getDayEndLog(reportRange(query)))),
+    route('GET', '/api/reports/full', async ({ query }) => ok(await reports.getFullReport(reportRange(query)))),
 
     // ── Item categories and flat items (Phase 20) ──
     route('GET', '/api/item-categories', async ({ query }) =>
@@ -471,6 +482,8 @@ function buildRoutes({ db, cashierId, printer = new PrinterService(), kotPrinter
       if (body.purchasePrice !== undefined) patch.purchasePricePaise = body.purchasePrice === null ? null : paise(body.purchasePrice, 'purchasePrice');
       if (body.caseSize !== undefined) patch.caseSize = int(body.caseSize, 'caseSize');
       if (body.barcode !== undefined) patch.barcode = optNullableStr(body.barcode, 'barcode') ?? null;
+      if (body.volumeMl !== undefined) patch.volumeMl = body.volumeMl === null ? null : int(body.volumeMl, 'volumeMl');
+      if (body.exciseGroup !== undefined) patch.exciseGroup = body.exciseGroup === null ? null : oneOf(body.exciseGroup, 'exciseGroup', EXCISE_GROUPS);
       const isActive = optBool(body.isActive, 'isActive');
       if (isActive !== undefined) patch.isActive = isActive;
       return ok(await catalog.updateItem(id(params.skuId, 'skuId'), patch));

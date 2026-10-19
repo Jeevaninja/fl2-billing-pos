@@ -5,6 +5,8 @@ export type BillKind = 'SALE' | 'REVERSAL';
 export type BillStatus = 'OPEN' | 'SETTLED' | 'PEAK_UNSETTLED' | 'PEAK_RECONCILED';
 export type BillSource = 'COUNTER' | 'WAITER_APP';
 export type SizeCode = 'FULL' | 'HALF' | 'QUARTER' | 'BEER_650' | 'BEER_330' | 'UNIT';
+/** Statutory ML-summary group of a liquor SKU (0017); null outside the liquor center. */
+export type ExciseGroup = 'LIQUOR' | 'BEER' | 'TIN_BEER' | 'WINE';
 /**
  * P&L department / revenue center code (0013; manager-defined since 0016): LIQUOR, KITCHEN,
  * CIGARETTES, COOL_DRINKS, … Every line of a bill carries one; the drawer stays unified.

@@ -191,12 +191,14 @@ describe('Schema guardrails (CLAUDE.md negative constraints)', () => {
 
   it('has no milliliter / peg / open-bottle / tax / table-layout columns', async () => {
     const { db } = ctx();
-    const { rows } = await db.query(
-      `SELECT table_name, column_name FROM information_schema.columns
+    const { rows } = await db.query<{ table_name: string; column_name: string; data_type: string }>(
+      `SELECT table_name, column_name, data_type FROM information_schema.columns
         WHERE table_schema = 'public'
           AND column_name ~* '(^|_)(ml|millilit|litre|liter|volume|peg|pegs|open_bottle|tax|gst|vat|table_no|table_id)(_|$)'`,
     );
-    expect(rows).toEqual([]);
+    // The one exception (0017, Phase 24 R2): a sealed bottle's nominal volume as a static integer label on
+    // the SKU, for the excise ML summary. Stock, bills and movements still carry whole bottles only.
+    expect(rows).toEqual([{ table_name: 'skus', column_name: 'volume_ml', data_type: 'integer' }]);
   });
 
   it('re-running migrations is a no-op', async () => {
