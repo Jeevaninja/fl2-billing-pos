@@ -17,6 +17,7 @@ import {
   ItemCategoryService,
   RevenueCenterService,
   KotService,
+  ReportService,
   NotFoundError,
   OrdersQueries,
   PeakSessionService,
@@ -118,6 +119,9 @@ function buildRoutes({ db, cashierId, printer = new PrinterService(), kotPrinter
   const itemCategories = new ItemCategoryService(db);
   const centers = new RevenueCenterService(db);
   const departments = new DepartmentService(db);
+  const reports = new ReportService(db);
+  /** `?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD` (business dates; the service validates them). */
+  const reportRange = (query: URLSearchParams) => ({ startDate: query.get('startDate') ?? '', endDate: query.get('endDate') ?? '' });
   const currentDayId = async () => {
     const dayId = await dayEnd.getCurrentDayId();
     if (!dayId) throw new NotFoundError('business day', 'current');
@@ -396,6 +400,13 @@ function buildRoutes({ db, cashierId, printer = new PrinterService(), kotPrinter
     route('POST', '/api/revenue-centers/purchases/:purchaseId/void', async ({ params }) =>
       created(await centers.voidPurchase(id(params.purchaseId, 'purchaseId'), cashierId)),
     ),
+
+    // ── Reports (Phase 23; read-only, by business date) ──
+    route('GET', '/api/reports/range-presets', async () => ok(await reports.getRangeAnchor())),
+    route('GET', '/api/reports/ledger', async ({ query }) => ok(await reports.getLedger(reportRange(query)))),
+    route('GET', '/api/reports/sales', async ({ query }) => ok(await reports.getSalesRegister(reportRange(query)))),
+    route('GET', '/api/reports/stock', async ({ query }) => ok(await reports.getStockRegister(reportRange(query)))),
+    route('GET', '/api/reports/payments', async ({ query }) => ok(await reports.getPayments(reportRange(query)))),
 
     // ── Item categories and flat items (Phase 20) ──
     route('GET', '/api/item-categories', async ({ query }) =>

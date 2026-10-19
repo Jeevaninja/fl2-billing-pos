@@ -50,6 +50,7 @@ interface DashboardProps {
   onOpenCenterSettings: () => void
   onOpenExpenseCategories: () => void
   onOpenItemCategories: () => void
+  onOpenReports: () => void
 }
 
 const CAPTAIN_COUNT_POLL_MS = 15_000
@@ -114,6 +115,7 @@ export default function Dashboard({
   onOpenCenterSettings,
   onOpenExpenseCategories,
   onOpenItemCategories,
+  onOpenReports,
 }: DashboardProps) {
   const [lastAction, setLastAction] = useState<LastAction | null>(null)
   const [status, setStatus] = useState<string | null>(null)
@@ -181,10 +183,14 @@ export default function Dashboard({
         onOpenItemCategories()
         return
       }
+      if (id === 'reports') {
+        onOpenReports()
+        return
+      }
       runStub(id)
       setLastAction({ id, at: new Date() })
     },
-    [onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd, onOpenExpenses, onOpenBankDeposits, onOpenPurchase, onOpenCatalog, onOpenOrders, onOpenRevenueCenters, onOpenCenterSettings, onOpenExpenseCategories, onOpenItemCategories],
+    [onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd, onOpenExpenses, onOpenBankDeposits, onOpenPurchase, onOpenCatalog, onOpenOrders, onOpenRevenueCenters, onOpenCenterSettings, onOpenExpenseCategories, onOpenItemCategories, onOpenReports],
   )
 
   useGlobalShortcuts(
@@ -370,7 +376,7 @@ function RailButton({ id, onSelect }: { id: PosActionId; onSelect: (id: PosActio
   )
 }
 
-/** Header gear: setup screens that don't need a grid tile (Inventory Catalog, Expense Categories). */
+/** Header gear: screens that don't need a grid tile (Reports, Inventory Catalog, the category and center setup). */
 function SettingsMenu({ onSelect }: { onSelect: (id: PosActionId) => void }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)

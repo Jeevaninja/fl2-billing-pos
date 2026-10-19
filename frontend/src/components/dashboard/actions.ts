@@ -60,17 +60,17 @@ export const ACTIONS: Record<PosActionId, PosAction> = {
   orders: { id: 'orders', label: 'Orders', hint: "Today's bills, receipts and reprints", icon: ClipboardList },
   'expense-categories': { id: 'expense-categories', label: 'Expense Categories', hint: 'Petty-cash categories and their order', icon: Tags },
   'day-end': { id: 'day-end', label: 'Day End', hint: 'Peak reconciliation and close', icon: CalendarCheck },
-  reports: { id: 'reports', label: 'Reports', hint: 'Sales, stock and F.Ac.2', icon: ChartColumn },
+  reports: { id: 'reports', label: 'Reports', hint: 'Ledger balances, sales & stock registers, payments', icon: ChartColumn },
 }
 
 /**
- * Dashboard tiles, in grid order (5 × 2 since Phase 21: one slot is left for HR / Payroll). Inventory
- * Catalog lives in the header Settings menu (Phase 17).
+ * Dashboard tiles, in grid order (5 × 2 since Phase 21: free slots are left for HR / Payroll). Inventory
+ * Catalog lives in the header Settings menu (Phase 17), and so do Reports (Phase 23).
  */
-export const MODULE_TILES: readonly PosActionId[] = ['billing', 'captain-orders', 'expense', 'bank-deposit', 'purchase', 'revenue-centers', 'orders', 'day-end', 'reports']
+export const MODULE_TILES: readonly PosActionId[] = ['billing', 'captain-orders', 'expense', 'bank-deposit', 'purchase', 'revenue-centers', 'orders', 'day-end']
 
-/** Header Settings menu entries: setup screens that don't need a grid tile. */
-export const SETTINGS_ACTIONS: readonly PosActionId[] = ['catalog', 'item-categories', 'center-settings', 'expense-categories']
+/** Header Settings menu entries: screens that don't need a grid tile (Reports first). */
+export const SETTINGS_ACTIONS: readonly PosActionId[] = ['reports', 'catalog', 'item-categories', 'center-settings', 'expense-categories']
 
 /** Rail contents before the operator has used anything this session. */
 export const DEFAULT_RECENT: readonly PosActionId[] = ['new-bill', 'member', 'pay', 'captain-orders', 'day-end']

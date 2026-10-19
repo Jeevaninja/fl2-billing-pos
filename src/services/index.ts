@@ -83,6 +83,24 @@ export type { KotFormat, KotPrinter, KotPrintResult, KotStation, KotTicket, Rece
 export { OrdersQueries, receiptFor } from './orders.queries.js';
 export type { OrderDetail, OrderPayment, OrderStatus, OrderSummary } from './orders.queries.js';
 export type { PeakBreakdown, PeakReconciliation, PeakStartBaseline } from './peak-session.service.js';
+export { checkRange, MAX_REPORT_DAYS, ReportService } from './report.service.js';
+export type {
+  LedgerCenterPurchases,
+  LedgerCenterSales,
+  LedgerExpense,
+  LedgerReport,
+  PaymentsDay,
+  PaymentsReport,
+  RangeAnchor,
+  ReportDay,
+  ReportHeader,
+  ReportRange,
+  SalesRegister,
+  SalesRegisterItem,
+  SalesRegisterRow,
+  StockRegister,
+  StockRegisterRow,
+} from './report.service.js';
 export { WaiterService } from './waiter.service.js';
 export type { ReceiptAllocation, WaiterBillsSettlement, WaiterReceipt, WaiterRepayment, WaiterSettlement } from './waiter.service.js';
 export { IdempotencyConflictError, InactiveError, NotFoundError, PosError, PosErrorCode, isPosError } from '../db/errors.js';

@@ -710,3 +710,122 @@ export interface OrderDetail {
   peakSession: { sessionNo: number; endedAt: string | null } | null
   reversal: { billNo: number; at: string; reason: string; refunds: Array<{ tender: Tender; amountPaise: Paise }> } | null
 }
+
+// ── Reports (Phase 23; read-only, by business date) ─────────────────────────
+
+export interface ReportRange {
+  /** Business dates, YYYY-MM-DD. */
+  startDate: string
+  endDate: string
+}
+
+export interface ReportDay {
+  id: string
+  businessDate: string
+  status: 'OPEN' | 'CLOSED'
+}
+
+export interface ReportHeader {
+  range: ReportRange
+  days: ReportDay[]
+  /** A day in the range is still open: its figures change until Day End. */
+  provisional: boolean
+}
+
+export interface RangeAnchor {
+  /** The open day, else the latest closed one, else today. */
+  currentBusinessDate: string
+  firstBusinessDate: string | null
+}
+
+export interface LedgerReport extends ReportHeader {
+  sales: {
+    byCenter: Array<{ code: DepartmentCode; name: string; salesPaise: Paise }>
+    /** Open day only: tenders not yet split by center (part-paid tabs). */
+    unallocatedPaise: Paise
+    totalPaise: Paise
+  }
+  purchases: {
+    liquorGrnPaise: Paise
+    byCenter: Array<{ code: DepartmentCode; name: string; grnPaise: Paise; suppliesPaise: Paise; suppliesDrawerPaise: Paise; totalPaise: Paise }>
+    totalPaise: Paise
+  }
+  expenses: {
+    byCategory: Array<{ categoryId: string; name: string; centerName: string | null; amountPaise: Paise; count: number }>
+    totalPaise: Paise
+  }
+  contra: { bankDepositsPaise: Paise }
+}
+
+export interface SalesRegisterItem {
+  name: string
+  sizeCode: SizeCode
+  /** Negative on a reversal. */
+  qty: number
+  lineTotalPaise: Paise
+}
+
+export interface SalesRegisterRow {
+  billId: string
+  businessDate: string
+  billNo: number
+  createdAt: string
+  settledAt: string | null
+  kind: 'SALE' | 'REVERSAL'
+  reverses: { billNo: number; businessDate: string } | null
+  voidedBy: { billNo: number; businessDate: string } | null
+  mode: BillingMode
+  status: 'SETTLED' | 'PEAK_UNSETTLED' | 'PEAK_RECONCILED'
+  cashPaise: Paise
+  upiPaise: Paise
+  creditPaise: Paise
+  waiterName: string | null
+  items: SalesRegisterItem[]
+  /** Negative on a reversal. */
+  totalPaise: Paise
+}
+
+export interface SalesRegister extends ReportHeader {
+  rows: SalesRegisterRow[]
+  totals: { billCount: number; reversalCount: number; salesPaise: Paise; reversalsPaise: Paise; netPaise: Paise }
+  openBillCount: number
+}
+
+export interface StockRegisterRow {
+  skuId: string
+  skuCode: string
+  name: string
+  sizeCode: SizeCode
+  categoryName: string
+  centerName: string
+  isActive: boolean
+  openingQty: number
+  inwardQty: number
+  salesQty: number
+  otherQty: number
+  closingQty: number
+}
+
+export interface StockRegister extends ReportHeader {
+  rows: StockRegisterRow[]
+}
+
+export interface PaymentsReport extends ReportHeader {
+  revenue: { cashPaise: Paise; upiPaise: Paise; waiterCreditPaise: Paise; totalSalesPaise: Paise }
+  split: {
+    normal: { cashPaise: Paise; upiPaise: Paise }
+    peak: { cashPaise: Paise; upiPaise: Paise; sessionCount: number }
+  }
+  waiterLedger: { creditGivenPaise: Paise; repaidCashPaise: Paise; repaidUpiPaise: Paise; outstandingChangePaise: Paise }
+  received: { cashPaise: Paise; upiPaise: Paise }
+  byDay: Array<{
+    businessDate: string
+    status: 'OPEN' | 'CLOSED'
+    cashPaise: Paise
+    upiPaise: Paise
+    waiterCreditPaise: Paise
+    totalSalesPaise: Paise
+    repaidCashPaise: Paise
+    repaidUpiPaise: Paise
+  }>
+}

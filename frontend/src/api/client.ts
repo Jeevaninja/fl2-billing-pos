@@ -27,6 +27,12 @@ import type {
   DepartmentPatch,
   DepartmentStation,
   KotStatus,
+  LedgerReport,
+  PaymentsReport,
+  RangeAnchor,
+  ReportRange,
+  SalesRegister,
+  StockRegister,
   NewItemPayload,
   MemberSummary,
   Paise,
@@ -74,6 +80,8 @@ const PAISE_STRING = /^-?\d+$/
 export function reviveJson(key: string, value: unknown): unknown {
   return key.endsWith('Paise') && typeof value === 'string' && PAISE_STRING.test(value) ? BigInt(value) : value
 }
+
+const rangeQuery = (range: ReportRange) => `?startDate=${encodeURIComponent(range.startDate)}&endDate=${encodeURIComponent(range.endDate)}`
 
 /** JSON.stringify replacer: bigint paise go out as decimal strings, never JS numbers. */
 export function encodeJson(value: unknown): string {
@@ -208,6 +216,12 @@ export const api = {
     call<ItemCategory>('PATCH', `/api/item-categories/${encodeURIComponent(categoryId)}`, patch),
   /** Every item (inactive included); the Catalog filters and groups client-side. */
   listItems: () => call<CatalogItem[]>('GET', '/api/catalog/items?includeInactive=true'),
+  /** Reports (Phase 23): the business date the range presets count from. */
+  reportAnchor: () => call<RangeAnchor>('GET', '/api/reports/range-presets'),
+  reportLedger: (range: ReportRange) => call<LedgerReport>('GET', `/api/reports/ledger${rangeQuery(range)}`),
+  reportSales: (range: ReportRange) => call<SalesRegister>('GET', `/api/reports/sales${rangeQuery(range)}`),
+  reportStock: (range: ReportRange) => call<StockRegister>('GET', `/api/reports/stock${rangeQuery(range)}`),
+  reportPayments: (range: ReportRange) => call<PaymentsReport>('GET', `/api/reports/payments${rangeQuery(range)}`),
   createItem: (payload: NewItemPayload) => call<CatalogItem>('POST', '/api/catalog/items', payload),
   updateItem: (skuId: string, patch: ItemPatchPayload) => call<CatalogItem>('PATCH', `/api/catalog/items/${encodeURIComponent(skuId)}`, patch),
 }

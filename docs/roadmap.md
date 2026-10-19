@@ -34,7 +34,7 @@ Architecture notes:
   `waiters` table today).
 - **Money:** salary advances are cash leaving the drawer. Like bank deposits (Phase 14), they need their own
   ledger and a term in `pos_day_expected_cash`, not an `OTHER` expense. Payroll and advances feed the P&L.
-- **No P&L report exists yet:** Reports is still to be built.
+- **Reports (Phase 23):** Settings → Reports gives date-ranged ledger balances, sales / stock registers and the payment split for manual Tally entry; it deliberately computes no net P&L, so payroll would add an expense group there.
 
 ## 3. Kitchen / Food module
 

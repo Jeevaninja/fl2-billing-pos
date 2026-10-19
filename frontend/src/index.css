@@ -23,3 +23,14 @@ body {
   @apply bg-zinc-950 text-zinc-100 antialiased;
   font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
 }
+
+/* Reports (Phase 23): print on white paper, whatever the screen theme. */
+@media print {
+  html,
+  body,
+  #root {
+    height: auto;
+    background: white;
+    color: black;
+  }
+}
