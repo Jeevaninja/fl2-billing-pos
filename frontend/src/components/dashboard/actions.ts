@@ -1,6 +1,7 @@
 import {
   Boxes,
   CalendarCheck,
+  ChefHat,
   ChartColumn,
   ClipboardList,
   LayoutList,
@@ -25,6 +26,7 @@ export type PosActionId =
   | 'expense'
   | 'bank-deposit'
   | 'purchase'
+  | 'kitchen'
   | 'catalog'
   | 'orders'
   | 'expense-categories'
@@ -49,6 +51,7 @@ export const ACTIONS: Record<PosActionId, PosAction> = {
   expense: { id: 'expense', label: 'Expense', hint: 'Petty cash and daily spends', icon: Wallet },
   'bank-deposit': { id: 'bank-deposit', label: 'Bank Deposit', hint: 'Cash drops for bank / RTGS', icon: Landmark },
   purchase: { id: 'purchase', label: 'Purchase', hint: 'Stock inwarding (GRN)', icon: PackagePlus },
+  kitchen: { id: 'kitchen', label: 'Kitchen Kiosk', hint: 'Kitchen P&L and raw-material purchases', icon: ChefHat },
   catalog: { id: 'catalog', label: 'Inventory Catalog', hint: 'Items by category, prices and stock', icon: Boxes },
   'item-categories': { id: 'item-categories', label: 'Item Categories', hint: 'FULL, HALF, QUARTER… and their order', icon: LayoutList },
   orders: { id: 'orders', label: 'Orders', hint: "Today's bills, receipts and reprints", icon: ClipboardList },
@@ -57,8 +60,11 @@ export const ACTIONS: Record<PosActionId, PosAction> = {
   reports: { id: 'reports', label: 'Reports', hint: 'Sales, stock and F.Ac.2', icon: ChartColumn },
 }
 
-/** Dashboard tiles, in grid order. Inventory Catalog lives in the header Settings menu (Phase 17). */
-export const MODULE_TILES: readonly PosActionId[] = ['billing', 'captain-orders', 'expense', 'bank-deposit', 'purchase', 'orders', 'day-end', 'reports']
+/**
+ * Dashboard tiles, in grid order (5 × 2 since Phase 21: one slot is left for HR / Payroll). Inventory
+ * Catalog lives in the header Settings menu (Phase 17).
+ */
+export const MODULE_TILES: readonly PosActionId[] = ['billing', 'captain-orders', 'expense', 'bank-deposit', 'purchase', 'kitchen', 'orders', 'day-end', 'reports']
 
 /** Header Settings menu entries: setup screens that don't need a grid tile. */
 export const SETTINGS_ACTIONS: readonly PosActionId[] = ['catalog', 'item-categories', 'expense-categories']

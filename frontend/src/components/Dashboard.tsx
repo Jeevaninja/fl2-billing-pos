@@ -19,6 +19,7 @@ const TILE_ACCENT: Record<PosActionId, string> = {
   expense: 'bg-rose-500 text-zinc-950',
   'bank-deposit': 'bg-indigo-400 text-zinc-950',
   purchase: 'bg-violet-400 text-zinc-950',
+  kitchen: 'bg-green-500 text-zinc-950',
   catalog: 'bg-teal-400 text-zinc-950',
   orders: 'bg-cyan-400 text-zinc-950',
   'expense-categories': 'bg-rose-400 text-zinc-950',
@@ -44,6 +45,7 @@ interface DashboardProps {
   onOpenPurchase: () => void
   onOpenCatalog: () => void
   onOpenOrders: () => void
+  onOpenKitchen: () => void
   onOpenExpenseCategories: () => void
   onOpenItemCategories: () => void
 }
@@ -106,6 +108,7 @@ export default function Dashboard({
   onOpenPurchase,
   onOpenCatalog,
   onOpenOrders,
+  onOpenKitchen,
   onOpenExpenseCategories,
   onOpenItemCategories,
 }: DashboardProps) {
@@ -159,6 +162,10 @@ export default function Dashboard({
         onOpenOrders()
         return
       }
+      if (id === 'kitchen') {
+        onOpenKitchen()
+        return
+      }
       if (id === 'expense-categories') {
         onOpenExpenseCategories()
         return
@@ -170,7 +177,7 @@ export default function Dashboard({
       runStub(id)
       setLastAction({ id, at: new Date() })
     },
-    [onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd, onOpenExpenses, onOpenBankDeposits, onOpenPurchase, onOpenCatalog, onOpenOrders, onOpenExpenseCategories, onOpenItemCategories],
+    [onUse, onOpenBilling, onOpenCaptainOrders, onOpenDayEnd, onOpenExpenses, onOpenBankDeposits, onOpenPurchase, onOpenCatalog, onOpenOrders, onOpenKitchen, onOpenExpenseCategories, onOpenItemCategories],
   )
 
   useGlobalShortcuts(
@@ -217,7 +224,7 @@ export default function Dashboard({
       )}
 
       <div className="flex min-h-0 flex-1">
-        <main className="grid flex-1 grid-cols-2 grid-rows-4 gap-4 p-5 lg:grid-cols-4 lg:grid-rows-2" aria-label="Modules">
+        <main className="grid flex-1 grid-cols-2 grid-rows-5 gap-4 p-5 lg:grid-cols-5 lg:grid-rows-2" aria-label="Modules">
           {MODULE_TILES.map((id) => (
             <ModuleTile
               key={id}

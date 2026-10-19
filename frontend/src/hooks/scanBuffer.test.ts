@@ -180,3 +180,30 @@ describe('scanKey quantity edit (Phase 12)', () => {
     expect(result.state.qtyEdit).toEqual({ text: '3', fresh: false })
   })
 })
+
+describe('scanKey type-to-search (Phase 21)', () => {
+  it('keeps single spaces between typed words, never a leading or doubled one', () => {
+    const { effects } = feed([' ', ...'chicken', ' ', ' ', ...'65', 'Enter'])
+    expect(effects).toEqual([{ type: 'commit', code: 'chicken 65', quantity: 1 }])
+  })
+
+  it('moves the search highlight with ↑ / ↓ while text is typed, and still commits on Enter', () => {
+    const { state, effects } = feed([...'3*', ...'chi', 'ArrowDown', 'ArrowDown', 'ArrowUp', 'Enter'])
+    expect(effects).toEqual([
+      { type: 'highlight', delta: 1 },
+      { type: 'highlight', delta: 1 },
+      { type: 'highlight', delta: -1 },
+      { type: 'commit', code: 'chi', quantity: 3 },
+    ])
+    expect(state.text).toBe('')
+  })
+
+  it('keeps a paused search while its results are on screen, but still drops stray keys that found nothing', () => {
+    const later = 1_001 + IDLE_RESET_MS + 5
+    const typed = scanKey(scanKey(EMPTY_SCAN, { key: 'c', now: 1_000 }).state, { key: 'h', now: 1_001 }).state
+    const open = scanKey(typed, { key: 'i', now: later }, { qtyTarget: null, searchOpen: true })
+    expect(open.state.text).toBe('chi')
+    const closed = scanKey(typed, { key: 'i', now: later }, { qtyTarget: null, searchOpen: false })
+    expect(closed.state.text).toBe('i')
+  })
+})

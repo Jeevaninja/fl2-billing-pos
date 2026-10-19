@@ -279,6 +279,8 @@ export interface CashBreakdown {
   tenderAdjustmentPaise: Paise
   /** Cash taken out of the drawer to be banked (subtracted). Not an expense, not revenue. */
   bankDepositsPaise: Paise
+  /** Kitchen purchases paid from the drawer (Phase 21; subtracted). */
+  kitchenPurchasesPaise: Paise
   expectedCashPaise: Paise
   upiTotalPaise: Paise
 }
@@ -368,6 +370,7 @@ export interface PeakStartBaseline {
   /** Σ Day End tally adjustments' cash deltas. */
   tenderAdjustmentPaise: Paise
   bankDepositsPaise: Paise
+  kitchenPurchasesPaise: Paise
   expectedCashPaise: Paise
   billUpiPaise: Paise
   waiterUpiPaise: Paise
@@ -440,6 +443,57 @@ export interface CashExpense {
 
 export interface ExpenseEntry extends CashExpense {
   voidedAt: string | null
+}
+
+// ── Kitchen Kiosk (Phase 21) ────────────────────────────────────────────────
+
+export type KitchenPaidFrom = 'DRAWER' | 'OUTSIDE'
+
+export interface KitchenPurchaseLine {
+  lineNo: number
+  description: string
+  /** Free text ("5 kg"): a label, never arithmetic. */
+  quantity: string | null
+  amountPaise: Paise
+}
+
+export interface KitchenPurchase {
+  id: string
+  businessDayId: string
+  vendorName: string | null
+  paidFrom: KitchenPaidFrom
+  /** Negative on a void row. */
+  amountPaise: Paise
+  note: string | null
+  reversesPurchaseId: string | null
+  createdAt: string
+  lines: KitchenPurchaseLine[]
+}
+
+export interface KitchenPurchaseEntry extends KitchenPurchase {
+  voidedAt: string | null
+}
+
+export interface KitchenPurchasePayload {
+  vendorName: string | null
+  paidFrom: KitchenPaidFrom
+  note: string | null
+  lines: Array<{ description: string; quantity: string | null; amount: Paise }>
+}
+
+export interface KitchenSummary {
+  day: { id: string; businessDate: string; status: 'OPEN' | 'CLOSED' }
+  /** KITCHEN lines on counted bills (= Day End's Kitchen figure). */
+  salesPaise: Paise
+  /** KITCHEN lines on bills not counted yet (open tabs, a running peak). */
+  openTabsPaise: Paise
+  expensesPaise: Paise
+  purchasesPaise: Paise
+  purchasesDrawerPaise: Paise
+  grossPaise: Paise
+  itemsSold: Array<{ skuId: string; displayName: string; quantity: number; amountPaise: Paise }>
+  expenses: ExpenseEntry[]
+  purchases: KitchenPurchaseEntry[]
 }
 
 // ── Bank deposits (cash drops) ──────────────────────────────────────────────

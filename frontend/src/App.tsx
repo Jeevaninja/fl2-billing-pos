@@ -7,6 +7,7 @@ import Dashboard from './components/Dashboard'
 import DayEndScreen from './components/DayEndScreen'
 import ExpenseCategoriesScreen from './components/ExpenseCategoriesScreen'
 import ItemCategoriesScreen from './components/ItemCategoriesScreen'
+import KitchenScreen from './components/KitchenScreen'
 import ExpenseScreen from './components/ExpenseScreen'
 import OrdersScreen from './components/OrdersScreen'
 import PurchaseScreen from './components/PurchaseScreen'
@@ -15,7 +16,7 @@ import type { LedgerFocus } from './captain/waiterLedgerReducer'
 import type { CountDraft } from './dayend/dayEndReducer'
 import type { JumpTarget } from './orders/ordersView'
 
-type View = 'dashboard' | 'billing' | 'captain-orders' | 'day-end' | 'expenses' | 'bank-deposits' | 'purchase' | 'catalog' | 'orders' | 'expense-categories' | 'item-categories'
+type View = 'dashboard' | 'billing' | 'captain-orders' | 'day-end' | 'expenses' | 'bank-deposits' | 'purchase' | 'catalog' | 'orders' | 'expense-categories' | 'item-categories' | 'kitchen'
 
 export default function App() {
   const [view, setView] = useState<View>('dashboard')
@@ -39,6 +40,7 @@ export default function App() {
   const openOrders = useCallback(() => setView('orders'), [])
   const openExpenseCategories = useCallback(() => setView('expense-categories'), [])
   const openItemCategories = useCallback(() => setView('item-categories'), [])
+  const openKitchen = useCallback(() => setView('kitchen'), [])
   const jumpFromOrders = useCallback((target: Exclude<JumpTarget, { kind: 'none' }>) => {
     if (target.kind === 'billing') {
       setBillingFocus(target.billId)
@@ -90,6 +92,7 @@ export default function App() {
   if (view === 'catalog') return <CatalogScreen onExit={exitToDashboard} />
   if (view === 'expense-categories') return <ExpenseCategoriesScreen onExit={exitToDashboard} />
   if (view === 'item-categories') return <ItemCategoriesScreen onExit={exitToDashboard} />
+  if (view === 'kitchen') return <KitchenScreen onExit={exitToDashboard} />
   if (view === 'day-end') {
     return (
       <DayEndScreen
@@ -117,6 +120,7 @@ export default function App() {
       onOpenOrders={openOrders}
       onOpenExpenseCategories={openExpenseCategories}
       onOpenItemCategories={openItemCategories}
+      onOpenKitchen={openKitchen}
     />
   )
 }

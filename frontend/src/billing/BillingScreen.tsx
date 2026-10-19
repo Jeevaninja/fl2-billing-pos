@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
 import { ArrowLeft, RefreshCw, WifiOff } from 'lucide-react'
 import { ApiError, api } from '../api/client'
-import type { BillDetail, CounterContext, KotStatus, MemberSummary, PeakSessionView, WaiterSummary } from '../api/types'
+import type { BillDetail, CounterContext, KotStatus, MemberSummary, PeakSessionView, SkuLookup, WaiterSummary } from '../api/types'
 import { Kbd, LiveClock } from '../components/ui'
 import { keepFocus } from '../lib/ui'
 import { useGlobalShortcuts } from '../hooks/useGlobalShortcuts'
@@ -28,6 +28,7 @@ import {
   type Receipt,
 } from './billingReducer'
 import { CounterError, counterErrorMessage } from './errors'
+import { EMPTY_SEARCH, highlightedFor, SEARCH_DEBOUNCE_MS, SEARCH_LIMIT, searchQuery, searchView, skuSearchReducer } from './skuSearch'
 import { Modal } from './Modal'
 import { describePlan, type PayPlan } from './payment'
 import { PaymentDialog } from './PaymentDialog'
@@ -63,6 +64,13 @@ export default function BillingScreen({ onExit, focusBillId = null }: { onExit: 
   const contextRef = useRef<CounterContext | null>(null)
   const queue = useRef<Promise<void>>(Promise.resolve())
   const scanSeq = useRef(0)
+  // Phase 21 type-to-search: results for the typed text, read by Enter through a ref.
+  const [searchState, dispatchSearch] = useReducer(skuSearchReducer, EMPTY_SEARCH)
+  const searchRef = useRef(searchState)
+  useEffect(() => {
+    searchRef.current = searchState
+  })
+  const searchOpenFor = useCallback((text: string) => searchView(searchRef.current, text).open, [])
   const loadedOnce = useRef(false)
   /** Orders → "Jump to bill": focused once, on the first load that resumes the held bills. */
   const pendingFocus = useRef(focusBillId)
@@ -160,8 +168,23 @@ export default function BillingScreen({ onExit, focusBillId = null }: { onExit: 
   // Each one captures its tab when the key is pressed, so its writes land on that tab's bill even if
   // the cashier switches tabs before the queue gets to them.
 
+  /**
+   * Resolves what Enter means (Phase 21, D1): an exact barcode / SKU code first (scanner speed), else
+   * the highlighted search result for this text (the first unless ↑/↓ moved it), else not found.
+   */
+  const resolveSku = useCallback(async (code: string): Promise<SkuLookup> => {
+    try {
+      return await api.lookupSku(code)
+    } catch (err) {
+      if (!(err instanceof ApiError && err.code === 'NOT_FOUND')) throw err
+    }
+    const hit = highlightedFor(searchRef.current, code) ?? (searchQuery(code) ? (await api.searchActiveSkus(code, 1))[0] : undefined)
+    if (!hit) throw new CounterError(`Not found: ${code}`)
+    return hit
+  }, [])
+
   const scan = useCallback(
-    (code: string, quantity: number) => {
+    (code: string, quantity: number, picked?: SkuLookup) => {
       const id = ++scanSeq.current
       const tabId = currentTabId()
       apply({ type: 'scanQueued', scan: { id, tabId, code, quantity } })
@@ -170,9 +193,7 @@ export default function BillingScreen({ onExit, focusBillId = null }: { onExit: 
           const context = contextRef.current
           if (!context?.businessDay) throw new CounterError('No open business day — open the day in Day End first')
 
-          const sku = await api.lookupSku(code).catch((err: unknown) => {
-            throw err instanceof ApiError && err.code === 'NOT_FOUND' ? new CounterError(`Not found: ${code}`) : err
-          })
+          const sku = picked ?? (await resolveSku(code))
           if (!sku.isActive) throw new CounterError(`${sku.displayName} is not on sale (inactive)`)
 
           const session = context.peakSession
@@ -214,7 +235,7 @@ export default function BillingScreen({ onExit, focusBillId = null }: { onExit: 
         }
       }, tabId)
     },
-    [apply, run, billOf, flash, refreshContext, setBill],
+    [apply, run, billOf, flash, refreshContext, setBill, resolveSku],
   )
 
   const adjustSelected = useCallback(
@@ -510,6 +531,10 @@ export default function BillingScreen({ onExit, focusBillId = null }: { onExit: 
         setQuantity(effect.quantity)
         return
       }
+      if (effect.type === 'highlight') {
+        dispatchSearch({ type: 'move', delta: effect.delta })
+        return
+      }
       if (!canEditBill) return
       if (effect.command === 'up') apply({ type: 'move', delta: -1 })
       else if (effect.command === 'down') apply({ type: 'move', delta: 1 })
@@ -520,7 +545,30 @@ export default function BillingScreen({ onExit, focusBillId = null }: { onExit: 
   const selectedRow = canEditBill ? rows.find((r) => r.key === tab.selectedKey) : undefined
   // Keyed by tab too, so a quantity edit never carries over to the same SKU on another bill.
   const qtyTarget: QtyTarget | null = selectedRow ? { key: `${tab.id}:${selectedRow.key}`, quantity: selectedRow.quantity } : null
-  const scanState = useScanBuffer(keysLive, onScanEffect, qtyTarget)
+  const [scanState, clearScan] = useScanBuffer(keysLive, onScanEffect, qtyTarget, searchOpenFor)
+  const search = searchView(searchState, scanState.text)
+
+  // Type-to-search: fetch the matches for the typed text (debounced); a stale answer is ignored.
+  const query = keysLive ? search.query : null
+  useEffect(() => {
+    if (query === null) return
+    const timer = setTimeout(() => {
+      api
+        .searchActiveSkus(query, SEARCH_LIMIT)
+        .then((results) => dispatchSearch({ type: 'results', query, results }))
+        .catch(() => undefined) // the context poll reports an unreachable server
+    }, SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [query])
+
+  /** A tapped search result: add it at once, with any "N*" prefix. */
+  const pickResult = useCallback(
+    (sku: SkuLookup) => {
+      scan(sku.skuCode, scanState.quantity ?? 1, sku)
+      clearScan()
+    },
+    [scan, scanState.quantity, clearScan],
+  )
 
   // The scan buffer listens in the capture phase, so a non-empty buffer consumes Esc before this.
   useEffect(() => {
@@ -625,7 +673,7 @@ export default function BillingScreen({ onExit, focusBillId = null }: { onExit: 
                 onNew={openTab}
               />
             )}
-            <ScanBar scan={scanState} flash={state.flash} enabled={keysLive} qtyLabel={selectedRow?.displayName} />
+            <ScanBar scan={scanState} flash={state.flash} enabled={keysLive} qtyLabel={selectedRow?.displayName} search={search} onPick={pickResult} />
             {mode === 'PEAK' ? (
               <PeakTicker ticker={state.ticker} pending={pendingHere} />
             ) : (

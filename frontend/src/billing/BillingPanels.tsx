@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react'
 import { ChefHat, CheckCircle2, CircleAlert, CreditCard, ScanBarcode, UserRound, UsersRound } from 'lucide-react'
-import type { BillDetail, MemberSummary, PeakSessionView, SizeCode, WaiterSummary } from '../api/types'
+import type { BillDetail, MemberSummary, PeakSessionView, SizeCode, SkuLookup, WaiterSummary } from '../api/types'
 import { Kbd } from '../components/ui'
-import { FOCUS_RING, keepFocus } from '../lib/ui'
+import { DEPARTMENT_CHIP, DEPARTMENT_NAME, FOCUS_RING, keepFocus } from '../lib/ui'
+import type { SearchView } from './skuSearch'
 import type { ScanState } from '../hooks/scanBuffer'
 import { formatPaise } from '../lib/money'
 import type { Flash, ItemRow, PeakEntry, PendingScan, Receipt } from './billingReducer'
@@ -17,12 +18,27 @@ export function SizeChip({ size }: { size: SizeCode }) {
 
 // ── Scan bar ─────────────────────────────────────────────────────────────────
 
-export function ScanBar({ scan, flash, enabled, qtyLabel }: { scan: ScanState; flash: Flash | null; enabled: boolean; qtyLabel?: string | undefined }) {
+export function ScanBar({
+  scan,
+  flash,
+  enabled,
+  qtyLabel,
+  search,
+  onPick,
+}: {
+  scan: ScanState
+  flash: Flash | null
+  enabled: boolean
+  qtyLabel?: string | undefined
+  /** Phase 21 type-to-search results for the buffer; the list shows under it while open. */
+  search?: SearchView | undefined
+  onPick?: ((sku: SkuLookup) => void) | undefined
+}) {
   return (
-    <div className="flex items-center gap-4 border-b-2 border-zinc-800 bg-zinc-900 px-4 py-3">
+    <div className="relative z-20 flex items-center gap-4 border-b-2 border-zinc-800 bg-zinc-900 px-4 py-3">
       <ScanBarcode className="size-7 shrink-0 text-amber-400" aria-hidden />
       <div
-        className="flex h-12 min-w-0 flex-1 items-center gap-2 rounded-md border-2 border-zinc-600 bg-zinc-950 px-3 font-mono text-2xl"
+        className="relative flex h-12 min-w-0 flex-1 items-center gap-2 rounded-md border-2 border-zinc-600 bg-zinc-950 px-3 font-mono text-2xl"
         aria-label="Scan buffer"
         aria-live="off"
       >
@@ -33,17 +49,52 @@ export function ScanBar({ scan, flash, enabled, qtyLabel }: { scan: ScanState; f
           </>
         )}
         {scan.quantity !== null && <span className="rounded bg-amber-400 px-2 text-lg font-black text-zinc-950">{scan.quantity} ×</span>}
-        <span className="truncate">{scan.text}</span>
+        <span className="truncate whitespace-pre">{scan.text}</span>
         {scan.qtyEdit ? null : enabled ? (
           <span className="h-7 w-0.5 animate-pulse bg-amber-400" aria-hidden />
         ) : (
           <span className="text-base text-zinc-500">paused</span>
         )}
         {scan.text === '' && scan.quantity === null && scan.qtyEdit === null && enabled && (
-          <span className="truncate text-base whitespace-nowrap text-zinc-500">Scan, or type a SKU code + Enter · 3* = qty 3</span>
+          <span className="truncate text-base whitespace-nowrap text-zinc-500">Scan, or type a name / SKU code · ↑↓ Enter · 3* = qty 3</span>
         )}
+        {search?.open && enabled && <SearchResults view={search} onPick={onPick} />}
       </div>
       <FlashLine flash={flash} />
+    </div>
+  )
+}
+
+/** The type-to-search list under the scan buffer: ↑/↓ move the highlight, Enter or a tap adds it. */
+function SearchResults({ view, onPick }: { view: SearchView; onPick?: ((sku: SkuLookup) => void) | undefined }) {
+  return (
+    <div className="absolute top-full right-0 left-0 mt-1 overflow-hidden rounded-md border-2 border-amber-400/70 bg-zinc-950 font-sans shadow-2xl" role="listbox" aria-label="Search results">
+      {view.results.map((sku, i) => {
+        const on = i === view.highlighted
+        return (
+          <button
+            key={sku.id}
+            type="button"
+            role="option"
+            aria-selected={on}
+            {...keepFocus}
+            onClick={() => onPick?.(sku)}
+            className={`flex min-h-12 w-full items-center gap-3 border-b border-zinc-800 px-3 text-left text-base ${on ? 'bg-amber-400/20' : 'hover:bg-zinc-900'}`}
+          >
+            <span className="min-w-0 flex-1 truncate font-semibold">{sku.displayName}</span>
+            <SizeChip size={sku.sizeCode} />
+            {sku.department !== 'LIQUOR' && (
+              <span className={`rounded border px-1.5 py-0.5 text-[11px] font-black uppercase ${DEPARTMENT_CHIP[sku.department]}`}>{DEPARTMENT_NAME[sku.department]}</span>
+            )}
+            <span className="w-20 shrink-0 text-right font-mono text-xs text-zinc-400">{sku.tracksStock ? `${sku.onHandQty} left` : 'no stock'}</span>
+            <span className="w-28 shrink-0 text-right font-mono font-bold tabular-nums">{formatPaise(sku.pricePaise)}</span>
+          </button>
+        )
+      })}
+      {view.results.length === 0 && (
+        <p className="px-3 py-3 text-sm text-zinc-400">{view.loading ? 'Searching…' : 'No item matches — Enter still tries it as an exact code'}</p>
+      )}
+      {view.results.length > 0 && <p className="px-3 py-1.5 text-xs text-zinc-500">↑ ↓ choose · Enter adds the highlighted item · Esc clears</p>}
     </div>
   )
 }

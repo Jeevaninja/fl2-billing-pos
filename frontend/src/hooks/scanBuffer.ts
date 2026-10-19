@@ -7,6 +7,11 @@
  *   Backspace / Esc   → edit / clear
  *   ↑ ↓ + − Delete    → row commands, only while the buffer is empty ("-" is part of SKU codes)
  *
+ * Type-to-search (Phase 21): once the buffer has text, a space is kept ("chicken 65") and ↑ / ↓ move
+ * the search list's highlight. While the screen shows that list (`searchOpen`) the idle reset is off,
+ * so a cashier can pause; Enter commits (the screen adds an exact match, else the highlighted result)
+ * and Esc clears. A scanner never pauses, and stray keys that match nothing still clear after 2 s.
+ *
  * Quantity edit (normal billing): Enter on an empty buffer, with a selected row, opens the row's
  * quantity for typing — no <input> takes focus, so a scanner can never type into a field.
  *
@@ -36,6 +41,8 @@ export const EMPTY_SCAN: ScanState = { text: '', quantity: null, lastAt: 0, qtyE
 export interface ScanContext {
   /** The selected row's current quantity when it can be edited; null disables quantity edit. */
   qtyTarget: number | null
+  /** The screen is showing search results for the buffer: no idle reset. */
+  searchOpen?: boolean
 }
 
 const NO_QTY: ScanContext = { qtyTarget: null }
@@ -54,6 +61,8 @@ export type ScanEffect =
   | { type: 'commit'; code: string; quantity: number }
   | { type: 'command'; command: RowCommand }
   | { type: 'setQty'; quantity: number }
+  /** ↑ / ↓ with text in the buffer: move the search list's highlight. */
+  | { type: 'highlight'; delta: 1 | -1 }
 
 export interface ScanResult {
   state: ScanState
@@ -79,12 +88,15 @@ export function scanKey(prev: ScanState, input: ScanInput, ctx: ScanContext = NO
     prev = { ...prev, qtyEdit: null } // the row went away: drop the edit, handle the key normally
   }
 
-  const stale = prev.lastAt !== 0 && now - prev.lastAt > IDLE_RESET_MS
+  const stale = prev.lastAt !== 0 && now - prev.lastAt > IDLE_RESET_MS && !ctx.searchOpen
   const state = stale ? EMPTY_SCAN : prev
   const empty = state.text === '' && state.quantity === null
 
   const command = ROW_KEYS[key]
   if (command && empty) return { state, handled: true, effect: { type: 'command', command } }
+  if ((key === 'ArrowUp' || key === 'ArrowDown') && state.text !== '') {
+    return { state: { ...state, lastAt: now }, handled: true, effect: { type: 'highlight', delta: key === 'ArrowUp' ? -1 : 1 } }
+  }
 
   switch (key) {
     case 'Enter': {
@@ -108,7 +120,13 @@ export function scanKey(prev: ScanState, input: ScanInput, ctx: ScanContext = NO
     }
   }
 
-  if (key.length !== 1 || key === ' ') return { state: prev, handled: false }
+  if (key === ' ') {
+    // A space only joins words of a typed name; a leading or repeated one is dropped.
+    if (state.text === '') return { state: prev, handled: false }
+    if (state.text.endsWith(' ') || state.text.length >= MAX_LENGTH) return { state, handled: true }
+    return { state: { ...state, text: state.text + ' ', lastAt: now }, handled: true }
+  }
+  if (key.length !== 1) return { state: prev, handled: false }
   if (state.text.length >= MAX_LENGTH) return { state, handled: true }
   return { state: { ...state, text: state.text + key, lastAt: now }, handled: true }
 }

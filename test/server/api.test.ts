@@ -478,6 +478,32 @@ describe('local HTTP API', () => {
     expect((await call('GET', '/api/skus/lookup?code=8901848')).body).toMatchObject({ id: item.body.id, itemCategory: { name: 'QUARTER' } });
   });
 
+  it('Phase 21: kitchen purchases, the kitchen summary and active-only search', async () => {
+    const { fx, call, db } = await start();
+    const bought = await call('POST', '/api/kitchen/purchases', {
+      vendorName: 'Raju',
+      paidFrom: 'DRAWER',
+      lines: [
+        { description: 'Chicken', quantity: '5 kg', amount: '120000' },
+        { description: 'Oil', amount: '60000' },
+      ],
+    });
+    expect(bought).toMatchObject({ status: 201, body: { amountPaise: '180000', paidFrom: 'DRAWER', lines: [{ quantity: '5 kg' }, { quantity: null }] } });
+    expect(await call('POST', '/api/kitchen/purchases', { paidFrom: 'CARD', lines: [] })).toMatchObject({ status: 400 });
+    expect(await call('POST', '/api/kitchen/purchases', { paidFrom: 'OUTSIDE', lines: [{ description: 'x', amount: '1.5' }] })).toMatchObject({ status: 400 });
+    expect((await call('GET', '/api/kitchen/purchases')).body).toHaveLength(1);
+    const summary = await call('GET', '/api/kitchen/summary');
+    expect(summary).toMatchObject({ status: 200, body: { day: { id: fx.dayId }, purchasesPaise: '180000', purchasesDrawerPaise: '180000', grossPaise: '-180000' } });
+    expect((await call('GET', '/api/day-end')).body.breakdown).toMatchObject({ kitchenPurchasesPaise: '180000' });
+    expect(await call('POST', `/api/kitchen/purchases/${bought.body.id}/void`, {})).toMatchObject({ status: 201, body: { amountPaise: '-180000' } });
+
+    await db.query(`UPDATE skus SET is_active = false WHERE id = $1`, [fx.sku.quarter]);
+    const all = (await call('GET', '/api/skus?q=house%20rum&limit=8')).body.map((s: { skuCode: string }) => s.skuCode);
+    const active = (await call('GET', '/api/skus?q=rum%20house&limit=8&active=1')).body.map((s: { skuCode: string }) => s.skuCode);
+    expect(all).toEqual(['HRUM-F', 'HRUM-H', 'HRUM-Q']);
+    expect(active).toEqual(['HRUM-F', 'HRUM-H']);
+  });
+
   it('searches members and returns 404 for unknown SKUs and bills', async () => {
     const { db, call } = await start();
     await db.query(`INSERT INTO members (membership_no, display_name) VALUES ('M-1', 'Asha'), ('M-2', 'Ravi')`);

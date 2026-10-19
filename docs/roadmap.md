@@ -1,8 +1,8 @@
 # FL2 POS — Upcoming Roadmap (logged 2026-10-18)
 
 These phases were logged alongside Phase 17 so that today's architecture leaves room for them. Item 1 is built
-(Phase 18). Item 3's department architecture landed in Phase 19 (unified billing, split ledger); the Kitchen module
-itself and item 2 are **not** implemented yet. Each will get its own schema and component plan, approved before any code is written
+(Phase 18). Item 3's department architecture landed in Phase 19 (unified billing, split ledger), and the Kitchen Kiosk
+(Kitchen P&L, kitchen purchases) in Phase 21; kitchen ingredient stock and item 2 are **not** implemented yet. Each will get its own schema and component plan, approved before any code is written
 (CLAUDE.md protocol).
 
 ## 1. Settings expansion — custom expense categories ✅ Done in Phase 18
@@ -46,6 +46,11 @@ departments on products (snapshotted on every bill line) and on expense categori
 without stock tracking; KOTs route BAR / KITCHEN through a KOT ledger (F6 at the counter); Day End shows sales by
 department while the drawer and Expected cash stay unified. Still to build: the Kitchen Kiosk (food inventory with its
 own units, kitchen purchases), and a P&L report per department.
+
+**Phase 21 (built, `0015_kitchen_purchases`, plan `docs/ui/phase21-kitchen-kiosk-plan.md`):** a Kitchen Kiosk tile with
+the daily Kitchen P&L (sales − Kitchen expenses − kitchen purchases; Shared overheads excluded) and a kitchen purchase
+ledger (lines with free-text quantities, paid from the drawer or outside; drawer purchases lower expected cash). Still
+to build: ingredient stock with its own units / recipes, a date-range P&L (with Reports).
 
 Architecture notes:
 - **One bill, two P&Ls:** a bill can then carry both liquor and food lines. Liquor and food revenue, stock and

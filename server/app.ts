@@ -14,6 +14,7 @@ import {
   DEPARTMENT_CODES,
   ExpenseCategoryService,
   ItemCategoryService,
+  KitchenService,
   KotService,
   NotFoundError,
   OrdersQueries,
@@ -112,6 +113,12 @@ function buildRoutes({ db, cashierId, printer = new PrinterService(), kotPrinter
   const orders = new OrdersQueries(db);
   const expenseCategories = new ExpenseCategoryService(db);
   const itemCategories = new ItemCategoryService(db);
+  const kitchen = new KitchenService(db);
+  const currentDayId = async () => {
+    const dayId = await dayEnd.getCurrentDayId();
+    if (!dayId) throw new NotFoundError('business day', 'current');
+    return dayId;
+  };
   const kot = new KotService(db, kotPrinter);
   /** Sends a bill's pending Kitchen lines after the sale committed (the counter is the bar). */
   const sendKitchen = (billId: string, includeReversals = false) =>
@@ -130,7 +137,7 @@ function buildRoutes({ db, cashierId, printer = new PrinterService(), kotPrinter
     route('GET', '/api/skus', async ({ query }) => {
       const limit = query.has('limit') ? int(Number(query.get('limit')), 'limit') : undefined;
       if (limit !== undefined && (limit < 1 || limit > 50)) throw new BadRequestError('limit must be 1–50');
-      return ok(await queries.searchSkus(query.get('q') ?? '', limit));
+      return ok(await queries.searchSkus(query.get('q') ?? '', limit, { activeOnly: query.get('active') === '1' }));
     }),
     route('GET', '/api/members', async ({ query }) => {
       const limit = query.has('limit') ? int(Number(query.get('limit')), 'limit') : undefined;
@@ -328,6 +335,34 @@ function buildRoutes({ db, cashierId, printer = new PrinterService(), kotPrinter
 
     // ── Inventory catalog ──
     route('GET', '/api/departments', async () => ok(await catalog.listDepartments())),
+
+    // ── Kitchen Kiosk (Phase 21) ──
+    route('GET', '/api/kitchen/summary', async () => ok(await kitchen.getKitchenSummary(await currentDayId()))),
+    route('GET', '/api/kitchen/purchases', async () => ok(await kitchen.listPurchases(await currentDayId()))),
+    route('POST', '/api/kitchen/purchases', async ({ body }) => {
+      if (!Array.isArray(body.lines)) throw new BadRequestError('lines must be an array');
+      return created(
+        await kitchen.recordPurchase(
+          {
+            vendorName: optNullableStr(body.vendorName, 'vendorName') ?? null,
+            paidFrom: oneOf(body.paidFrom, 'paidFrom', ['DRAWER', 'OUTSIDE'] as const),
+            note: optNullableStr(body.note, 'note') ?? null,
+            lines: body.lines.map((l: unknown, i) => {
+              const line = (l ?? {}) as Body;
+              return {
+                description: str(line.description, `lines[${i}].description`),
+                quantity: optNullableStr(line.quantity, `lines[${i}].quantity`) ?? null,
+                amountPaise: paise(line.amount, `lines[${i}].amount`),
+              };
+            }),
+          },
+          cashierId,
+        ),
+      );
+    }),
+    route('POST', '/api/kitchen/purchases/:purchaseId/void', async ({ params }) =>
+      created(await kitchen.voidPurchase(id(params.purchaseId, 'purchaseId'), cashierId)),
+    ),
 
     // ── Item categories and flat items (Phase 20) ──
     route('GET', '/api/item-categories', async ({ query }) =>

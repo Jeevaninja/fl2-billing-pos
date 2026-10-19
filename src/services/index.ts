@@ -16,6 +16,16 @@ export type { CatalogFilter, CatalogItem, CatalogProduct, CatalogSku, Department
 export { CaptainService, MAX_ORDER_LINES, orderFingerprint } from './captain.service.js';
 export type { OrderLine, OrderRequest, PlacedOrder, WaiterProfile } from './captain.service.js';
 export { KotService } from './kot.service.js';
+export { KitchenService, MAX_PURCHASE_LINES, MAX_PURCHASE_PAISE } from './kitchen.service.js';
+export type {
+  KitchenItemSold,
+  KitchenPaidFrom,
+  KitchenPurchase,
+  KitchenPurchaseEntry,
+  KitchenPurchaseInput,
+  KitchenPurchaseLine,
+  KitchenSummary,
+} from './kitchen.service.js';
 export type { KotSender, KotSendOptions, KotStatus } from './kot.service.js';
 export { CounterQueries } from './counter-queries.js';
 export type {

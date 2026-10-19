@@ -1,8 +1,8 @@
 # FL2 POS — Backend State Reference
 
-Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`), Phase 10 master catalog and case-based inwarding (`0009_catalog_case_size`, `CatalogService`; plan `docs/ui/phase10-catalog-case-grn-plan.md`), Phase 11 peak start baseline and Day End sales breakdown (no migration; plan `docs/ui/phase11-peak-day-end-visibility-plan.md`), Phase 12 server-side peak undo (no migration; plan `docs/ui/phase12-billing-speed-plan.md`), Phase 13 Day End tally adjustments and running peak analytics (`0010_tender_adjustments`; plan `docs/ui/phase13-peak-close-tally-plan.md`), Phase 14 bank deposits / cash drops (`0011_bank_deposits`; plan `docs/ui/phase14-bank-deposits-plan.md`), Phase 15 held bills in `/api/context` and per-waiter day stats (no migration; plan `docs/ui/phase15-billing-tabs-waiter-sidebar-plan.md`), Phase 16 waiter ledger, multi-bill and lump-sum waiter settlement and the Day End waiter-balance blocker (no migration; plan `docs/ui/phase16-waiter-ledger-plan.md`), Phase 17 Orders (bill-wise tracking) and DUPLICATE receipt reprints (no migration; plan `docs/ui/phase17-orders-plan.md`), Phase 18 custom expense categories (`0012_expense_categories`; plan `docs/ui/phase18-expense-categories-plan.md`), Phase 19 departments — unified billing, split ledger (`0013_departments`; plan `docs/ui/phase19-departments-plan.md`), and Phase 20 custom item categories and the flat catalog (`0014_item_categories`; plan `docs/ui/phase20-item-categories-plan.md`). Upcoming phases, not built: `docs/roadmap.md`. Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
+Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local HTTP API, Phase 5 Captain API and KOT printing (commit `991b3a8`), Phase 5b Captain idempotency, bill-on-bill and the Wi-Fi Captain server, Phase 6 `listCaptainOrders`, Phase 7 Day End (`0005_day_end`, `DayEndService`), and Phase 8 expense categories, list and void (`0006_expense_category`) plus the peak expected drawer total (`0007_peak_drawer_cash`), Phase 9 stock receipts / GRN (`0008_stock_receipts`, `PurchaseService`; plan `docs/ui/phase9-purchase-grn-plan.md`), Phase 10 master catalog and case-based inwarding (`0009_catalog_case_size`, `CatalogService`; plan `docs/ui/phase10-catalog-case-grn-plan.md`), Phase 11 peak start baseline and Day End sales breakdown (no migration; plan `docs/ui/phase11-peak-day-end-visibility-plan.md`), Phase 12 server-side peak undo (no migration; plan `docs/ui/phase12-billing-speed-plan.md`), Phase 13 Day End tally adjustments and running peak analytics (`0010_tender_adjustments`; plan `docs/ui/phase13-peak-close-tally-plan.md`), Phase 14 bank deposits / cash drops (`0011_bank_deposits`; plan `docs/ui/phase14-bank-deposits-plan.md`), Phase 15 held bills in `/api/context` and per-waiter day stats (no migration; plan `docs/ui/phase15-billing-tabs-waiter-sidebar-plan.md`), Phase 16 waiter ledger, multi-bill and lump-sum waiter settlement and the Day End waiter-balance blocker (no migration; plan `docs/ui/phase16-waiter-ledger-plan.md`), Phase 17 Orders (bill-wise tracking) and DUPLICATE receipt reprints (no migration; plan `docs/ui/phase17-orders-plan.md`), Phase 18 custom expense categories (`0012_expense_categories`; plan `docs/ui/phase18-expense-categories-plan.md`), Phase 19 departments — unified billing, split ledger (`0013_departments`; plan `docs/ui/phase19-departments-plan.md`), Phase 20 custom item categories and the flat catalog (`0014_item_categories`; plan `docs/ui/phase20-item-categories-plan.md`), and Phase 21 Kitchen Kiosk, kitchen purchases, the Kitchen P&L and universal billing search (`0015_kitchen_purchases`; plan `docs/ui/phase21-kitchen-kiosk-plan.md`). Upcoming phases, not built: `docs/roadmap.md`. Day End design: `docs/ui/phase7-day-end-plan.md`. Full design: `docs/db/phase1-core-schema.md`. Billing screen plan: `docs/ui/phase4-billing-screen-plan.md`.
 
-- **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`, `0006_expense_category`, `0007_peak_drawer_cash`, `0008_stock_receipts`, `0009_catalog_case_size`, `0010_tender_adjustments`, `0011_bank_deposits`, `0012_expense_categories`, `0013_departments`, `0014_item_categories`.
+- **Database:** PostgreSQL 18+ (keys default to `uuidv7()`). Migrations: `0001_core_schema`, `0002_core_rules`, `0003_waiter_tagging`, `0004_captain_orders`, `0005_day_end`, `0006_expense_category`, `0007_peak_drawer_cash`, `0008_stock_receipts`, `0009_catalog_case_size`, `0010_tender_adjustments`, `0011_bank_deposits`, `0012_expense_categories`, `0013_departments`, `0014_item_categories`, `0015_kitchen_purchases`.
 - **Money:** `BIGINT` whole paise in SQL, `bigint` in TypeScript (`type Paise = bigint`). No floats anywhere.
 - **Quantities:** `INTEGER` whole sealed bottles (whole units for Ancillary items; Kitchen dishes are not stock-tracked). No ml / peg columns.
 - **Append-only:** DELETE and TRUNCATE are blocked on every domain table. Ledger tables also block UPDATE. Corrections are made with reversing records.
@@ -37,6 +37,8 @@ Covers Phase 1 schema, Phase 2 service layer, Phase 4 counter queries and local 
 | `bank_deposits` | Cash taken out of the drawer to be banked, e.g. RTGS (append-only; a negative row with `reverses_deposit_id` voids one). Not an expense, not revenue. `reference` optional (0011) | `business_day_id → business_days`, `reverses_deposit_id → bank_deposits` (unique), `created_by_staff_id → staff` |
 | `kot_tickets` | Phase 19 (0013). One printed KOT: `station` BAR / KITCHEN, `ticket_no` per bill and station (`#12`, `#12/2`), `printed_at`, sent by `created_by_staff_id` or `captain_device_id` (append-only, outbox) | `bill_id → bills`, `created_by_staff_id → staff` |
 | `kot_ticket_lines` | Phase 19 (0013). What a ticket carried per original bill line: `qty` (negative = CANCEL). Trigger: the line must be an original line of the ticket's bill, and its department must print at the ticket's station (`PS002`). Append-only, outbox | `ticket_id → kot_tickets`, `bill_item_id → bill_items` |
+| `kitchen_purchases` | Phase 21 (0015). Raw materials bought for the kitchen, apart from the liquor GRN: `vendor_name` (optional), `paid_from` DRAWER / OUTSIDE, `amount_paise` (negative on a void), `note`. Stamped with the open day (`PS007`); a DRAWER purchase is refused while a peak runs (`PS007`). A void (`reverses_purchase_id`) exactly negates an original of the same day, once, never a void (`PS006`), and copies `paid_from`. Append-only, outbox | `business_day_id → business_days`, `reverses_purchase_id → kitchen_purchases` (unique), `created_by_staff_id → staff` |
+| `kitchen_purchase_lines` | Phase 21 (0015). `description` (≤ 60), `quantity` free text (≤ 20, e.g. "5 kg" — a label, never arithmetic), `amount_paise` > 0. Only on an original, only in the transaction that created it (`PS001`); the lines must add up to the purchase amount at commit (deferred, `PS005`). Append-only, outbox | `purchase_id → kitchen_purchases` |
 | `sync_outbox` | Transactional outbox for cloud sync (written by trigger) | — |
 | `schema_migrations` | Applied migration versions | — |
 
@@ -87,6 +89,8 @@ UPI is excluded. A peak sale actually paid by UPI makes the drawer lower by that
 - **Flat items (D1):** one item = one SKU in one category; the brand (`products`) is an internal link found or created by name, so codes (`1848-Q`) and names (`1848 — Quarter`) are derived as before.
 - **Size stays (D2):** the category only groups and suggests a size; `size_code` still drives KOT labels, case sizes and excise reports. **Department stays on the brand (D3)**; a category's default department pre-selects it for a new brand.
 - Bills, stock, KOTs and Day End are untouched (tested from a 0013 database).
+
+**Kitchen purchases (0015):** `pos_day_expected_cash` subtracts Σ the day's `DRAWER` kitchen purchases (voids included); the peak functions and the close trigger are unchanged (drawer purchases can't happen inside a peak window). No kitchen stock is kept.
 
 **Captain orders (0004):**
 - `bills_request_id_unique` (partial unique index) is the idempotency guarantee.
@@ -294,7 +298,7 @@ interface DayEndSummary {
     waiterBalance: WaiterBalanceBlocker;      // Phase 16: { totalPaise, openBillsPaise (Σ due on OPEN waiter bills), creditPaise (Σ outstanding_balance), waiters }
   };                                          // canClose also requires waiterBalance.totalPaise = 0 (the close trigger already enforces both parts)
   canClose: boolean;
-  breakdown: CashBreakdown;                   // openingFloat, normalCash, peakCash, waiterCash, cashExpenses, tenderAdjustment (13), bankDeposits (14), expectedCash, upiTotal (info)
+  breakdown: CashBreakdown;                   // openingFloat, normalCash, peakCash, waiterCash, cashExpenses, tenderAdjustment (13), bankDeposits (14), kitchenPurchases (21, drawer only), expectedCash, upiTotal (info)
   sales: SalesBreakdown;                      // Phase 11
   peakSessions: PeakSessionCash[];            // ended sessions: cash / UPI deltas, frozen variance, salesPaise, inWindowUpiPaise, peakUpiPaise, peakCashPaise
   tenderAdjustments: TenderAdjustmentEntry[]; // Phase 13: originals, newest first, with voidedAt
@@ -363,7 +367,7 @@ class CounterQueries {
 
   getCounterContext(cashierId: string): Promise<CounterContext>;   // NotFoundError for an unknown cashier
   lookupSku(code: string): Promise<SkuLookup | null>;              // exact barcode first, then case-insensitive sku_code
-  searchSkus(query: string, limit?: number): Promise<SkuLookup[]>; // exact barcode, code prefix or name substring; barcode first,
+  searchSkus(query: string, limit?: number, opts?: { activeOnly?: boolean }): Promise<SkuLookup[]>; // Phase 21: exact barcode, code prefix, or every typed word in the name; exact barcode / code first, then names starting with the text,
                                                                    // inactive last, then product name and size FULL→QUARTER, 650→330; default 20
   searchMembers(query: string, limit?: number): Promise<MemberSummary[]>; // active; number prefix or name substring; default limit 20
   listWaiters(): Promise<WaiterSummary[]>;                         // active, by waiter_code
@@ -455,6 +459,30 @@ interface ItemCategory { id; name; sortOrder; isActive; defaultSizeCode: SizeCod
 ```
 
 - Names are trimmed and space-collapsed, stored as typed (shown upper-case), at most 30 characters (`RangeError`). Disabling a category with active items is `PS002`; `move` swaps `sort_order` with the neighbour under a table lock.
+
+### `KitchenService` (`src/services/kitchen.service.ts`, Phase 21)
+
+```ts
+class KitchenService {
+  recordPurchase(input: { vendorName?; paidFrom: 'DRAWER' | 'OUTSIDE'; note?; lines: [{ description; quantity?; amountPaise }] }, staffId: string): Promise<KitchenPurchase>;
+  voidPurchase(purchaseId: string, staffId: string): Promise<KitchenPurchase>;   // appends the negating row
+  listPurchases(businessDayId: string): Promise<KitchenPurchaseEntry[]>;        // originals newest first, with lines and voidedAt
+  getKitchenSummary(businessDayId: string): Promise<KitchenSummary>;
+}
+interface KitchenSummary {
+  day: { id; businessDate; status };
+  salesPaise;            // KITCHEN lines on counted bills (asserted equal to Day End's byDepartment KITCHEN)
+  openTabsPaise;         // KITCHEN lines on the day's bills not counted yet (open, or in a running peak)
+  expensesPaise;         // Σ non-voided expenses whose category's department is KITCHEN (Shared excluded)
+  purchasesPaise; purchasesDrawerPaise;   // Σ non-voided kitchen purchases, and the drawer part
+  grossPaise;            // sales − expenses − purchases
+  itemsSold: Array<{ skuId; displayName; quantity; amountPaise }>;   // counted KITCHEN lines by SKU, best sellers first
+  expenses: ExpenseEntry[]; purchases: KitchenPurchaseEntry[];
+}
+```
+
+- Validation (`RangeError`): 1–30 lines, a description on each, amounts > 0, total ≤ ₹10,00,000, vendor ≤ 80, note ≤ 200, quantity ≤ 20; blank texts → null.
+- `COUNTED_BILLS` (exported from `day-end.service.ts`) is the shared counted-bill rule.
 
 ### `OrdersQueries` (`src/services/orders.queries.ts`, Phase 17)
 
@@ -694,7 +722,7 @@ Migrations run on every boot (already-applied ones are skipped).
 | `GET /api/health` | | | 200 `{ ok: true }` |
 | `GET /api/context` | | `getCounterContext(cashier)` | 200 |
 | `GET /api/skus/lookup` | `?code=` | `lookupSku` (404 if none) | 200 |
-| `GET /api/skus` | `?q=&limit=` (1–50) | `searchSkus` (empty `q` → `[]`) | 200 `SkuLookup[]` |
+| `GET /api/skus` | `?q=&limit=` (1–50), `&active=1` (Phase 21: active items of active brands only) | `searchSkus` (empty `q` → `[]`) | 200 `SkuLookup[]` |
 | `GET /api/members` | `?q=&limit=` (1–100) | `searchMembers` | 200 |
 | `GET /api/waiters` | | `listWaiters` | 200 |
 | `GET /api/waiters/stats` | | `getWaiterStats` (Phase 15) | 200 |
@@ -741,6 +769,10 @@ Migrations run on every boot (already-applied ones are skipped).
 | `GET /api/purchases/:receiptId` | | `getReceipt` | 200 `StockReceiptDetail` |
 | `POST /api/purchases` | `{ invoiceNo, vendorName?, lines: [{ skuId, cases, looseBottles?, caseSize, unitCost }] }` or the loose-only `{ skuId, quantity, unitCost }` (`unitCost` in paise, `"0"` allowed) | `recordReceipt(…, cashier)` | 201 `StockReceiptDetail` |
 | `GET /api/departments` | | `listDepartments` (Phase 19) | 200 `Department[]` |
+| `GET /api/kitchen/summary` | | `getKitchenSummary(getCurrentDayId())` (Phase 21): the open day, else the last closed one; 404 before any day | 200 |
+| `GET /api/kitchen/purchases` | | `listPurchases` of the current day | 200 |
+| `POST /api/kitchen/purchases` | `{ vendorName?, paidFrom: 'DRAWER'\|'OUTSIDE', note?, lines: [{ description, quantity?, amount }] }` | `recordPurchase(…, cashier)` | 201 |
+| `POST /api/kitchen/purchases/:purchaseId/void` | `{}` | `voidPurchase(…, cashier)` | 201 |
 | `GET /api/item-categories` | `?includeInactive=1` | `listCategories` (Phase 20) | 200 |
 | `POST /api/item-categories` | `{ name, defaultSizeCode? (null = ask), defaultDepartment? }` | `createCategory` (PS012 duplicate) | 201 |
 | `PATCH /api/item-categories/:categoryId` | `{ name?, defaultSizeCode?, defaultDepartment?, isActive?, move? }` | `updateCategory` (PS002 disabling one with items) | 200 |

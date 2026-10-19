@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { EMPTY_SCAN, scanKey, type ScanEffect, type ScanState } from './scanBuffer'
 
 /** True for elements that take typed text, where the scan buffer must not steal keys. */
@@ -17,18 +17,31 @@ export interface QtyTarget {
 /**
  * Listens on `window`, so scanning works with no input focused and focus can never be "lost".
  * Yields while `enabled` is false (a dialog is open) or while the user types in a real text field.
- * Returns the buffer for display. A quantity edit is dropped when the selected row changes, the
- * row goes away, or the buffer is paused.
+ * Returns the buffer for display, and `clear` (e.g. after a search result is tapped). A quantity edit
+ * is dropped when the selected row changes, the row goes away, or the buffer is paused.
+ * `searchOpen(text)` (Phase 21): whether the screen shows results for that buffer text; while it
+ * does, the idle reset is off.
  */
-export function useScanBuffer(enabled: boolean, onEffect: (effect: ScanEffect) => void, qty: QtyTarget | null = null): ScanState {
+export function useScanBuffer(
+  enabled: boolean,
+  onEffect: (effect: ScanEffect) => void,
+  qty: QtyTarget | null = null,
+  searchOpen: (text: string) => boolean = () => false,
+): [ScanState, () => void] {
   const [scan, setScan] = useState<ScanState>(EMPTY_SCAN)
   const stateRef = useRef(scan)
   const onEffectRef = useRef(onEffect)
   const qtyRef = useRef(qty)
+  const searchRef = useRef(searchOpen)
   useEffect(() => {
     onEffectRef.current = onEffect
     qtyRef.current = qty
+    searchRef.current = searchOpen
   })
+  const clear = useCallback(() => {
+    stateRef.current = EMPTY_SCAN
+    setScan(EMPTY_SCAN)
+  }, [])
 
   const qtyKey = enabled ? (qty?.key ?? null) : null
   useEffect(() => {
@@ -44,7 +57,7 @@ export function useScanBuffer(enabled: boolean, onEffect: (effect: ScanEffect) =
       const result = scanKey(
         stateRef.current,
         { key: event.key, now: event.timeStamp || performance.now(), ctrlKey: event.ctrlKey, metaKey: event.metaKey, altKey: event.altKey },
-        { qtyTarget: qtyRef.current?.quantity ?? null },
+        { qtyTarget: qtyRef.current?.quantity ?? null, searchOpen: searchRef.current(stateRef.current.text) },
       )
       if (result.state !== stateRef.current) {
         stateRef.current = result.state
@@ -59,5 +72,5 @@ export function useScanBuffer(enabled: boolean, onEffect: (effect: ScanEffect) =
     return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [enabled])
 
-  return scan
+  return [scan, clear]
 }

@@ -46,6 +46,8 @@ export interface PeakStartBaseline {
   tenderAdjustmentPaise: Paise;
   /** Bank deposits taken out of the drawer today (Phase 14; subtracted). */
   bankDepositsPaise: Paise;
+  /** Kitchen purchases paid from the drawer today (Phase 21; subtracted). */
+  kitchenPurchasesPaise: Paise;
   expectedCashPaise: Paise;
   /** UPI tenders on normal bills, refunds included. */
   billUpiPaise: Paise;
@@ -77,6 +79,7 @@ export class PeakSessionService {
       cashExpensesPaise: breakdown.cashExpensesPaise,
       tenderAdjustmentPaise: breakdown.tenderAdjustmentPaise,
       bankDepositsPaise: breakdown.bankDepositsPaise,
+      kitchenPurchasesPaise: breakdown.kitchenPurchasesPaise,
       expectedCashPaise: breakdown.expectedCashPaise,
       billUpiPaise: sales.normal.upiPaise,
       waiterUpiPaise: sales.waiterRepayments.upiPaise,

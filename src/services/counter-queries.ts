@@ -378,21 +378,26 @@ export class CounterQueries {
   }
 
   /**
-   * SKUs for a picker (Purchase screen): exact barcode, SKU code prefix, or name contains `query`.
-   * An exact barcode ranks first, inactive SKUs last; then by name and size (FULL → QUARTER, 650 → 330).
+   * SKUs for a picker (Purchase screen, and the Phase 21 billing search): an exact barcode, a SKU code
+   * prefix, or a name containing every typed word in any order ("chi 65" → Chicken 65). Ranked: exact
+   * barcode, exact SKU code, names starting with the text, then by name and size; inactive last.
+   * `activeOnly` leaves out inactive items and items of an inactive brand.
    */
-  async searchSkus(query: string, limit = DEFAULT_SKU_LIMIT): Promise<SkuLookup[]> {
-    const text = query.trim();
+  async searchSkus(query: string, limit = DEFAULT_SKU_LIMIT, { activeOnly = false }: { activeOnly?: boolean } = {}): Promise<SkuLookup[]> {
+    const text = query.trim().replace(/\s+/g, ' ');
     if (text === '') return [];
     const { rows } = await this.db.query<SkuLookupRow>(
       `SELECT ${SKU_COLUMNS}
          FROM ${SKU_FROM}
-        WHERE k.barcode = $2 OR k.sku_code ILIKE $1 || '%' OR k.display_name ILIKE '%' || $1 || '%'
-        ORDER BY (k.barcode = $2) IS TRUE DESC, k.is_active DESC, lower(p.name),
+        WHERE (NOT $4 OR (k.is_active AND p.is_active))
+          AND (k.barcode = $2 OR k.sku_code ILIKE $1 || '%'
+               OR (SELECT bool_and(k.display_name ILIKE '%' || w || '%') FROM regexp_split_to_table($1, ' ') w))
+        ORDER BY (k.barcode = $2) IS TRUE DESC, (upper(k.sku_code) = upper($2)) DESC, (k.display_name ILIKE $1 || '%') DESC,
+                 k.is_active DESC, lower(p.name),
                  array_position(ARRAY['FULL', 'HALF', 'QUARTER', 'BEER_650', 'BEER_330', 'UNIT'], k.size_code),
                  k.sku_code
         LIMIT $3`,
-      [likeLiteral(text), text, limit],
+      [likeLiteral(text), text, limit, activeOnly],
     );
     return rows.map(mapSkuLookup);
   }
