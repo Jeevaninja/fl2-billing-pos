@@ -4,7 +4,7 @@
  * (blockers, frozen expected cash and variance, the locked day); this service reads and reports.
  */
 import type { SqlClient, SqlDatabase } from '../db/client.js';
-import { NotFoundError, PosError, PosErrorCode, withPosErrors } from '../db/errors.js';
+import { AuthError, NotFoundError, PosError, PosErrorCode, withPosErrors } from '../db/errors.js';
 import { assertPaise, type DbInt, type Paise, paiseParam, toPaise, toPaiseOrNull } from '../domain/money.js';
 import type { BillSource, BillStatus, DepartmentCode } from '../domain/types.js';
 import {
@@ -16,6 +16,7 @@ import {
   type WaiterRow,
   type WaiterSummary,
 } from './counter-queries.js';
+import { checkPin, checkPinFormat } from './auth.service.js';
 import { mapPeakSession, maybeOne, one, type PeakSessionRow } from './rows.js';
 
 export interface DaySummary {
@@ -358,6 +359,32 @@ export async function getDay(db: SqlClient, dayId: string, lock = false): Promis
   return mapDay(row);
 }
 
+function checkOpenArgs(openingFloat: Paise, businessDate: string | undefined): void {
+  assertPaise(openingFloat, 'openingFloat', { allowZero: true });
+  if (businessDate !== undefined && !ISO_DATE.test(businessDate)) throw new RangeError(`businessDate must be YYYY-MM-DD, got ${businessDate}`);
+}
+
+/** The date the next day opens on (default today in India), or PS007 when a day is open or it already traded. */
+async function openableDate(tx: SqlClient, businessDate: string | undefined): Promise<string> {
+  const open = await maybeOne<{ business_date: string }>(tx, `SELECT business_date::text AS business_date FROM business_days WHERE status = 'OPEN'`);
+  if (open) throw new PosError(PosErrorCode.DAY_OR_PEAK_RULE, `business day ${open.business_date} is already open; close it first`);
+  const date = businessDate ?? (await one<{ d: string }>(tx, `SELECT (now() AT TIME ZONE 'Asia/Kolkata')::date::text AS d`)).d;
+  const traded = await maybeOne(tx, `SELECT 1 FROM business_days WHERE business_date = $1`, [date]);
+  if (traded) throw new PosError(PosErrorCode.DAY_OR_PEAK_RULE, `business date ${date} has already traded`);
+  return date;
+}
+
+async function insertDay(tx: SqlClient, date: string, openingFloat: Paise, staffId: string): Promise<DaySummary> {
+  return mapDay(
+    await one<DayRow>(
+      tx,
+      `INSERT INTO business_days (business_date, opening_float_paise, opened_by_staff_id)
+       VALUES ($1, $2, $3) RETURNING ${DAY_COLUMNS}`,
+      [date, paiseParam(openingFloat), staffId],
+    ),
+  );
+}
+
 export class DayEndService {
   constructor(private readonly db: SqlDatabase) {}
 
@@ -412,28 +439,34 @@ export class DayEndService {
    * a date that has already traded, or a day still open, is refused with PS007.
    */
   async openBusinessDay(openingFloat: Paise, staffId: string, businessDate?: string): Promise<DaySummary> {
-    assertPaise(openingFloat, 'openingFloat', { allowZero: true });
-    if (businessDate !== undefined && !ISO_DATE.test(businessDate)) throw new RangeError(`businessDate must be YYYY-MM-DD, got ${businessDate}`);
+    checkOpenArgs(openingFloat, businessDate);
     return withPosErrors(() =>
       this.db.transaction(async (tx) => {
-        const open = await maybeOne<{ business_date: string }>(tx, `SELECT business_date::text AS business_date FROM business_days WHERE status = 'OPEN'`);
-        if (open) throw new PosError(PosErrorCode.DAY_OR_PEAK_RULE, `business day ${open.business_date} is already open; close it first`);
-
-        const date =
-          businessDate ?? (await one<{ d: string }>(tx, `SELECT (now() AT TIME ZONE 'Asia/Kolkata')::date::text AS d`)).d;
-        const traded = await maybeOne(tx, `SELECT 1 FROM business_days WHERE business_date = $1`, [date]);
-        if (traded) throw new PosError(PosErrorCode.DAY_OR_PEAK_RULE, `business date ${date} has already traded`);
-
-        return mapDay(
-          await one<DayRow>(
-            tx,
-            `INSERT INTO business_days (business_date, opening_float_paise, opened_by_staff_id)
-             VALUES ($1, $2, $3) RETURNING ${DAY_COLUMNS}`,
-            [date, paiseParam(openingFloat), staffId],
-          ),
-        );
+        const date = await openableDate(tx, businessDate);
+        return insertDay(tx, date, openingFloat, staffId);
       }),
     );
+  }
+
+  /**
+   * Phase 25 (D5): Day Open authorised by a cashier's, manager's or admin's PIN. The PIN is checked and
+   * the day inserted in one transaction, opened by the PIN holder. A wrong PIN still commits its
+   * failure count (lockout after five), then throws AuthError. A day already open, or a date already
+   * traded, is refused (PS007) before any PIN attempt is spent.
+   */
+  async openBusinessDayWithPin(openingFloat: Paise, staffId: string, pin: string, businessDate?: string): Promise<DaySummary> {
+    checkOpenArgs(openingFloat, businessDate);
+    checkPinFormat(pin);
+    const result = await withPosErrors(() =>
+      this.db.transaction(async (tx): Promise<DaySummary | AuthError> => {
+        const date = await openableDate(tx, businessDate);
+        const check = await checkPin(tx, staffId, pin);
+        if (!check.ok) return check.error;
+        return insertDay(tx, date, openingFloat, staffId);
+      }),
+    );
+    if (result instanceof AuthError) throw result;
+    return result;
   }
 
   /**

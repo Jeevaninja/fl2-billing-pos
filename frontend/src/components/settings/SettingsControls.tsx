@@ -9,7 +9,7 @@ export function Toggle({ on, onClick, title, hint }: { on: boolean; onClick: () 
       role="switch"
       aria-checked={on}
       onClick={onClick}
-      className={`flex min-h-16 flex-col items-start justify-center rounded-lg border-2 px-4 text-left ${on ? 'border-amber-400 bg-amber-400/15' : 'border-zinc-700 bg-zinc-950'}`}
+      className={`hover:border-zinc-500 flex min-h-16 flex-col items-start justify-center rounded-lg border-2 px-4 text-left ${on ? 'border-amber-400 bg-amber-400/15' : 'border-zinc-700 bg-zinc-950'}`}
     >
       <span className="flex items-center gap-2 text-lg font-bold">
         <span className={`inline-block size-4 rounded-full ${on ? 'bg-amber-400' : 'bg-zinc-600'}`} aria-hidden />

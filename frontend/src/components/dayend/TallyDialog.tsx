@@ -66,7 +66,7 @@ export function TallyDialog({ normal, busy, onConfirm, onClose }: TallyDialogPro
             <Kbd>↑</Kbd>
             <Kbd>↓</Kbd> direction · <Kbd>Enter</Kbd> next / save
           </span>
-          <button type="button" onClick={submit} disabled={busy} className="rounded-md bg-amber-400 px-5 py-2 font-bold text-zinc-950 disabled:opacity-50">
+          <button type="button" onClick={submit} disabled={busy} className="rounded-md bg-amber-400 px-5 py-2 font-bold text-zinc-950 disabled:opacity-50 enabled:hover:brightness-110">
             {busy ? 'Saving…' : 'Save adjustment'}
           </button>
         </div>

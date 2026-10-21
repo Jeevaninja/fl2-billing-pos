@@ -65,6 +65,7 @@ const CONSTRAINT_CODES: Readonly<Record<string, PosErrorCode>> = {
   expense_categories_name_unique: PosErrorCode.DUPLICATE_CATALOG_ENTRY,
   item_categories_name_unique: PosErrorCode.DUPLICATE_CATALOG_ENTRY,
   departments_name_unique: PosErrorCode.DUPLICATE_CATALOG_ENTRY,
+  staff_credentials_username_unique: PosErrorCode.DUPLICATE_CATALOG_ENTRY,
 };
 
 /** A POS business-rule violation, carrying one of the PS001–PS012 codes. */
@@ -112,6 +113,24 @@ export class IdempotencyConflictError extends Error {
 
   constructor(readonly requestId: string) {
     super(`request ${requestId} was already used for a different order`);
+  }
+}
+
+export type AuthErrorCode = 'INVALID_CREDENTIALS' | 'INVALID_PIN' | 'LOCKED';
+
+/**
+ * A sign-in or PIN check failed (Phase 25). Messages never say whether the username or the password
+ * was wrong. `attemptsLeft` is set on a wrong PIN; `retryAfterSeconds` on LOCKED.
+ */
+export class AuthError extends Error {
+  override readonly name = 'AuthError';
+
+  constructor(
+    readonly code: AuthErrorCode,
+    message: string,
+    readonly details: { attemptsLeft?: number; retryAfterSeconds?: number } = {},
+  ) {
+    super(message);
   }
 }
 

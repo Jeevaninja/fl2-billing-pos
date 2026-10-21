@@ -752,10 +752,10 @@ export default function BillingScreen({ onExit, focusBillId = null }: { onExit: 
           }}
           footer={
             <div className="flex justify-end gap-3">
-              <button type="button" onClick={closeDialog} className="rounded-md border-2 border-zinc-600 px-4 py-2 font-bold">
+              <button type="button" onClick={closeDialog} className="rounded-md border-2 border-zinc-600 px-4 py-2 font-bold hover:border-zinc-400 hover:bg-zinc-800">
                 Keep bill (Esc)
               </button>
-              <button type="button" onClick={abandonBill} className="rounded-md bg-rose-500 px-4 py-2 font-bold text-zinc-950">
+              <button type="button" onClick={abandonBill} className="rounded-md bg-rose-500 px-4 py-2 font-bold text-zinc-950 enabled:hover:brightness-110">
                 Cancel all &amp; close (Enter)
               </button>
             </div>

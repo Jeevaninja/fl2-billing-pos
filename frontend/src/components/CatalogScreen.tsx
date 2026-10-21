@@ -352,14 +352,14 @@ function ItemFormModal({ state, form, onField, onClose, onSave }: FormModalProps
           <p className={`min-w-0 flex-1 text-sm font-semibold ${saveError ? 'text-rose-300' : 'text-amber-300'}`} aria-live="polite">
             {saveError ?? error ?? ''}
           </p>
-          <button type="button" onClick={onClose} className="min-h-12 rounded-md border-2 border-zinc-600 px-5 font-bold">
+          <button type="button" onClick={onClose} className="min-h-12 rounded-md border-2 border-zinc-600 px-5 font-bold hover:border-zinc-400 hover:bg-zinc-800">
             Cancel (Esc)
           </button>
           <button
             type="button"
             onClick={onSave}
             disabled={submitting || error !== null}
-            className={`min-h-12 rounded-md px-5 font-bold text-zinc-950 disabled:bg-zinc-700 disabled:text-zinc-400 ${retiring ? 'bg-rose-400' : 'bg-teal-400'}`}
+            className={`enabled:hover:brightness-110 min-h-12 rounded-md px-5 font-bold text-zinc-950 disabled:bg-zinc-700 disabled:text-zinc-400 ${retiring ? 'bg-rose-400' : 'bg-teal-400'}`}
           >
             {submitting ? 'Saving…' : retiring ? 'Deactivate & save (Enter)' : 'Save (Enter)'}
           </button>

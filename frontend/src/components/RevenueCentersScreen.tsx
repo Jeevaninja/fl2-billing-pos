@@ -586,7 +586,7 @@ export default function RevenueCentersScreen({ onExit }: { onExit: () => void })
               <button type="button" onClick={() => dispatch({ type: 'confirmVoid', purchase: null })} className="min-h-12 rounded-md border-2 border-zinc-600 px-5 font-bold">
                 Keep (Esc)
               </button>
-              <button type="button" onClick={voidPurchase} className="min-h-12 rounded-md bg-rose-500 px-5 font-black text-zinc-950">
+              <button type="button" onClick={voidPurchase} className="min-h-12 rounded-md bg-rose-500 px-5 font-black text-zinc-950 enabled:hover:brightness-110">
                 Void (Enter)
               </button>
             </div>
@@ -646,14 +646,14 @@ function PurchaseModal({
         <div className="flex items-center gap-3">
           <p className={`min-w-0 flex-1 text-sm font-semibold ${serverError ? 'text-rose-300' : 'text-amber-300'}`}>{error ?? 'F9 saves · Esc cancels'}</p>
           <span className="font-mono text-2xl font-black tabular-nums">{total === null ? '—' : formatPaise(total)}</span>
-          <button type="button" onClick={onClose} className="min-h-12 rounded-md border-2 border-zinc-600 px-5 font-bold">
+          <button type="button" onClick={onClose} className="min-h-12 rounded-md border-2 border-zinc-600 px-5 font-bold hover:border-zinc-400 hover:bg-zinc-800">
             Cancel (Esc)
           </button>
           <button
             type="button"
             onClick={onSave}
             disabled={saving || error !== null}
-            className="min-h-12 rounded-md bg-emerald-500 px-5 font-black text-zinc-950 disabled:bg-zinc-700 disabled:text-zinc-400"
+            className="min-h-12 rounded-md bg-emerald-500 px-5 font-black text-zinc-950 disabled:bg-zinc-700 disabled:text-zinc-400 enabled:hover:brightness-110"
           >
             {saving ? 'Saving…' : 'Save (F9)'}
           </button>

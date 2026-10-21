@@ -55,7 +55,7 @@ export function CenterModal({
             type="button"
             onClick={onSave}
             disabled={saving || error !== null}
-            className={`min-h-12 rounded-lg px-6 text-lg font-black text-zinc-950 disabled:opacity-50 ${disabling ? 'bg-rose-500' : 'bg-emerald-500'}`}
+            className={`enabled:hover:brightness-110 min-h-12 rounded-lg px-6 text-lg font-black text-zinc-950 disabled:opacity-50 ${disabling ? 'bg-rose-500' : 'bg-emerald-500'}`}
           >
             {saving ? 'Saving…' : disabling ? 'Disable & save' : original ? 'Save' : 'Add center'}
           </button>

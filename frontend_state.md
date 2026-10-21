@@ -410,16 +410,63 @@ No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDow
 ## 6. Known gaps
 
 - The peak ticker holds only this visit's scans, so Ctrl+Z can't undo a scan made before a reload. Server totals are always complete.
-- No receipt printing on settle (reprints only) and no KOT reprint. The real ESC/POS bar and kitchen printers are still console stubs. No Reports screen (dashboard stub).
+- No receipt printing on settle (reprints only) and no KOT reprint. The real ESC/POS bar and kitchen printers are still console stubs. 
 - A posted GRN is final: there's no return-to-vendor / void receipt yet, and no stock-adjustment UI.
 - The peak banner, the Billing peak side panel, the end dialog and Day End show the **expected drawer total** (`expectedDrawerCashPaise`: start cash + peak sales + in-peak cash − in-peak expenses). Peak bills carry no tender, so a peak sale paid by UPI makes the real drawer lower than this figure; the end-of-session variance still reconciles cash + UPI together.
-- Expense entries are stamped with the till's `FL2_CASHIER_ID`; there's no per-person attribution until staff login exists.
+- Expense entries are stamped with the till's `FL2_CASHIER_ID`; Phase 25 sign-in unlocks the terminal but doesn't change attribution (per-cashier shift login is a later phase).
 - Breakage written off with `X` is a cancel line with `restock: false`; there is no separate breakage/ADJUSTMENT report yet.
-- The cashier is fixed by the API's `FL2_CASHIER_ID`; there's no login.
+- The cashier is fixed by the API's `FL2_CASHIER_ID`. The Phase 25 Super Admin sign-in gates the whole UI; Day Open is attributed to the PIN holder.
 - Held tabs that only have a member or waiter picked (nothing scanned) live in the browser only, so a reload drops them; tabs holding a bill are restored from `openBills`. A bill opened in another browser window shows up only on the next resume (first load or after being offline).
-- The headless-Chrome end-to-end scripts used to verify Phases 4, 9 and 10 are not in the repo.
-- Catalog edits are open to whoever is at the till (no staff login / role check yet). GRN unit cost is per bottle; there's no per-case price entry.
+- The headless-Chrome end-to-end scripts used to verify Phases 4, 9, 10 and 25 are not in the repo. Phase 25's API-level journeys are in `test/e2e/`.
+- Catalog edits are open to any signed-in admin (Phase 25); there are no per-role permissions below that. GRN unit cost is per bottle; there's no per-case price entry.
 
 ## Phase 24 — Reporting suite (Settings → Reports)
 
 `components/ReportsScreen.tsx` (shell: range presets, tabs **1–8** / ←→, CSV, Print, signature lines on paper) with views in `components/reports/`: `SalesSummaryView` (By item ⇄ Member-wise), `OrdersView`, `StockSummaryView`, `LedgerViews` (Expenses and Purchases with a center filter, Bank deposits, Day End, Full Report), `parts.tsx` (Card, Line, MlTable, CenterFilter, Variance). Pure helpers: `reports/registerView.ts` (tab model, KOT / tag labels, grouping, stock totals, ml / litre formatting), `reports/csv.ts` (one CSV per module; nested reports flattened), `reports/format.ts`. Cached per tab + range (+ center filter). Print: A4 landscape, header repeats, provisional box. The Phase 23 ledger / payments tabs are folded into Full Report and Day End; their API routes remain. Catalog edit has "Bottle ml (excise)" and an "Excise ML group" picker (`volumeMl`, `exciseGroup`).
+
+## Phase 25 — Sign-in, Day Open PIN, dashboard and polish
+
+Plan and QA log: `docs/ui/phase25-auth-polish-qa-plan.md`.
+
+**Sign-in**
+- `main.tsx` renders `<AuthGate><App/></AuthGate>`.
+- `auth/AuthGate.tsx` moves through `auth/authState.ts`: checking → offline (Retry) | `LoginScreen` | the app.
+  `useAuth()` (`auth/AuthContext.ts`) provides `{ staff, signOut }`.
+- The API client's `setUnauthenticatedHandler` returns any 401 `UNAUTHENTICATED` to sign-in with "Your session
+  ended…". A network blip never signs a till out.
+- `auth/LoginScreen.tsx` has a split brand / form layout, reveal-password, a shake and refocus on refusal, a
+  lockout countdown (429 `retryAfterSeconds`), and a CLI setup hint while `adminConfigured` is false.
+
+**Day Open PIN**
+- `auth/PinPadDialog.tsx` (state in `auth/pinPad.ts`): pick a PIN holder (keys 1–9; skipped when there is only
+  one), then 4–6 digits on a touch keypad or typed. Enter submits.
+- A wrong PIN shakes the dots and shows the attempts left. A lock disables the pad with an m:ss countdown.
+- Day End's `OpenDayPanel` takes the float, then this dialog calls `api.openDay(float, staffId, pin)`.
+
+**Staff & PINs**
+- `components/StaffScreen.tsx` (Settings → Staff & PINs; form rules in `settings/staffForm.ts`): add a cashier or
+  manager (with an optional first PIN), rename, switch role, deactivate, set / reset / clear a PIN.
+- Status chips show PIN set / No PIN / PIN locked m:ss / Signs in as … / Inactive.
+- Keys: ↑↓, Enter edit, P PIN, Ins add, Esc.
+
+**Dashboard (D7)**
+- `MODULE_TILES` is 9 tiles; `HERO_TILE = 'billing'` spans two rows of the 5 × 2 grid (2 × 5 below `lg`,
+  where the grid scrolls).
+- Reports moved from the Settings menu to the last tile. The Settings menu is Catalog, Item Categories, Revenue
+  Centers, Expense Categories, Staff & PINs.
+- The header has the day chip, the signed-in admin and Sign out. The Recently Used rail shows from `xl`.
+
+**Design system (D8)**
+- `index.css` `@theme`:
+  - `zinc-850` surface; `zinc-500` retuned for AA (print restores it)
+  - `shadow-tile` / `-tile-hover` / `-glow-amber` / `-dialog`
+  - `animate-fade-in` / `pop-in` / `shake`, and a quint ease-out
+- A base layer gives every control 120 ms transitions, a 1 px press, pointer cursors and thin scrollbars.
+  `prefers-reduced-motion` turns motion off.
+- `lib/ui.ts`: `buttonClass(variant, size)`, `badgeClass(tone)`, `CARD`, `EYEBROW`. `components/ui.tsx`:
+  `Button`, `Badge`, `BrandMark`, and a refined `Kbd`.
+- `Modal` has a blurred backdrop, a pop-in and a footer band.
+
+**Code splitting**
+- `lib/lazyScreen.tsx` lazy-loads every back-office screen. Dashboard and Billing stay in the 359 kB startup
+  chunk.

@@ -1,24 +1,28 @@
 import { useCallback, useState } from 'react'
 import BillingScreen from './billing/BillingScreen'
-import BankDepositScreen from './components/BankDepositScreen'
-import WaiterLedgerScreen from './components/WaiterLedgerScreen'
-import CatalogScreen from './components/CatalogScreen'
 import Dashboard from './components/Dashboard'
-import DayEndScreen from './components/DayEndScreen'
-import ExpenseCategoriesScreen from './components/ExpenseCategoriesScreen'
-import ItemCategoriesScreen from './components/ItemCategoriesScreen'
-import RevenueCentersScreen from './components/RevenueCentersScreen'
-import RevenueCentersSettingsScreen from './components/RevenueCentersSettingsScreen'
-import ExpenseScreen from './components/ExpenseScreen'
-import OrdersScreen from './components/OrdersScreen'
-import PurchaseScreen from './components/PurchaseScreen'
-import ReportsScreen from './components/ReportsScreen'
+import { lazyScreen } from './lib/lazyScreen'
 import { DEFAULT_RECENT, pushRecent, type PosActionId } from './components/dashboard/actions'
 import type { LedgerFocus } from './captain/waiterLedgerReducer'
 import type { CountDraft } from './dayend/dayEndReducer'
 import type { JumpTarget } from './orders/ordersView'
 
-type View = 'dashboard' | 'billing' | 'captain-orders' | 'day-end' | 'expenses' | 'bank-deposits' | 'purchase' | 'catalog' | 'orders' | 'expense-categories' | 'item-categories' | 'revenue-centers' | 'center-settings' | 'reports'
+// Back-office screens: split out of the startup bundle (Phase 25).
+const BankDepositScreen = lazyScreen(() => import('./components/BankDepositScreen'))
+const WaiterLedgerScreen = lazyScreen(() => import('./components/WaiterLedgerScreen'))
+const CatalogScreen = lazyScreen(() => import('./components/CatalogScreen'))
+const DayEndScreen = lazyScreen(() => import('./components/DayEndScreen'))
+const ExpenseCategoriesScreen = lazyScreen(() => import('./components/ExpenseCategoriesScreen'))
+const ItemCategoriesScreen = lazyScreen(() => import('./components/ItemCategoriesScreen'))
+const RevenueCentersScreen = lazyScreen(() => import('./components/RevenueCentersScreen'))
+const RevenueCentersSettingsScreen = lazyScreen(() => import('./components/RevenueCentersSettingsScreen'))
+const ExpenseScreen = lazyScreen(() => import('./components/ExpenseScreen'))
+const OrdersScreen = lazyScreen(() => import('./components/OrdersScreen'))
+const PurchaseScreen = lazyScreen(() => import('./components/PurchaseScreen'))
+const ReportsScreen = lazyScreen(() => import('./components/ReportsScreen'))
+const StaffScreen = lazyScreen(() => import('./components/StaffScreen'))
+
+type View = 'dashboard' | 'billing' | 'captain-orders' | 'day-end' | 'expenses' | 'bank-deposits' | 'purchase' | 'catalog' | 'orders' | 'expense-categories' | 'item-categories' | 'revenue-centers' | 'center-settings' | 'reports' | 'staff'
 
 export default function App() {
   const [view, setView] = useState<View>('dashboard')
@@ -45,6 +49,7 @@ export default function App() {
   const openRevenueCenters = useCallback(() => setView('revenue-centers'), [])
   const openCenterSettings = useCallback(() => setView('center-settings'), [])
   const openReports = useCallback(() => setView('reports'), [])
+  const openStaff = useCallback(() => setView('staff'), [])
   const jumpFromOrders = useCallback((target: Exclude<JumpTarget, { kind: 'none' }>) => {
     if (target.kind === 'billing') {
       setBillingFocus(target.billId)
@@ -99,6 +104,7 @@ export default function App() {
   if (view === 'revenue-centers') return <RevenueCentersScreen onExit={exitToDashboard} />
   if (view === 'center-settings') return <RevenueCentersSettingsScreen onExit={exitToDashboard} />
   if (view === 'reports') return <ReportsScreen onExit={exitToDashboard} />
+  if (view === 'staff') return <StaffScreen onExit={exitToDashboard} />
   if (view === 'day-end') {
     return (
       <DayEndScreen
@@ -129,6 +135,7 @@ export default function App() {
       onOpenRevenueCenters={openRevenueCenters}
       onOpenCenterSettings={openCenterSettings}
       onOpenReports={openReports}
+      onOpenStaff={openStaff}
     />
   )
 }

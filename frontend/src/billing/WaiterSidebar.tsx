@@ -112,7 +112,7 @@ export function WaiterSidebar({
       {error && (
         <div className="mt-3 flex items-center justify-between gap-3 rounded-md bg-rose-500/20 px-3 py-2 text-sm text-rose-300" role="alert">
           <span>{error}</span>
-          <button type="button" onClick={retry} className="inline-flex items-center gap-1 rounded border border-rose-300/50 px-2 py-1 font-bold">
+          <button type="button" onClick={retry} className="inline-flex items-center gap-1 rounded border border-rose-300/50 px-2 py-1 font-bold hover:bg-rose-400/15">
             <RefreshCw className="size-4" aria-hidden /> Retry
           </button>
         </div>
@@ -151,7 +151,7 @@ function WaiterRow({
       type="button"
       onClick={onPick}
       onMouseEnter={onHover}
-      className={`${COLUMNS} w-full rounded-md border-2 px-3 py-2.5 text-left ${highlighted ? 'border-amber-400 bg-zinc-800' : 'border-transparent bg-zinc-950'}`}
+      className={`hover:border-zinc-600 ${COLUMNS} w-full rounded-md border-2 px-3 py-2.5 text-left ${highlighted ? 'border-amber-400 bg-zinc-800' : 'border-transparent bg-zinc-950'}`}
     >
       <span className="flex min-w-0 flex-col gap-0.5">
         <span className="flex min-w-0 items-center gap-2">

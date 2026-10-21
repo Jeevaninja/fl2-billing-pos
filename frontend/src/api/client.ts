@@ -61,6 +61,11 @@ import type {
   WaiterSettlement,
   WaiterStatsReport,
   WaiterSummary,
+  AuthSession,
+  CounterRole,
+  StaffMember,
+  StaffPatch,
+  StaffSummary,
 } from './types'
 
 /** A failed API call. `code` is the server's error code (PS001–PS012, NOT_FOUND, …) or NETWORK. */
@@ -70,13 +75,24 @@ export class ApiError extends Error {
   readonly code: string
   /** The database constraint behind a 409, when one fired (e.g. `skus_barcode_unique`). */
   readonly constraint: string | undefined
+  /** Phase 25: a wrong PIN's attempts left, a lock's seconds to wait. */
+  readonly attemptsLeft: number | undefined
+  readonly retryAfterSeconds: number | undefined
 
-  constructor(status: number, code: string, message: string, constraint?: string) {
+  constructor(status: number, code: string, message: string, constraint?: string, extra: { attemptsLeft?: number; retryAfterSeconds?: number } = {}) {
     super(message)
     this.status = status
     this.code = code
     this.constraint = constraint
+    this.attemptsLeft = extra.attemptsLeft
+    this.retryAfterSeconds = extra.retryAfterSeconds
   }
+}
+
+/** Phase 25: told when any call finds the session gone (expired, signed out elsewhere, API restarted). */
+let onUnauthenticated: (() => void) | null = null
+export function setUnauthenticatedHandler(handler: (() => void) | null): void {
+  onUnauthenticated = handler
 }
 
 const PAISE_STRING = /^-?\d+$/
@@ -113,8 +129,12 @@ async function call<T>(method: 'GET' | 'POST' | 'PUT' | 'PATCH', path: string, b
     throw new ApiError(res.status, res.status >= 500 ? 'NETWORK' : 'BAD_RESPONSE', 'unexpected response from the POS server')
   }
   if (!res.ok) {
-    const error = (parsed as { error?: { code?: string; message?: string; constraint?: string } } | undefined)?.error
-    throw new ApiError(res.status, error?.code ?? 'INTERNAL', error?.message ?? `HTTP ${res.status}`, error?.constraint)
+    const error = (parsed as { error?: { code?: string; message?: string; constraint?: string; attemptsLeft?: number; retryAfterSeconds?: number } } | undefined)?.error
+    if (res.status === 401 && error?.code === 'UNAUTHENTICATED') onUnauthenticated?.()
+    throw new ApiError(res.status, error?.code ?? 'INTERNAL', error?.message ?? `HTTP ${res.status}`, error?.constraint, {
+      ...(error?.attemptsLeft !== undefined ? { attemptsLeft: error.attemptsLeft } : {}),
+      ...(error?.retryAfterSeconds !== undefined ? { retryAfterSeconds: error.retryAfterSeconds } : {}),
+    })
   }
   return parsed as T
 }
@@ -122,6 +142,17 @@ async function call<T>(method: 'GET' | 'POST' | 'PUT' | 'PATCH', path: string, b
 const bill = (billId: string) => `/api/bills/${encodeURIComponent(billId)}`
 
 export const api = {
+  // Phase 25: sign-in, staff and PINs.
+  session: () => call<AuthSession>('GET', '/api/auth/session'),
+  login: (username: string, password: string) => call<AuthSession>('POST', '/api/auth/login', { username, password }),
+  logout: () => call<AuthSession>('POST', '/api/auth/logout', {}),
+  pinHolders: () => call<StaffSummary[]>('GET', '/api/staff/pin-holders'),
+  listStaff: () => call<StaffMember[]>('GET', '/api/staff'),
+  createStaff: (payload: { displayName: string; role: CounterRole; pin?: string | null }) => call<StaffMember>('POST', '/api/staff', payload),
+  updateStaff: (staffId: string, patch: StaffPatch) => call<StaffMember>('PATCH', `/api/staff/${encodeURIComponent(staffId)}`, patch),
+  /** null clears the PIN. */
+  setStaffPin: (staffId: string, pin: string | null) => call<StaffMember>('PUT', `/api/staff/${encodeURIComponent(staffId)}/pin`, { pin }),
+
   context: () => call<CounterContext>('GET', '/api/context'),
   lookupSku: (code: string) => call<SkuLookup>('GET', `/api/skus/lookup?code=${encodeURIComponent(code)}`),
   searchSkus: (q: string) => call<SkuLookup[]>('GET', `/api/skus?q=${encodeURIComponent(q)}&limit=12`),
@@ -186,7 +217,8 @@ export const api = {
   voidTenderAdjustment: (adjustmentId: string) =>
     call<TenderAdjustment>('POST', `/api/tender-adjustments/${encodeURIComponent(adjustmentId)}/void`),
   closeDay: (dayId: string, countedCash: Paise) => call<DayEndSummary>('POST', `/api/days/${encodeURIComponent(dayId)}/close`, { countedCash }),
-  openDay: (openingFloat: Paise) => call<DaySummary>('POST', '/api/days', { openingFloat }),
+  /** Phase 25 (D5): opened by the PIN holder; a wrong PIN is 403 INVALID_PIN, a lock 429 LOCKED. */
+  openDay: (openingFloat: Paise, staffId: string, pin: string) => call<DaySummary>('POST', '/api/days', { openingFloat, staffId, pin }),
 
   /** The open day's expenses, newest first (404 when no day is open). */
   listExpenses: () => call<ExpenseEntry[]>('GET', '/api/expenses'),

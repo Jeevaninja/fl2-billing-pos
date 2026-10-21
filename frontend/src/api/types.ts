@@ -1008,3 +1008,35 @@ export interface FullReport extends ReportHeader {
   bankDepositsPaise: Paise
   stock: { openingValuePaise: Paise; closingValuePaise: Paise; unratedCount: number }
 }
+
+// ── Phase 25: sign-in, staff and PINs ──────────────────────────────────────────
+
+export type StaffRole = 'CASHIER' | 'MANAGER' | 'ADMIN'
+/** Roles the Staff & PINs screen manages; admins come from the till's CLI. */
+export type CounterRole = 'CASHIER' | 'MANAGER'
+
+export interface StaffSummary {
+  id: string
+  displayName: string
+  role: StaffRole
+}
+
+/** GET /api/auth/session. `adminConfigured` false = no admin can sign in yet (run the CLI). */
+export type AuthSession =
+  | { authenticated: true; staff: StaffSummary; expiresAt: string; adminConfigured: boolean }
+  | { authenticated: false; adminConfigured: boolean }
+
+export interface StaffMember extends StaffSummary {
+  isActive: boolean
+  hasPin: boolean
+  username: string | null
+  hasPassword: boolean
+  /** Seconds until a locked PIN can be tried again; null when not locked. */
+  pinLockedForSeconds: number | null
+}
+
+export interface StaffPatch {
+  displayName?: string
+  role?: CounterRole
+  isActive?: boolean
+}

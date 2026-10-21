@@ -829,7 +829,7 @@ function ReceiveDialog({ ledger, onConfirm, onClose }: { ledger: WaiterLedger; o
           <span className="text-sm text-zinc-400">
             <Kbd>C</Kbd> cash · <Kbd>U</Kbd> UPI · <Kbd>Enter</Kbd> record
           </span>
-          <button type="button" onClick={confirm} disabled={error !== null} className="rounded-md bg-emerald-500 px-5 py-2 font-bold text-zinc-950 disabled:opacity-50">
+          <button type="button" onClick={confirm} disabled={error !== null} className="rounded-md bg-emerald-500 px-5 py-2 font-bold text-zinc-950 disabled:opacity-50 enabled:hover:brightness-110">
             Record {amount !== null && error === null ? formatPaise(amount) : ''}
           </button>
         </div>

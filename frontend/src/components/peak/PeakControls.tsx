@@ -171,7 +171,7 @@ export function PeakStartDialog({ businessDayId, onStarted, onClose }: StartProp
           <span className="text-sm text-zinc-400">
             <Kbd>Enter</Kbd> next / start
           </span>
-          <button type="button" onClick={submit} disabled={saving} className="rounded-md bg-amber-400 px-5 py-2 font-bold text-zinc-950 disabled:opacity-50">
+          <button type="button" onClick={submit} disabled={saving} className="rounded-md bg-amber-400 px-5 py-2 font-bold text-zinc-950 disabled:opacity-50 enabled:hover:brightness-110">
             {saving ? 'Starting…' : 'Start peak'}
           </button>
         </div>
@@ -259,7 +259,7 @@ export function PeakEndDialog({ session: snapshot, onEnded, onClose }: EndProps)
         }}
         footer={
           <div className="flex justify-end">
-            <button type="button" onClick={onClose} className="rounded-md bg-emerald-500 px-5 py-2 font-bold text-zinc-950">
+            <button type="button" onClick={onClose} className="rounded-md bg-emerald-500 px-5 py-2 font-bold text-zinc-950 enabled:hover:brightness-110">
               Done (Enter)
             </button>
           </div>
@@ -294,7 +294,7 @@ export function PeakEndDialog({ session: snapshot, onEnded, onClose }: EndProps)
           <span className="text-sm text-zinc-400">
             <Kbd>Enter</Kbd> next / end and reconcile
           </span>
-          <button type="button" onClick={submit} disabled={saving} className="rounded-md bg-violet-500 px-5 py-2 font-bold text-zinc-950 disabled:opacity-50">
+          <button type="button" onClick={submit} disabled={saving} className="rounded-md bg-violet-500 px-5 py-2 font-bold text-zinc-950 disabled:opacity-50 enabled:hover:brightness-110">
             {saving ? 'Ending…' : 'End peak'}
           </button>
         </div>

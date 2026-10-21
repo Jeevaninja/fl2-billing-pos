@@ -4,7 +4,8 @@
  * routing — the loopback Host guard, or device-token authentication.
  */
 import type { IncomingMessage, RequestListener } from 'node:http';
-import { IdempotencyConflictError, InactiveError, NotFoundError, PosError } from '../src/services/index.js';
+import { AuthError, IdempotencyConflictError, InactiveError, NotFoundError, PosError } from '../src/services/index.js';
+import type { Session } from './sessions.js';
 import { BadRequestError, type Body, parseBody, toJson } from './json.js';
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -13,6 +14,10 @@ const MAX_BODY_BYTES = 64 * 1024;
 export interface RequestContext {
   /** Paired Captain handset (Captain server only). */
   deviceId?: string;
+  /** Signed-in counter session (counter API only, Phase 25). */
+  session?: Session;
+  /** The raw session token from the cookie, for sign-out. */
+  sessionToken?: string;
 }
 
 export interface Request {
@@ -22,7 +27,7 @@ export interface Request {
   context: RequestContext;
 }
 
-export type Handler = (req: Request) => Promise<{ status?: number; body: unknown }>;
+export type Handler = (req: Request) => Promise<{ status?: number; body: unknown; headers?: Record<string, string> }>;
 
 export interface Route {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH';
@@ -82,6 +87,16 @@ export function errorResponse(err: unknown): ErrorReply {
   if (err instanceof NotFoundError) {
     return { status: 404, body: { error: { code: 'NOT_FOUND', message: err.message, entity: err.entity, id: err.id } } };
   }
+  if (err instanceof AuthError) {
+    // Wrong password → 401; wrong PIN → 403 (the caller is signed in, the PIN holder is not authorised); locked → 429.
+    const status = err.code === 'INVALID_CREDENTIALS' ? 401 : err.code === 'INVALID_PIN' ? 403 : 429;
+    const retry = err.details.retryAfterSeconds;
+    return {
+      status,
+      body: { error: { code: err.code, message: err.message, ...err.details } },
+      ...(retry !== undefined ? { headers: { 'retry-after': String(retry) } } : {}),
+    };
+  }
   if (err instanceof IdempotencyConflictError) {
     return { status: 409, body: { error: { code: 'IDEMPOTENCY_CONFLICT', message: err.message, requestId: err.requestId } } };
   }
@@ -118,7 +133,7 @@ export function createJsonHandler(routes: Route[], admit: (req: IncomingMessage)
 
     // Path params are only ever UUIDs, validated by each handler, so they are used undecoded.
     const result = await match.r.handler({ params: { ...match.m.groups }, query: url.searchParams, body, context });
-    return { status: result.status ?? 200, body: result.body };
+    return { status: result.status ?? 200, body: result.body, ...(result.headers ? { headers: result.headers } : {}) };
   }
 
   return (req, res) => {

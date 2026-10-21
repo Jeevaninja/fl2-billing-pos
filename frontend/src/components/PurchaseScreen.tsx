@@ -494,7 +494,7 @@ export default function PurchaseScreen({ onExit, onOpenDayEnd }: PurchaseScreenP
               <button type="button" onClick={() => dispatch({ type: 'confirm', on: false })} className="min-h-12 rounded-md border-2 border-zinc-600 px-5 font-bold">
                 Back (Esc)
               </button>
-              <button type="button" onClick={post} disabled={state.submitting} className="min-h-12 rounded-md bg-violet-400 px-5 font-bold text-zinc-950 disabled:bg-zinc-700">
+              <button type="button" onClick={post} disabled={state.submitting} className="min-h-12 rounded-md bg-violet-400 px-5 font-bold text-zinc-950 disabled:bg-zinc-700 enabled:hover:brightness-110">
                 {state.submitting ? 'Posting…' : 'Post (Enter)'}
               </button>
             </div>

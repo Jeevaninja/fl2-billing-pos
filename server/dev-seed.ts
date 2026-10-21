@@ -2,8 +2,13 @@
  * Demo data for running the counter locally: staff, a small catalogue with barcodes and opening
  * stock, three waiters, a few members and an open business day. Only ever applied to an empty
  * database (no staff rows); a real deployment never runs it.
+ * Phase 25: the Super Admin signs in as `admin` / `fl2-admin-dev`; Counter 1 and Manager have PIN 1234.
  */
 import type { SqlClient } from '../src/db/client.js';
+import { hashSecret } from '../src/services/index.js';
+
+export const DEV_ADMIN = { username: 'admin', password: 'fl2-admin-dev' } as const;
+export const DEV_PIN = '1234';
 
 // [code, size, display name, sale price, purchase price, case size]. Kitchen items get no opening stock (not tracked).
 const PRODUCTS = [
@@ -31,6 +36,15 @@ export async function seedDevData(db: SqlClient): Promise<{ cashierId: string } 
 
   const cashierId = await insertId(db, `INSERT INTO staff (display_name, role) VALUES ('Counter 1', 'CASHIER') RETURNING id`, []);
   const managerId = await insertId(db, `INSERT INTO staff (display_name, role) VALUES ('Manager', 'MANAGER') RETURNING id`, []);
+  const adminId = await insertId(db, `INSERT INTO staff (display_name, role) VALUES ('Super Admin', 'ADMIN') RETURNING id`, []);
+  await db.query(`INSERT INTO staff_credentials (staff_id, username, password_hash) VALUES ($1, $2, $3)`, [
+    adminId,
+    DEV_ADMIN.username,
+    await hashSecret(DEV_ADMIN.password),
+  ]);
+  for (const staffId of [cashierId, managerId]) {
+    await db.query(`INSERT INTO staff_credentials (staff_id, pin_hash) VALUES ($1, $2)`, [staffId, await hashSecret(DEV_PIN)]);
+  }
 
   let barcode = 8_900_000_000_001;
   for (const product of PRODUCTS) {

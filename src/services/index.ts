@@ -1,3 +1,17 @@
+export {
+  AuthService,
+  checkPin,
+  checkPinFormat,
+  cleanStaffName,
+  cleanUsername,
+  COUNTER_ROLES,
+  LOCK_MINUTES,
+  MAX_FAILED_ATTEMPTS,
+  MIN_PASSWORD_LENGTH,
+} from './auth.service.js';
+export type { CounterRole, PinCheck, StaffMember, StaffPatch } from './auth.service.js';
+export { DEFAULT_COST, hashSecret, verifySecret } from './secrets.js';
+export type { ScryptCost } from './secrets.js';
 export { BillingService } from './billing.service.js';
 export type { BillLine, CounterPayment, PeakUndoResult, ReversalResult, ReverseBillOptions, SettledBill } from './billing.service.js';
 export {
@@ -139,4 +153,5 @@ export type {
 } from './report.service.js';
 export { WaiterService } from './waiter.service.js';
 export type { ReceiptAllocation, WaiterBillsSettlement, WaiterReceipt, WaiterRepayment, WaiterSettlement } from './waiter.service.js';
-export { IdempotencyConflictError, InactiveError, NotFoundError, PosError, PosErrorCode, isPosError } from '../db/errors.js';
+export { AuthError, IdempotencyConflictError, InactiveError, NotFoundError, PosError, PosErrorCode, isPosError } from '../db/errors.js';
+export type { AuthErrorCode } from '../db/errors.js';

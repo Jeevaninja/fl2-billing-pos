@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeft, CheckCircle2, CircleAlert, Lock, RefreshCw, Sunrise, WifiOff } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, CircleAlert, KeyRound, Lock, RefreshCw, Sunrise, WifiOff } from 'lucide-react'
 import { ApiError, api } from '../api/client'
-import type { CounterTender, DayEndSummary, OwingWaiter, Paise, PeakSessionView, TenderAdjustmentEntry } from '../api/types'
+import type { CounterTender, DayEndSummary, OwingWaiter, Paise, PeakSessionView, StaffSummary, TenderAdjustmentEntry } from '../api/types'
+import { PinPadDialog } from '../auth/PinPadDialog'
 import { FlashLine } from '../billing/BillingPanels'
 import { counterErrorMessage } from '../billing/errors'
 import { Modal } from '../billing/Modal'
@@ -125,11 +126,21 @@ export default function DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrder
     })
   }
 
-  const openDay = (float: Paise) =>
-    void write(async () => {
-      const day = await api.openDay(float)
-      return `Day ${day.businessDate} opened with a ${formatPaise(day.openingFloatPaise)} float`
-    })
+  /** Phase 25 (D5): the float is typed first, then a cashier / manager PIN authorises the open. */
+  const [pinFloat, setPinFloat] = useState<Paise | null>(null)
+  const openDay = (float: Paise) => {
+    if (!busy) setPinFloat(float)
+  }
+  const authorizeOpen = useCallback(
+    async (staff: StaffSummary, pin: string) => {
+      if (pinFloat === null) return
+      const day = await api.openDay(pinFloat, staff.id, pin)
+      setPinFloat(null)
+      flash('ok', `Day ${day.businessDate} opened by ${staff.displayName} with a ${formatPaise(day.openingFloatPaise)} float`)
+      await refresh()
+    },
+    [pinFloat, flash, refresh],
+  )
 
   const adjustTender = (cashDelta: Paise, reason: string) => {
     const dayId = stateRef.current.summary?.day.id
@@ -157,7 +168,7 @@ export default function DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrder
 
   // ── Keyboard ───────────────────────────────────────────────────────────────
 
-  const keysLive = state.dialog === null
+  const keysLive = state.dialog === null && pinFloat === null
   useGlobalShortcuts(
     {
       F6: () => view === 'OPEN' && onOpenExpenses(),
@@ -287,6 +298,20 @@ export default function DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrder
         </div>
       )}
 
+      {pinFloat !== null && (
+        <PinPadDialog
+          title="Authorise Day Open"
+          summary={
+            <span className="flex items-baseline justify-between gap-3">
+              <span>Opening float counted into the drawer</span>
+              <span className="font-mono text-lg font-bold text-zinc-50 tabular-nums">{formatPaise(pinFloat)}</span>
+            </span>
+          }
+          confirmLabel="Open day"
+          onAuthorize={authorizeOpen}
+          onClose={() => setPinFloat(null)}
+        />
+      )}
       {dialog?.kind === 'confirm' && summary && (
         <ConfirmLock summary={summary} counted={countedPaise(state) ?? 0n} variance={variancePreview(state) ?? 0n} onConfirm={lockDay} onClose={closeDialog} />
       )}
@@ -304,7 +329,7 @@ export default function DayEndScreen({ onExit, onOpenBilling, onOpenCaptainOrder
           }}
           footer={
             <div className="flex justify-end gap-3">
-              <button type="button" onClick={closeDialog} className="rounded-md border-2 border-zinc-600 px-4 py-2 font-bold">
+              <button type="button" onClick={closeDialog} className="rounded-md border-2 border-zinc-600 px-4 py-2 font-bold hover:border-zinc-400 hover:bg-zinc-800">
                 Keep (Esc)
               </button>
               <button type="button" onClick={() => voidAdjustment(dialog.adjustment)} className="rounded-md bg-rose-500 px-4 py-2 font-bold text-zinc-950">
@@ -657,6 +682,9 @@ function OpenDayPanel({ busy, onOpen, note }: { busy: boolean; onOpen: (float: P
         Open day {float !== null && `with ${formatPaise(float)}`}
         <Kbd>Enter</Kbd>
       </button>
+      <p className="flex items-center gap-2 text-sm text-zinc-400">
+        <KeyRound className="size-4 text-amber-400" aria-hidden /> Next, a cashier or manager authorises the open with their PIN.
+      </p>
     </div>
   )
 }
@@ -675,10 +703,10 @@ function ConfirmLock({ summary, counted, variance, onConfirm, onClose }: { summa
       }}
       footer={
         <div className="flex justify-end gap-3">
-          <button type="button" onClick={onClose} className="rounded-md border-2 border-zinc-600 px-4 py-2 font-bold">
+          <button type="button" onClick={onClose} className="rounded-md border-2 border-zinc-600 px-4 py-2 font-bold hover:border-zinc-400 hover:bg-zinc-800">
             Back (Esc)
           </button>
-          <button type="button" onClick={onConfirm} className="rounded-md bg-emerald-500 px-4 py-2 font-bold text-zinc-950">
+          <button type="button" onClick={onConfirm} className="rounded-md bg-emerald-500 px-4 py-2 font-bold text-zinc-950 enabled:hover:brightness-110">
             Lock day (Enter)
           </button>
         </div>
@@ -725,7 +753,7 @@ function RepayDialog({ waiter, onConfirm, onClose }: { waiter: OwingWaiter; onCo
           <span className="text-sm text-zinc-400">
             <Kbd>C</Kbd> cash · <Kbd>U</Kbd> UPI · <Kbd>Enter</Kbd> record
           </span>
-          <button type="button" onClick={confirm} disabled={error !== null} className="rounded-md bg-emerald-500 px-5 py-2 font-bold text-zinc-950 disabled:opacity-50">
+          <button type="button" onClick={confirm} disabled={error !== null} className="rounded-md bg-emerald-500 px-5 py-2 font-bold text-zinc-950 disabled:opacity-50 enabled:hover:brightness-110">
             Record {amount !== null && error === null ? formatPaise(amount) : ''}
           </button>
         </div>

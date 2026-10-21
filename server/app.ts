@@ -7,7 +7,9 @@ import { createServer, type IncomingMessage, type RequestListener, type Server }
 import type { SqlDatabase } from '../src/db/client.js';
 import type { CounterTender, Tender } from '../src/domain/types.js';
 import {
+  AuthService,
   BillingService,
+  COUNTER_ROLES,
   CatalogService,
   CounterQueries,
   DayEndService,
@@ -36,7 +38,9 @@ import {
   type NewSkuInput,
   type ReceiptLineInput,
   type ReceiptPrinter,
+  type ScryptCost,
   type SkuPatch,
+  type StaffPatch,
 } from '../src/services/index.js';
 import {
   BadRequestError,
@@ -53,6 +57,7 @@ import {
   str,
 } from './json.js';
 import { created, createJsonHandler, HttpError, ok, type RequestContext, route, type Route } from './routing.js';
+import { clearedSessionCookie, type Session, sessionCookie, SessionStore, sessionToken } from './sessions.js';
 
 export interface ApiConfig {
   db: SqlDatabase;
@@ -62,6 +67,26 @@ export interface ApiConfig {
   printer?: ReceiptPrinter;
   /** KOT printer (BAR / KITCHEN stations); defaults to the console stub. */
   kotPrinter?: KotPrinter;
+  /** Signed-in sessions (Phase 25); a fresh in-memory store by default. */
+  sessions?: SessionStore;
+  /** scrypt cost for PINs set through the API (tests pass a cheap one). */
+  scryptCost?: ScryptCost;
+}
+
+/** Routes answered without a session: health, and the sign-in endpoints themselves. */
+const PUBLIC_PATHS: ReadonlySet<string> = new Set(['/api/health', '/api/auth/session', '/api/auth/login', '/api/auth/logout']);
+
+/** The signed-in admin, or 403 (every session is an admin's today; the check keeps it that way). */
+function requireAdmin(session: Session | undefined): Session {
+  if (!session || session.staff.role !== 'ADMIN') throw new HttpError(403, 'FORBIDDEN', 'only an admin can manage staff');
+  return session;
+}
+
+/** A PIN as a string of digits (the service checks 4–6), or null to clear it. */
+function pinValue(value: unknown, name: string, { nullable = false } = {}): string | null {
+  if (value === null && nullable) return null;
+  if (typeof value !== 'string') throw new BadRequestError(`${name} must be a string of digits`);
+  return value;
 }
 
 const COUNTER_TENDERS = ['CASH', 'UPI'] as const satisfies readonly CounterTender[];
@@ -107,7 +132,11 @@ function receiptLine(value: unknown, i: number): ReceiptLineInput {
   };
 }
 
-function buildRoutes({ db, cashierId, printer = new PrinterService(), kotPrinter = new PrinterService() }: ApiConfig): Route[] {
+function buildRoutes(
+  { db, cashierId, printer = new PrinterService(), kotPrinter = new PrinterService(), scryptCost }: ApiConfig,
+  sessions: SessionStore,
+): Route[] {
+  const auth = new AuthService(db, scryptCost);
   const billing = new BillingService(db);
   const peak = new PeakSessionService(db);
   const waiters = new WaiterService(db);
@@ -135,6 +164,56 @@ function buildRoutes({ db, cashierId, printer = new PrinterService(), kotPrinter
 
   return [
     route('GET', '/api/health', async () => ok({ ok: true })),
+
+    // Phase 25: Super Admin sign-in (D1, D3) and staff PINs (D5, D6).
+    route('GET', '/api/auth/session', async ({ context }) => {
+      const adminConfigured = await auth.adminConfigured();
+      const { session } = context;
+      return ok(session ? { authenticated: true, staff: session.staff, expiresAt: session.expiresAt, adminConfigured } : { authenticated: false, adminConfigured });
+    }),
+    route('POST', '/api/auth/login', async ({ body, context }) => {
+      const staff = await auth.login(str(body.username, 'username'), str(body.password, 'password'));
+      sessions.revoke(context.sessionToken);
+      const { token, session } = sessions.issue(staff);
+      const maxAge = Math.floor((session.expiresAt.getTime() - Date.now()) / 1000);
+      return { body: { authenticated: true, staff, expiresAt: session.expiresAt }, headers: { 'set-cookie': sessionCookie(token, maxAge) } };
+    }),
+    route('POST', '/api/auth/logout', async ({ context }) => {
+      sessions.revoke(context.sessionToken);
+      return { body: { authenticated: false }, headers: { 'set-cookie': clearedSessionCookie() } };
+    }),
+    route('GET', '/api/staff/pin-holders', async () => ok(await auth.pinHolders())),
+    route('GET', '/api/staff', async ({ context }) => {
+      requireAdmin(context.session);
+      return ok(await auth.listStaff());
+    }),
+    route('POST', '/api/staff', async ({ body, context }) => {
+      requireAdmin(context.session);
+      return created(
+        await auth.createStaff({
+          displayName: str(body.displayName, 'displayName'),
+          role: oneOf(body.role, 'role', COUNTER_ROLES),
+          pin: body.pin === undefined || body.pin === null ? null : pinValue(body.pin, 'pin'),
+        }),
+      );
+    }),
+    route('PATCH', '/api/staff/:staffId', async ({ params, body, context }) => {
+      const { staff: admin } = requireAdmin(context.session);
+      const patch: StaffPatch = {};
+      if (body.displayName !== undefined) patch.displayName = str(body.displayName, 'displayName');
+      const role = optOneOf(body.role, 'role', COUNTER_ROLES);
+      if (role !== undefined) patch.role = role;
+      const isActive = optBool(body.isActive, 'isActive');
+      if (isActive !== undefined) patch.isActive = isActive;
+      const staffId = id(params.staffId, 'staffId');
+      const updated = await auth.updateStaff(staffId, patch, admin.id);
+      if (!updated.isActive) sessions.revokeStaff(staffId);
+      return ok(updated);
+    }),
+    route('PUT', '/api/staff/:staffId/pin', async ({ params, body, context }) => {
+      requireAdmin(context.session);
+      return ok(await auth.setPin(id(params.staffId, 'staffId'), pinValue(body.pin, 'pin', { nullable: true })));
+    }),
     route('GET', '/api/context', async () => ok(await queries.getCounterContext(cashierId))),
 
     route('GET', '/api/skus/lookup', async ({ query }) => {
@@ -256,7 +335,10 @@ function buildRoutes({ db, cashierId, printer = new PrinterService(), kotPrinter
       if (!dayId) throw new NotFoundError('business day', 'current');
       return ok(await dayEnd.getDayEndSummary(dayId));
     }),
-    route('POST', '/api/days', async ({ body }) => created(await dayEnd.openBusinessDay(paise(body.openingFloat, 'openingFloat'), cashierId))),
+    // Phase 25 (D5): the day opens only on a cashier's, manager's or admin's PIN, and is opened by them.
+    route('POST', '/api/days', async ({ body }) =>
+      created(await dayEnd.openBusinessDayWithPin(paise(body.openingFloat, 'openingFloat'), id(body.staffId, 'staffId'), pinValue(body.pin, 'pin') as string)),
+    ),
     route('POST', '/api/days/:dayId/close', async ({ params, body }) =>
       ok(await dayEnd.closeBusinessDay(id(params.dayId, 'dayId'), paise(body.countedCash, 'countedCash'), cashierId)),
     ),
@@ -577,14 +659,24 @@ function buildRoutes({ db, cashierId, printer = new PrinterService(), kotPrinter
   ];
 }
 
-/** Counter API admission: loopback Host names only (blocks DNS-rebinding pages). */
-function admitLocal(req: IncomingMessage): RequestContext {
-  if (!LOCAL_HOST.test(req.headers.host ?? '')) throw new HttpError(403, 'FORBIDDEN', 'the POS API only answers on localhost');
-  return {};
+/**
+ * Counter API admission: loopback Host names only (blocks DNS-rebinding pages), then a signed-in
+ * session for everything but PUBLIC_PATHS (Phase 25, D3).
+ */
+function admitCounter(sessions: SessionStore): (req: IncomingMessage) => RequestContext {
+  return (req) => {
+    if (!LOCAL_HOST.test(req.headers.host ?? '')) throw new HttpError(403, 'FORBIDDEN', 'the POS API only answers on localhost');
+    const token = sessionToken(req.headers.cookie);
+    const session = sessions.resolve(token);
+    const path = new URL(req.url ?? '/', 'http://localhost').pathname;
+    if (!session && !PUBLIC_PATHS.has(path)) throw new HttpError(401, 'UNAUTHENTICATED', 'sign in to use the POS');
+    return { ...(session ? { session } : {}), ...(token ? { sessionToken: token } : {}) };
+  };
 }
 
 export function createApiHandler(config: ApiConfig): RequestListener {
-  return createJsonHandler(buildRoutes(config), admitLocal);
+  const sessions = config.sessions ?? new SessionStore();
+  return createJsonHandler(buildRoutes(config, sessions), admitCounter(sessions));
 }
 
 export function createApiServer(config: ApiConfig): Server {

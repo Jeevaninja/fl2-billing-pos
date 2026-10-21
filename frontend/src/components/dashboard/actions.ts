@@ -12,6 +12,7 @@ import {
   ReceiptText,
   Smartphone,
   Tags,
+  UserCog,
   UserSearch,
   Wallet,
   type LucideIcon,
@@ -35,6 +36,7 @@ export type PosActionId =
   | 'center-settings'
   | 'day-end'
   | 'reports'
+  | 'staff'
 
 export interface PosAction {
   id: PosActionId
@@ -60,17 +62,22 @@ export const ACTIONS: Record<PosActionId, PosAction> = {
   orders: { id: 'orders', label: 'Orders', hint: "Today's bills, receipts and reprints", icon: ClipboardList },
   'expense-categories': { id: 'expense-categories', label: 'Expense Categories', hint: 'Petty-cash categories and their order', icon: Tags },
   'day-end': { id: 'day-end', label: 'Day End', hint: 'Peak reconciliation and close', icon: CalendarCheck },
-  reports: { id: 'reports', label: 'Reports', hint: 'Ledger balances, sales & stock registers, payments', icon: ChartColumn },
+  reports: { id: 'reports', label: 'Reports', hint: 'Sales, stock register, Day End and Tally sheets', icon: ChartColumn },
+  staff: { id: 'staff', label: 'Staff & PINs', hint: 'Cashiers, managers and Day Open PINs', icon: UserCog },
 }
 
 /**
- * Dashboard tiles, in grid order (5 × 2 since Phase 21: free slots are left for HR / Payroll). Inventory
- * Catalog lives in the header Settings menu (Phase 17), and so do Reports (Phase 23).
+ * Dashboard tiles, in grid order. Phase 25 (D7): 5 × 2 with Billing spanning both rows of the first
+ * column (the hero tile), then four tiles per row; Reports left the Settings menu for the last slot.
+ * This fills the grid: HR / Payroll will need a sixth column.
  */
-export const MODULE_TILES: readonly PosActionId[] = ['billing', 'captain-orders', 'expense', 'bank-deposit', 'purchase', 'revenue-centers', 'orders', 'day-end']
+export const MODULE_TILES: readonly PosActionId[] = ['billing', 'captain-orders', 'expense', 'bank-deposit', 'purchase', 'revenue-centers', 'orders', 'day-end', 'reports']
 
-/** Header Settings menu entries: screens that don't need a grid tile (Reports first). */
-export const SETTINGS_ACTIONS: readonly PosActionId[] = ['reports', 'catalog', 'item-categories', 'center-settings', 'expense-categories']
+/** The tile that spans two rows. */
+export const HERO_TILE: PosActionId = 'billing'
+
+/** Header Settings menu entries: screens that don't need a grid tile. */
+export const SETTINGS_ACTIONS: readonly PosActionId[] = ['catalog', 'item-categories', 'center-settings', 'expense-categories', 'staff']
 
 /** Rail contents before the operator has used anything this session. */
 export const DEFAULT_RECENT: readonly PosActionId[] = ['new-bill', 'member', 'pay', 'captain-orders', 'day-end']

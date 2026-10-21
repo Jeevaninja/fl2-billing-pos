@@ -1,7 +1,29 @@
 @import 'tailwindcss';
 
+/* Phase 25 design tokens (plan D8). Dark counter theme; every screen draws from these. */
 @theme {
-  --animate-slide-in-right: slide-in-right 180ms ease-out;
+  /* Surfaces: 950 page · 900 panel · 850 raised · 800 control. 850 fills the step zinc lacks. */
+  --color-zinc-850: oklch(0.242 0.006 285.96);
+  /* Secondary text tuned for WCAG AA on the dark surfaces (≥ 5.2:1 on 900, was 3.7:1). Print restores it. */
+  --color-zinc-500: oklch(0.64 0.016 285.938);
+
+  --font-sans: 'Inter Variable', 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
+
+  /* Motion: 120 ms for hover / press, 180 ms for entering panels, 240 ms for larger surfaces. */
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+  --default-transition-duration: 120ms;
+  --default-transition-timing-function: var(--ease-out-quint);
+
+  /* Elevation */
+  --shadow-tile: 0 1px 0 0 rgb(255 255 255 / 0.04) inset, 0 1px 2px 0 rgb(0 0 0 / 0.5);
+  --shadow-tile-hover: 0 1px 0 0 rgb(255 255 255 / 0.06) inset, 0 12px 28px -10px rgb(0 0 0 / 0.75);
+  --shadow-glow-amber: 0 0 0 1px rgb(251 191 36 / 0.5), 0 16px 40px -14px rgb(251 191 36 / 0.55);
+  --shadow-dialog: 0 0 0 1px rgb(255 255 255 / 0.04), 0 24px 64px -12px rgb(0 0 0 / 0.85);
+
+  --animate-slide-in-right: slide-in-right 180ms var(--ease-out-quint);
+  --animate-fade-in: fade-in 180ms var(--ease-out-quint);
+  --animate-pop-in: pop-in 180ms var(--ease-out-quint);
+  --animate-shake: shake 320ms ease-in-out;
 
   @keyframes slide-in-right {
     from {
@@ -9,6 +31,38 @@
     }
     to {
       transform: translateX(0);
+    }
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes pop-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes shake {
+    0%,
+    100% {
+      transform: translateX(0);
+    }
+    20%,
+    60% {
+      transform: translateX(-8px);
+    }
+    40%,
+    80% {
+      transform: translateX(8px);
     }
   }
 }
@@ -20,8 +74,53 @@ body,
 }
 
 body {
-  @apply bg-zinc-950 text-zinc-100 antialiased;
-  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+  @apply bg-zinc-950 font-sans text-zinc-100 antialiased;
+  font-feature-settings: 'cv11', 'ss01';
+  text-rendering: optimizeLegibility;
+}
+
+@layer base {
+  /* One feel everywhere: every control eases its colours, border and shadow, and presses down a pixel. */
+  button,
+  [role='button'],
+  [role='menuitem'],
+  [role='switch'],
+  a,
+  input,
+  select,
+  textarea {
+    transition-property: color, background-color, border-color, box-shadow, transform, opacity;
+    transition-duration: var(--default-transition-duration);
+    transition-timing-function: var(--default-transition-timing-function);
+  }
+  button:not(:disabled),
+  [role='button']:not([aria-disabled='true']) {
+    cursor: pointer;
+  }
+  button:not(:disabled):active {
+    transform: translateY(1px);
+  }
+  button:disabled {
+    cursor: not-allowed;
+  }
+  ::selection {
+    background: rgb(251 191 36 / 0.35);
+  }
+  /* Quiet scrollbars that match the panels. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-zinc-700) transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* Reports (Phase 23/24): print on white paper, whatever the screen theme. A4 landscape fits the
@@ -32,6 +131,9 @@ body {
 }
 
 @media print {
+  :root {
+    --color-zinc-500: oklch(0.552 0.016 285.938);
+  }
   html,
   body,
   #root {
