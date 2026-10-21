@@ -10,6 +10,8 @@ const sku = (id: string, displayName: string): SkuLookup => ({
   sizeCode: 'UNIT',
   pricePaise: 100_00n,
   purchasePricePaise: null,
+  purchaseUnitName: 'Case',
+  saleUnitName: 'Unit',
   caseSize: 1,
   onHandQty: 0,
   isActive: true,

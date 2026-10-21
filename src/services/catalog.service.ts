@@ -30,6 +30,8 @@ const SIZE_SUFFIX: Readonly<Record<SizeCode, string>> = { FULL: 'F', HALF: 'H', 
 const SIZE_LABEL: Readonly<Record<SizeCode, string>> = { FULL: 'Full', HALF: 'Half', QUARTER: 'Quarter', BEER_650: '650', BEER_330: '330', UNIT: 'Unit' };
 
 export const MAX_CASE_SIZE = 1000;
+/** Phase 26: "Case", "Packet", "Bottle", "Stick" — a label of 1–20 characters. */
+export const MAX_UNIT_NAME = 20;
 const MAX_NAME = 80;
 const CODE_PREFIX = /^[A-Z0-9]{2,10}$/;
 const BARCODE = /^\S{1,40}$/;
@@ -53,6 +55,9 @@ export interface NewSkuInput {
   purchasePricePaise?: Paise | null | undefined;
   caseSize: number;
   barcode?: string | null | undefined;
+  /** Default: the brand's existing size's, else Case / the center's selling unit (0019 trigger). */
+  purchaseUnitName?: string | null | undefined;
+  saleUnitName?: string | null | undefined;
 }
 
 export interface NewProductInput {
@@ -79,6 +84,8 @@ export interface SkuPatch {
   purchasePricePaise?: Paise | null | undefined;
   caseSize?: number | undefined;
   barcode?: string | null | undefined;
+  purchaseUnitName?: string | undefined;
+  saleUnitName?: string | undefined;
   isActive?: boolean | undefined;
 }
 
@@ -113,6 +120,9 @@ export interface NewItemInput {
   /** Default: by size (Kitchen 1). */
   caseSize?: number | undefined;
   barcode?: string | null | undefined;
+  /** Default: the brand's existing size's, else Case / the center's selling unit (0019 trigger). */
+  purchaseUnitName?: string | null | undefined;
+  saleUnitName?: string | null | undefined;
   /** Default: the brand's existing prefix, else suggested from the name. */
   codePrefix?: string | undefined;
   /** D5: optional opening stock, posted once as an OPENING movement (tracked departments only). */
@@ -186,6 +196,18 @@ export function checkCaseSize(value: number, name = 'caseSize'): number {
   return value;
 }
 
+/** Trimmed, single-spaced, 1–20 characters. */
+export function checkUnitName(value: string, name: string): string {
+  const text = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
+  if (text === '' || text.length > MAX_UNIT_NAME) throw new RangeError(`${name} must be 1–${MAX_UNIT_NAME} characters`);
+  return text;
+}
+
+/** As checkUnitName; null / undefined / blank → null (take the default). */
+function optionalUnitName(value: string | null | undefined, name: string): string | null {
+  return value === undefined || value === null || value.trim() === '' ? null : checkUnitName(value, name);
+}
+
 function checkBarcode(value: string | null | undefined, name: string): string | null {
   const text = value?.trim() ?? '';
   if (text === '') return null;
@@ -199,7 +221,9 @@ function checkPurchasePrice(value: Paise | null | undefined, name: string): Pais
   return value;
 }
 
-function checkNewSku(sku: NewSkuInput, name: string): NewSkuInput & { barcode: string | null; purchasePricePaise: Paise | null } {
+type CheckedSku = NewSkuInput & { barcode: string | null; purchasePricePaise: Paise | null; purchaseUnitName: string | null; saleUnitName: string | null };
+
+function checkNewSku(sku: NewSkuInput, name: string): CheckedSku {
   const sizeCode = checkSize(sku.sizeCode, `${name}.sizeCode`);
   assertPaise(sku.salePricePaise, `${name}.salePricePaise`);
   return {
@@ -208,6 +232,8 @@ function checkNewSku(sku: NewSkuInput, name: string): NewSkuInput & { barcode: s
     purchasePricePaise: checkPurchasePrice(sku.purchasePricePaise, `${name}.purchasePricePaise`),
     caseSize: checkCaseSize(sku.caseSize, `${name}.caseSize`),
     barcode: checkBarcode(sku.barcode, `${name}.barcode`),
+    purchaseUnitName: optionalUnitName(sku.purchaseUnitName, `${name}.purchaseUnitName`),
+    saleUnitName: optionalUnitName(sku.saleUnitName, `${name}.saleUnitName`),
   };
 }
 
@@ -224,7 +250,7 @@ interface CatalogRow extends SkuLookupRow {
 const CATALOG_SELECT = `
   SELECT p.id AS product_id, p.name AS product_name, p.category, p.department AS product_department, p.is_active AS product_active,
          k.id, k.sku_code, k.barcode, k.display_name, k.size_code, k.price_paise, k.purchase_price_paise,
-         k.case_size, k.is_active, coalesce(s.on_hand_qty, 0) AS on_hand_qty, p.department, d.name AS department_name, d.tracks_stock,
+         k.case_size, k.purchase_unit_name, k.sale_unit_name, k.is_active, coalesce(s.on_hand_qty, 0) AS on_hand_qty, p.department, d.name AS department_name, d.tracks_stock,
          k.item_category_id, ic.name AS item_category_name
     FROM products p
     JOIN departments d ON d.code = p.department
@@ -441,6 +467,8 @@ export class CatalogService {
     const purchase = checkPurchasePrice(input.purchasePricePaise, 'purchasePricePaise');
     if (input.caseSize !== undefined) checkCaseSize(input.caseSize);
     const barcode = checkBarcode(input.barcode, 'barcode');
+    const purchaseUnitName = optionalUnitName(input.purchaseUnitName, 'purchaseUnitName');
+    const saleUnitName = optionalUnitName(input.saleUnitName, 'saleUnitName');
     const opening = input.openingQty ?? 0;
     if (!Number.isSafeInteger(opening) || opening < 0 || opening > MAX_OPENING_QTY) {
       throw new RangeError(`openingQty must be a whole number of bottles from 0 to ${MAX_OPENING_QTY}`);
@@ -493,6 +521,8 @@ export class CatalogService {
             purchasePricePaise: purchase,
             caseSize: input.caseSize ?? (tracks ? DEFAULT_CASE_SIZE[sizeCode] : 1),
             barcode,
+            purchaseUnitName,
+            saleUnitName,
           },
           category.id,
         );
@@ -630,6 +660,8 @@ function checkSkuPatch(patch: SkuPatch): string | null | undefined {
     assertPaise(patch.purchasePricePaise, 'purchasePricePaise', { allowZero: true });
   }
   if (patch.caseSize !== undefined) checkCaseSize(patch.caseSize);
+  if (patch.purchaseUnitName !== undefined) checkUnitName(patch.purchaseUnitName, 'purchaseUnitName');
+  if (patch.saleUnitName !== undefined) checkUnitName(patch.saleUnitName, 'saleUnitName');
   return patch.barcode === undefined ? undefined : checkBarcode(patch.barcode, 'barcode');
 }
 
@@ -645,6 +677,8 @@ async function applySkuFields(tx: SqlClient, skuId: string, patch: SkuPatch, bar
     set('purchase_price_paise', patch.purchasePricePaise === null ? null : paiseParam(patch.purchasePricePaise));
   }
   if (patch.caseSize !== undefined) set('case_size', patch.caseSize);
+  if (patch.purchaseUnitName !== undefined) set('purchase_unit_name', checkUnitName(patch.purchaseUnitName, 'purchaseUnitName'));
+  if (patch.saleUnitName !== undefined) set('sale_unit_name', checkUnitName(patch.saleUnitName, 'saleUnitName'));
   if (barcode !== undefined) set('barcode', barcode);
   if (patch.isActive !== undefined) set('is_active', patch.isActive);
   if (sets.length > 0) await tx.query(`UPDATE skus SET ${sets.join(', ')} WHERE id = $1`, params);
@@ -691,13 +725,14 @@ async function insertSku(
   productId: string,
   productName: string,
   prefix: string,
-  sku: ReturnType<typeof checkNewSku>,
+  sku: CheckedSku,
   itemCategoryId: string | null = null,
 ): Promise<string> {
   const { id } = await one<{ id: string }>(
     tx,
-    `INSERT INTO skus (product_id, sku_code, barcode, size_code, display_name, price_paise, purchase_price_paise, case_size, item_category_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+    `INSERT INTO skus (product_id, sku_code, barcode, size_code, display_name, price_paise, purchase_price_paise, case_size, item_category_id,
+                       purchase_unit_name, sale_unit_name)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
     [
       productId,
       skuCodeFor(prefix, sku.sizeCode),
@@ -708,6 +743,8 @@ async function insertSku(
       sku.purchasePricePaise === null ? null : paiseParam(sku.purchasePricePaise),
       sku.caseSize,
       itemCategoryId,
+      sku.purchaseUnitName,
+      sku.saleUnitName,
     ],
   );
   return id;

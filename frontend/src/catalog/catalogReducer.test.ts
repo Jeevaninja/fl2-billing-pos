@@ -43,6 +43,8 @@ function item(id: string, brandName: string, cat: ItemCategory, over: Partial<Ca
     pricePaise: 1000_00n,
     purchasePricePaise: null,
     caseSize: 12,
+    purchaseUnitName: 'Case',
+    saleUnitName: 'Bottle',
     onHandQty: 10,
     isActive: true,
     department: cat.defaultDepartment,
@@ -129,6 +131,8 @@ describe('new item', () => {
       purchasePrice: 210_50n,
       caseSize: 64,
       barcode: null,
+      purchaseUnitName: 'Case',
+      saleUnitName: 'Bottle',
       codePrefix: 'MAMO',
       openingQty: 48,
       department: 'LIQUOR',
@@ -138,7 +142,14 @@ describe('new item', () => {
 
   it('adds a size to an existing brand: its prefix and department, no duplicate size', () => {
     const half = run(ready, { type: 'openNew', categoryId: 'c-beer' }, { type: 'field', field: 'name', value: '1848' }, { type: 'field', field: 'sale', value: '250' })
-    expect(existingBrand(ITEMS, '1848 ')).toEqual({ name: '1848', department: 'LIQUOR', sizes: ['FULL', 'QUARTER'], prefix: '1848' })
+    expect(existingBrand(ITEMS, '1848 ')).toEqual({
+      name: '1848',
+      department: 'LIQUOR',
+      sizes: ['FULL', 'QUARTER'],
+      prefix: '1848',
+      purchaseUnitName: 'Case',
+      saleUnitName: 'Bottle',
+    })
     const payload = newItemPayload(newForm(half), ITEMS, CATEGORIES)
     expect(payload).toMatchObject({ name: '1848', sizeCode: 'BEER_650' })
     expect(payload).not.toHaveProperty('codePrefix')
@@ -167,8 +178,42 @@ describe('new item', () => {
     const priced = run(base, { type: 'field', field: 'sale', value: '1,450' })
     expect(formError(priced, priced.form!)).toBeNull()
     expect(formError(priced, run(priced, { type: 'field', field: 'codePrefix', value: 'x' }).form!)).toMatch(/Code prefix/)
-    expect(formError(priced, run(priced, { type: 'field', field: 'caseSize', value: '1001' }).form!)).toMatch(/Case size/)
+    expect(formError(priced, run(priced, { type: 'field', field: 'caseSize', value: '1001' }).form!)).toMatch(/Units per case must be 1 to 1000/)
     expect(formError(priced, run(priced, { type: 'field', field: 'sale', value: '0' }).form!)).toMatch(/more than ₹0/)
+  })
+})
+
+describe('unit names (Phase 26)', () => {
+  it('defaults by center, follows an existing brand, and stops following once edited', () => {
+    const cigs = run(ready, { type: 'openNew', categoryId: 'c-qtr' }, { type: 'field', field: 'department', value: 'CIGARETTES' })
+    expect(newForm(cigs)).toMatchObject({ purchaseUnit: 'Case', saleUnit: 'Unit' })
+    expect(newForm(run(cigs, { type: 'field', field: 'department', value: 'COOL_DRINKS' }))).toMatchObject({ saleUnit: 'Bottle' })
+    const packet = run(
+      cigs,
+      { type: 'field', field: 'name', value: 'Gold Flake' },
+      { type: 'field', field: 'sale', value: '18' },
+      { type: 'field', field: 'caseSize', value: '10' },
+      { type: 'field', field: 'purchaseUnit', value: ' Packet ' },
+      { type: 'field', field: 'saleUnit', value: 'Stick' },
+    )
+    // Edited names survive a center change.
+    const moved = run(packet, { type: 'field', field: 'department', value: 'ANCILLARY' })
+    expect(newItemPayload(newForm(moved), ITEMS, CATEGORIES)).toMatchObject({ caseSize: 10, purchaseUnitName: 'Packet', saleUnitName: 'Stick' })
+    expect(formError(packet, run(packet, { type: 'field', field: 'saleUnit', value: '  ' }).form!)).toMatch(/Name the selling unit/)
+    expect(formError(packet, run(packet, { type: 'field', field: 'purchaseUnit', value: 'x'.repeat(21) }).form!)).toMatch(/Name the purchase unit/)
+    expect(formError(packet, run(packet, { type: 'field', field: 'caseSize', value: '0' }).form!)).toBe('Units per packet must be 1 to 1000')
+
+    // An existing brand's size takes its names.
+    const crate = { ...ITEMS[0]!, purchaseUnitName: 'Crate', saleUnitName: 'Bottle' }
+    const brandState = run({ ...ready, items: [crate] }, { type: 'openNew', categoryId: 'c-qtr' }, { type: 'field', field: 'name', value: crate.brandName })
+    expect(newForm(brandState)).toMatchObject({ purchaseUnit: 'Crate', saleUnit: 'Bottle' })
+  })
+
+  it('patches a changed unit name, trimmed', () => {
+    const state = run(ready, { type: 'openEdit', item: ITEMS[2]! })
+    expect(state.form).toMatchObject({ purchaseUnit: 'Case', saleUnit: 'Bottle' })
+    const edited = run(state, { type: 'field', field: 'purchaseUnit', value: ' Carton  ' }, { type: 'field', field: 'caseSize', value: '6' })
+    expect(itemPatch(edited.form as EditItemForm, CATEGORIES)).toEqual({ caseSize: 6, purchaseUnitName: 'Carton' })
   })
 })
 

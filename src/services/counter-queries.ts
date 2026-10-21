@@ -85,8 +85,11 @@ export interface SkuLookup {
   pricePaise: Paise;
   /** Default per-bottle cost for a GRN line; null when the catalog has none. */
   purchasePricePaise: Paise | null;
-  /** Sealed bottles per supplier case. */
+  /** Sealed bottles per supplier case: units per purchase unit (Phase 26). */
   caseSize: number;
+  /** What the item is bought in ("Case", "Packet") and sold as ("Bottle", "Stick"): labels only (0019). */
+  purchaseUnitName: string;
+  saleUnitName: string;
   onHandQty: number;
   isActive: boolean;
   /** The product's department / revenue center (0013 / 0016). */
@@ -210,6 +213,8 @@ export interface SkuLookupRow {
   price_paise: DbInt;
   purchase_price_paise: DbInt | null;
   case_size: number;
+  purchase_unit_name: string;
+  sale_unit_name: string;
   on_hand_qty: number;
   is_active: boolean;
   department: DepartmentCode;
@@ -221,7 +226,7 @@ export interface SkuLookupRow {
 
 /** SkuLookupRow columns over SKU_FROM. */
 export const SKU_COLUMNS = `k.id, k.sku_code, k.barcode, k.display_name, k.size_code, k.price_paise, k.purchase_price_paise, k.case_size,
-       k.is_active, coalesce(s.on_hand_qty, 0) AS on_hand_qty, p.department, d.name AS department_name, d.tracks_stock,
+       k.purchase_unit_name, k.sale_unit_name, k.is_active, coalesce(s.on_hand_qty, 0) AS on_hand_qty, p.department, d.name AS department_name, d.tracks_stock,
        k.item_category_id, ic.name AS item_category_name`;
 
 /** The joins SKU_COLUMNS reads from. */
@@ -241,6 +246,8 @@ export function mapSkuLookup(row: SkuLookupRow): SkuLookup {
     pricePaise: toPaise(row.price_paise),
     purchasePricePaise: toPaiseOrNull(row.purchase_price_paise),
     caseSize: row.case_size,
+    purchaseUnitName: row.purchase_unit_name,
+    saleUnitName: row.sale_unit_name,
     onHandQty: row.on_hand_qty,
     isActive: row.is_active,
     department: row.department,
@@ -384,15 +391,21 @@ export class CounterQueries {
    * SKUs for a picker (Purchase screen, and the Phase 21 billing search): an exact barcode, a SKU code
    * prefix, or a name containing every typed word in any order ("chi 65" → Chicken 65). Ranked: exact
    * barcode, exact SKU code, names starting with the text, then by name and size; inactive last.
-   * `activeOnly` leaves out inactive items and items of an inactive brand.
+   * `activeOnly` leaves out inactive items and items of an inactive brand; `department` keeps one
+   * revenue center's items (Phase 26: a center's stock purchase).
    */
-  async searchSkus(query: string, limit = DEFAULT_SKU_LIMIT, { activeOnly = false }: { activeOnly?: boolean } = {}): Promise<SkuLookup[]> {
+  async searchSkus(
+    query: string,
+    limit = DEFAULT_SKU_LIMIT,
+    { activeOnly = false, department = null }: { activeOnly?: boolean; department?: DepartmentCode | null } = {},
+  ): Promise<SkuLookup[]> {
     const text = query.trim().replace(/\s+/g, ' ');
     if (text === '') return [];
     const { rows } = await this.db.query<SkuLookupRow>(
       `SELECT ${SKU_COLUMNS}
          FROM ${SKU_FROM}
         WHERE (NOT $4 OR (k.is_active AND p.is_active))
+          AND ($5::text IS NULL OR p.department = $5)
           AND (k.barcode = $2 OR k.sku_code ILIKE $1 || '%'
                OR (SELECT bool_and(k.display_name ILIKE '%' || w || '%') FROM regexp_split_to_table($1, ' ') w))
         ORDER BY (k.barcode = $2) IS TRUE DESC, (upper(k.sku_code) = upper($2)) DESC, (k.display_name ILIKE $1 || '%') DESC,
@@ -400,7 +413,7 @@ export class CounterQueries {
                  array_position(ARRAY['FULL', 'HALF', 'QUARTER', 'BEER_650', 'BEER_330', 'UNIT'], k.size_code),
                  k.sku_code
         LIMIT $3`,
-      [likeLiteral(text), text, limit, activeOnly],
+      [likeLiteral(text), text, limit, activeOnly, department],
     );
     return rows.map(mapSkuLookup);
   }

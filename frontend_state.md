@@ -418,7 +418,7 @@ No element needs focus for scanning. Screen buttons use `keepFocus` (`onMouseDow
 - The cashier is fixed by the API's `FL2_CASHIER_ID`. The Phase 25 Super Admin sign-in gates the whole UI; Day Open is attributed to the PIN holder.
 - Held tabs that only have a member or waiter picked (nothing scanned) live in the browser only, so a reload drops them; tabs holding a bill are restored from `openBills`. A bill opened in another browser window shows up only on the next resume (first load or after being offline).
 - The headless-Chrome end-to-end scripts used to verify Phases 4, 9, 10 and 25 are not in the repo. Phase 25's API-level journeys are in `test/e2e/`.
-- Catalog edits are open to any signed-in admin (Phase 25); there are no per-role permissions below that. GRN unit cost is per bottle; there's no per-case price entry.
+- Catalog edits are open to any signed-in admin (Phase 25); there are no per-role permissions below that. GRN and center stock-purchase unit cost is per selling unit (Phase 26 D6); the per-pack figure is shown, never entered.
 
 ## Phase 24 — Reporting suite (Settings → Reports)
 
@@ -470,3 +470,40 @@ Plan and QA log: `docs/ui/phase25-auth-polish-qa-plan.md`.
 **Code splitting**
 - `lib/lazyScreen.tsx` lazy-loads every back-office screen. Dashboard and Billing stay in the 359 kB startup
   chunk.
+
+## Phase 26 — Bulk-to-unit purchase units (Catalog, Revenue Centers, Purchase)
+
+Plan: `docs/ui/phase26-bulk-unit-purchase-plan.md`.
+
+**Catalog** (`components/CatalogScreen.tsx`, `catalog/catalogReducer.ts`)
+- For stock-tracked items, the old "Per case" field became the **Purchase unit** block: Bought as
+  (Case / Packet / Carton / Box / Crate chips, or free text), *N {sold units} per {unit}* (= `caseSize`), and
+  Sold as (Bottle / Stick / Packet / Can / Unit). A live hint reads "1 Packet = 10 Sticks — buying 2 Packets adds
+  20 sticks to stock."
+- Untracked centers (Kitchen, AC Charges) no longer show a case size.
+- New-item unit names follow an existing brand (its first size's) or the center (Case + Bottle for Liquor, Cool
+  Drinks and Water; Case + Unit otherwise) until the operator edits them (`unitsTouched`). Each name is 1–20
+  characters. The sale price label reads "Sale ₹ per Stick".
+- The list column is "Bought as": `Packet × 10`.
+
+**Revenue Centers → New purchase** (`components/RevenueCentersScreen.tsx`, `components/centers/StockPurchaseModal.tsx`,
+pure `centers/stockPurchase.ts`)
+- A **Stock items | Supplies** switch (`PurchaseModeToggle`). Ins opens Stock items for a stock-tracked center and
+  Supplies otherwise; switching keeps the center, vendor and payer.
+- Stock items: center chips (stock-tracked centers only; changing center clears the lines), vendor, an optional
+  Bill no. (blank → `CIGARETTES-20261021-01`), Drawer / Outside (Drawer disabled during a peak).
+- Item search uses `api.searchSkus(q, department)` (debounced 150 ms).
+- Keyboard: item ↵ → {Packets} ↵ → loose {sticks} ↵ → cost ↵ stages a line; F9 saves.
+- The live line reads "= 20 sticks into stock · ₹150.00 per packet · line ₹300.00". Staged lines read
+  "2 Packets × 10 = 20 Sticks". The same item at the same cost merges, carrying loose units into packs.
+- Saving calls `api.recordCenterStockPurchase`. The flash reads "Cigarettes: 20 sticks into stock (1 item, ₹300.00,
+  bill …) · paid from the drawer".
+- The center tab's purchases panel lists today's **stock receipts** (STOCK chip, bill no., drawer / outside) above
+  the supply purchases. The P&L purchases hint now counts drawer stock in "from the drawer".
+
+**Elsewhere**
+- Purchase (GRN): field labels and totals follow the picked item's units ("Packets", "Loose sticks",
+  "= 13 sticks").
+- Day End and the peak start baseline show a "Stock bought from the drawer" row when it is non-zero.
+- `lib/ui.ts` `unitLabel(name, count)` makes light plurals (Case → Cases, Box → Boxes).
+

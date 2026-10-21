@@ -530,6 +530,54 @@ describe('local HTTP API', () => {
     expect(active).toEqual(['HRUM-F', 'HRUM-H']);
   });
 
+  it('Phase 26: unit names on catalog items, a center search and a bulk-to-unit stock purchase', async () => {
+    const { call } = await start();
+    const others = (await call('GET', '/api/item-categories')).body.find((c: { name: string }) => c.name === 'OTHERS');
+    const gold = await call('POST', '/api/catalog/items', {
+      categoryId: others.id,
+      name: 'Gold Flake',
+      department: 'CIGARETTES',
+      salePrice: '1800',
+      caseSize: 10,
+      purchaseUnitName: 'Packet',
+      saleUnitName: 'Stick',
+    });
+    expect(gold).toMatchObject({ status: 201, body: { purchaseUnitName: 'Packet', saleUnitName: 'Stick', caseSize: 10 } });
+    expect(await call('PATCH', `/api/catalog/items/${gold.body.id}`, { saleUnitName: 'Cigarette' })).toMatchObject({ status: 200, body: { saleUnitName: 'Cigarette' } });
+    expect(await call('PATCH', `/api/catalog/items/${gold.body.id}`, { purchaseUnitName: 'x'.repeat(21) })).toMatchObject({ status: 400 });
+
+    // Only the center's items come back for its purchase modal.
+    expect((await call('GET', '/api/skus?q=gold&department=CIGARETTES')).body.map((s: { skuCode: string }) => s.skuCode)).toEqual([gold.body.skuCode]);
+    expect((await call('GET', '/api/skus?q=gold&department=COOL_DRINKS')).body).toEqual([]);
+    expect(await call('GET', '/api/skus?q=gold&department=bad-code')).toMatchObject({ status: 400 });
+
+    const line = { skuId: gold.body.id, cases: 2, caseSize: 10, unitCost: '1500' };
+    const bought = await call('POST', '/api/revenue-centers/stock-purchases', { department: 'CIGARETTES', paidFrom: 'DRAWER', lines: [line] });
+    expect(bought).toMatchObject({
+      status: 201,
+      body: {
+        receipt: { department: 'CIGARETTES', paidFrom: 'DRAWER', invoiceNo: expect.stringMatching(/^CIGARETTES-\d{8}-01$/), bottles: 20, totalCostPaise: '30000' },
+        lines: [{ quantity: 20, cases: 2, caseSize: 10, looseBottles: 0, purchaseUnitName: 'Packet' }],
+      },
+    });
+    expect((await call('GET', `/api/skus/lookup?code=${gold.body.skuCode}`)).body).toMatchObject({ onHandQty: 20 });
+    expect((await call('GET', '/api/day-end')).body.breakdown).toMatchObject({ stockPurchasesDrawerPaise: '30000' });
+    expect((await call('GET', '/api/revenue-centers/CIGARETTES/summary')).body).toMatchObject({ stockDrawerPaise: '30000', stockReceipts: [{ receipt: { id: bought.body.receipt.id } }] });
+
+    expect(await call('POST', '/api/revenue-centers/stock-purchases', { department: 'CIGARETTES', paidFrom: 'CARD', lines: [line] })).toMatchObject({ status: 400 });
+    expect(await call('POST', '/api/revenue-centers/stock-purchases', { paidFrom: 'OUTSIDE', lines: [line] })).toMatchObject({ status: 400 });
+    expect(await call('POST', '/api/revenue-centers/stock-purchases', { department: 'CIGARETTES', paidFrom: 'OUTSIDE', lines: [{ ...line, looseUnits: 10 }] })).toMatchObject({ status: 400 });
+    expect(await call('POST', '/api/revenue-centers/stock-purchases', { department: 'COOL_DRINKS', paidFrom: 'OUTSIDE', lines: [line] })).toMatchObject({
+      status: 409,
+      body: { error: { code: 'PS002' } },
+    });
+    expect(await call('POST', '/api/revenue-centers/stock-purchases', { department: 'NOPE', paidFrom: 'OUTSIDE', lines: [line] })).toMatchObject({ status: 404 });
+    expect(await call('POST', '/api/revenue-centers/stock-purchases', { department: 'CIGARETTES', invoiceNo: bought.body.receipt.invoiceNo, paidFrom: 'OUTSIDE', lines: [line] })).toMatchObject({
+      status: 409,
+      body: { error: { code: 'PS011' } },
+    });
+  });
+
   it('searches members and returns 404 for unknown SKUs and bills', async () => {
     const { db, call } = await start();
     await db.query(`INSERT INTO members (membership_no, display_name) VALUES ('M-1', 'Asha'), ('M-2', 'Ravi')`);

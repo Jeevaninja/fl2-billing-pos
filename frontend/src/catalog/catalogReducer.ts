@@ -13,6 +13,16 @@ import { SIZE_ORDER, sizeNameFor } from '../lib/ui'
 export const DEFAULT_CASE_SIZE: Readonly<Record<SizeCode, number>> = { FULL: 12, HALF: 32, QUARTER: 64, BEER_650: 12, BEER_330: 24, UNIT: 1 }
 export const MAX_CASE_SIZE = 1000
 export const MAX_OPENING_QTY = 100_000
+/** Phase 26: unit labels — 1–20 characters; quick choices in the item form. */
+export const MAX_UNIT_NAME = 20
+export const PURCHASE_UNIT_CHOICES = ['Case', 'Packet', 'Carton', 'Box', 'Crate'] as const
+export const SALE_UNIT_CHOICES = ['Bottle', 'Stick', 'Packet', 'Can', 'Unit'] as const
+
+/** A new brand's selling unit: bottles in the bottle centers, else "Unit" (as the server defaults). */
+export function defaultSaleUnit(department: DepartmentCode): string {
+  return department === 'LIQUOR' || department === 'COOL_DRINKS' || department === 'WATER' ? 'Bottle' : 'Unit'
+}
+
 const SIZE_SUFFIX: Readonly<Record<SizeCode, string>> = { FULL: 'F', HALF: 'H', QUARTER: 'Q', BEER_650: '650', BEER_330: '330', UNIT: 'U' }
 const MAX_NAME = 80
 
@@ -61,6 +71,9 @@ export interface BrandInfo {
   sizes: SizeCode[]
   /** Its SKU code prefix ("1848" from "1848-Q"). */
   prefix: string
+  /** Its first size's unit names (a new size takes them). */
+  purchaseUnitName: string
+  saleUnitName: string
 }
 
 /** The existing brand a typed name belongs to (case-insensitive), from the loaded items. */
@@ -71,7 +84,14 @@ export function existingBrand(items: readonly CatalogItem[], name: string): Bran
   const first = mine[0]
   if (!first) return null
   const dash = first.skuCode.lastIndexOf('-')
-  return { name: first.brandName, department: first.department, sizes: mine.map((i) => i.sizeCode), prefix: dash > 0 ? first.skuCode.slice(0, dash) : '' }
+  return {
+    name: first.brandName,
+    department: first.department,
+    sizes: mine.map((i) => i.sizeCode),
+    prefix: dash > 0 ? first.skuCode.slice(0, dash) : '',
+    purchaseUnitName: first.purchaseUnitName,
+    saleUnitName: first.saleUnitName,
+  }
 }
 
 // ── Forms ──
@@ -86,6 +106,10 @@ export interface NewItemForm {
   caseSize: string
   /** Once edited, the case size stops following the size. */
   caseTouched: boolean
+  /** Bought as ("Case") / sold as ("Bottle"); they follow the brand or center until edited. */
+  purchaseUnit: string
+  saleUnit: string
+  unitsTouched: boolean
   barcode: string
   codePrefix: string
   /** Once edited, the prefix stops following the name. */
@@ -104,6 +128,8 @@ export interface EditItemForm {
   sale: string
   buy: string
   caseSize: string
+  purchaseUnit: string
+  saleUnit: string
   barcode: string
   isActive: boolean
   /** Nominal ml of one sealed bottle, for the excise ML summary ('' = not a bottle). */
@@ -125,7 +151,7 @@ export const EXCISE_GROUP_OPTIONS: ReadonlyArray<{ value: ExciseGroup; label: st
 export const MAX_VOLUME_ML = 5000
 
 export type ItemField =
-  | { field: 'categoryId' | 'name' | 'sale' | 'buy' | 'caseSize' | 'barcode' | 'codePrefix' | 'opening' | 'volume'; value: string }
+  | { field: 'categoryId' | 'name' | 'sale' | 'buy' | 'caseSize' | 'purchaseUnit' | 'saleUnit' | 'barcode' | 'codePrefix' | 'opening' | 'volume'; value: string }
   | { field: 'exciseGroup'; value: ExciseGroup | '' }
   | { field: 'sizeCode'; value: SizeCode }
   | { field: 'department'; value: DepartmentCode }
@@ -254,10 +280,15 @@ interface ParsedFields {
   salePrice: Paise
   purchasePrice: Paise | null
   caseSize: number
+  purchaseUnitName: string
+  saleUnitName: string
   barcode: string | null
 }
 
-function parseFields(f: { sale: string; buy: string; caseSize: string; barcode: string }, department: DepartmentCode): ParsedFields | string {
+function parseFields(
+  f: { sale: string; buy: string; caseSize: string; purchaseUnit: string; saleUnit: string; barcode: string },
+  department: DepartmentCode,
+): ParsedFields | string {
   const sale = parseRupeesToPaise(f.sale)
   if (f.sale.trim() === '' || sale === null) return 'Enter the sale price'
   if (sale <= 0n) return 'The sale price must be more than ₹0'
@@ -268,11 +299,15 @@ function parseFields(f: { sale: string; buy: string; caseSize: string; barcode: 
   }
   const caseSize = department === 'KITCHEN' ? 1 : Number(f.caseSize)
   if (department !== 'KITCHEN' && (!/^\d+$/.test(f.caseSize.trim()) || caseSize < 1 || caseSize > MAX_CASE_SIZE)) {
-    return `Case size must be 1 to ${MAX_CASE_SIZE} bottles`
+    return `Units per ${tidy(f.purchaseUnit).toLowerCase() || 'case'} must be 1 to ${MAX_CASE_SIZE}`
   }
+  const purchaseUnitName = tidy(f.purchaseUnit)
+  const saleUnitName = tidy(f.saleUnit)
+  if (purchaseUnitName === '' || purchaseUnitName.length > MAX_UNIT_NAME) return `Name the purchase unit (e.g. Case, Packet), up to ${MAX_UNIT_NAME} characters`
+  if (saleUnitName === '' || saleUnitName.length > MAX_UNIT_NAME) return `Name the selling unit (e.g. Bottle, Stick), up to ${MAX_UNIT_NAME} characters`
   const barcode = f.barcode.trim()
   if (/\s/.test(barcode) || barcode.length > 40) return 'Barcode must be up to 40 characters with no spaces'
-  return { salePrice: sale, purchasePrice, caseSize, barcode: barcode === '' ? null : barcode }
+  return { salePrice: sale, purchasePrice, caseSize, purchaseUnitName, saleUnitName, barcode: barcode === '' ? null : barcode }
 }
 
 function checkName(name: string): string | null {
@@ -315,6 +350,8 @@ export function newItemPayload(form: NewItemForm, items: readonly CatalogItem[],
     purchasePrice: parsed.purchasePrice,
     caseSize: parsed.caseSize,
     barcode: parsed.barcode,
+    purchaseUnitName: parsed.purchaseUnitName,
+    saleUnitName: parsed.saleUnitName,
     ...(prefix ? { codePrefix: prefix } : {}),
     ...(openingQty ? { openingQty } : {}),
     ...(brand ? {} : { department }),
@@ -339,6 +376,8 @@ export function itemPatch(form: EditItemForm, categories: readonly ItemCategory[
   if (parsed.salePrice !== item.pricePaise) patch.salePrice = parsed.salePrice
   if (parsed.purchasePrice !== item.purchasePricePaise) patch.purchasePrice = parsed.purchasePrice
   if (parsed.caseSize !== item.caseSize) patch.caseSize = parsed.caseSize
+  if (parsed.purchaseUnitName !== item.purchaseUnitName) patch.purchaseUnitName = parsed.purchaseUnitName
+  if (parsed.saleUnitName !== item.saleUnitName) patch.saleUnitName = parsed.saleUnitName
   if (parsed.barcode !== item.barcode) patch.barcode = parsed.barcode
   if (form.isActive !== item.isActive) patch.isActive = form.isActive
   const volumeText = form.volume.trim()
@@ -380,6 +419,9 @@ function newItemForm(category: ItemCategory | undefined): NewItemForm {
     buy: '',
     caseSize: sizeCode ? String(defaultCaseSize(sizeCode, department)) : '',
     caseTouched: false,
+    purchaseUnit: 'Case',
+    saleUnit: defaultSaleUnit(department),
+    unitsTouched: false,
     barcode: '',
     codePrefix: '',
     prefixTouched: false,
@@ -398,6 +440,8 @@ function editItemForm(item: CatalogItem): EditItemForm {
     sale: paiseToRupeeInput(item.pricePaise),
     buy: item.purchasePricePaise === null ? '' : paiseToRupeeInput(item.purchasePricePaise),
     caseSize: String(item.caseSize),
+    purchaseUnit: item.purchaseUnitName,
+    saleUnit: item.saleUnitName,
     barcode: item.barcode ?? '',
     isActive: item.isActive,
     volume: item.volumeMl === null ? '' : String(item.volumeMl),
@@ -405,11 +449,17 @@ function editItemForm(item: CatalogItem): EditItemForm {
   }
 }
 
-/** Keeps the size (and its case size) consistent with the department the new item will have. */
-function settleSize(form: NewItemForm, department: DepartmentCode): NewItemForm {
+/**
+ * Keeps the size (and its case size) consistent with the department the new item will have, and
+ * untouched unit names on the brand's (an existing brand) or the center's defaults.
+ */
+function settleSize(form: NewItemForm, department: DepartmentCode, brand: BrandInfo | null = null): NewItemForm {
   const sizeCode = form.sizeCode && sizesFor(department).includes(form.sizeCode) ? form.sizeCode : null
   const caseSize = form.caseTouched || !sizeCode ? form.caseSize : String(defaultCaseSize(sizeCode, department))
-  return { ...form, sizeCode, caseSize }
+  const units = form.unitsTouched
+    ? {}
+    : { purchaseUnit: brand?.purchaseUnitName ?? 'Case', saleUnit: brand?.saleUnitName ?? defaultSaleUnit(department) }
+  return { ...form, sizeCode, caseSize, ...units }
 }
 
 function applyField(state: CatalogState, form: ItemForm, change: ItemField): ItemForm {
@@ -423,6 +473,9 @@ function applyField(state: CatalogState, form: ItemForm, change: ItemField): Ite
         return { ...form, [change.field]: cleanInput(change.field, change.value) }
       case 'caseSize':
         return { ...form, caseSize: cleanInput('caseSize', change.value) }
+      case 'purchaseUnit':
+      case 'saleUnit':
+        return { ...form, [change.field]: change.value.slice(0, MAX_UNIT_NAME + 5) }
       case 'isActive':
         return { ...form, isActive: change.value }
       case 'volume':
@@ -439,19 +492,25 @@ function applyField(state: CatalogState, form: ItemForm, change: ItemField): Ite
       if (!category) return form
       const department = form.departmentTouched ? form.department : category.defaultDepartment
       const next: NewItemForm = { ...form, categoryId: category.id, department, sizeCode: category.defaultSizeCode ?? form.sizeCode, caseTouched: false }
-      return settleSize(next, existingBrand(state.items, form.name)?.department ?? department)
+      const brand = existingBrand(state.items, form.name)
+      return settleSize(next, brand?.department ?? department, brand)
     }
     case 'name': {
       const brand = existingBrand(state.items, change.value)
       const codePrefix = brand ? brand.prefix : form.prefixTouched ? form.codePrefix : suggestPrefix(change.value)
-      return settleSize({ ...form, name: change.value, codePrefix }, brand?.department ?? form.department)
+      return settleSize({ ...form, name: change.value, codePrefix }, brand?.department ?? form.department, brand)
     }
     case 'sizeCode': {
       const department = effectiveDepartment(form, state.items)
       return { ...form, sizeCode: change.value, caseSize: form.caseTouched ? form.caseSize : String(defaultCaseSize(change.value, department)) }
     }
-    case 'department':
-      return settleSize({ ...form, department: change.value, departmentTouched: true }, existingBrand(state.items, form.name)?.department ?? change.value)
+    case 'department': {
+      const brand = existingBrand(state.items, form.name)
+      return settleSize({ ...form, department: change.value, departmentTouched: true }, brand?.department ?? change.value, brand)
+    }
+    case 'purchaseUnit':
+    case 'saleUnit':
+      return { ...form, [change.field]: change.value.slice(0, MAX_UNIT_NAME + 5), unitsTouched: true }
     case 'codePrefix':
       return { ...form, codePrefix: change.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10), prefixTouched: true }
     case 'caseSize':

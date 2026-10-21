@@ -78,3 +78,9 @@ const BADGE_TONE: Readonly<Record<BadgeTone, string>> = {
 export function badgeClass(tone: BadgeTone = 'neutral'): string {
   return `inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-bold tracking-wide uppercase ${BADGE_TONE[tone]}`
 }
+
+/** Phase 26 unit labels with a light plural for counts: "1 Case", "2 Packets", "3 Boxes". */
+export function unitLabel(name: string, count: number): string {
+  if (count === 1 || /s$/i.test(name)) return name
+  return /(x|ch|sh)$/i.test(name) ? `${name}es` : `${name}s`
+}

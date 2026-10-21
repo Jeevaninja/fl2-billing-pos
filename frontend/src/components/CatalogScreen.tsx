@@ -17,6 +17,8 @@ import {
   initialCatalogState,
   itemPatch,
   newItemPayload,
+  PURCHASE_UNIT_CHOICES,
+  SALE_UNIT_CHOICES,
   selectedItem,
   sizeChoices,
   skuCodePreview,
@@ -30,14 +32,14 @@ import {
 import { beep } from '../lib/beep'
 import { formatPaise } from '../lib/money'
 import { departmentChip, departmentName } from '../lib/departments'
-import { FOCUS_RING, keepFocus, sizeNameFor } from '../lib/ui'
+import { FOCUS_RING, keepFocus, sizeNameFor, unitLabel } from '../lib/ui'
 import { Kbd, LiveClock } from './ui'
 
 interface CatalogScreenProps {
   onExit: () => void
 }
 
-const GRID = 'grid grid-cols-[7.5rem_1fr_9rem_8rem_8rem_4.5rem_6.5rem_6rem_3.5rem] items-center gap-3'
+const GRID = 'grid grid-cols-[7.5rem_1fr_9rem_8rem_8rem_7rem_6.5rem_6rem_3.5rem] items-center gap-3'
 
 /**
  * Inventory Catalog (Phase 20): items listed under their item category, like the TASMAC / FL2 stock
@@ -243,7 +245,7 @@ export default function CatalogScreen({ onExit }: CatalogScreenProps) {
             <span>Size</span>
             <span className="text-right">Sale</span>
             <span className="text-right">Purchase</span>
-            <span className="text-right">Case</span>
+            <span className="text-right">Bought as</span>
             <span className="text-right">On hand</span>
             <span>Status</span>
             <span />
@@ -287,7 +289,16 @@ export default function CatalogScreen({ onExit }: CatalogScreenProps) {
                   <span className="truncate text-sm text-zinc-300">{sizeNameFor(item.sizeCode, item.department)}</span>
                   <span className="text-right font-mono font-bold tabular-nums">{formatPaise(item.pricePaise)}</span>
                   <span className="text-right font-mono tabular-nums text-zinc-300">{item.purchasePricePaise === null ? '—' : formatPaise(item.purchasePricePaise)}</span>
-                  <span className="text-right font-mono tabular-nums">{item.tracksStock ? item.caseSize : '—'}</span>
+                  <span className="truncate text-right tabular-nums" title={item.tracksStock ? `1 ${item.purchaseUnitName} = ${item.caseSize} ${unitLabel(item.saleUnitName, item.caseSize)}` : undefined}>
+                    {item.tracksStock ? (
+                      <>
+                        <span className="text-sm text-zinc-400">{item.purchaseUnitName} × </span>
+                        <span className="font-mono">{item.caseSize}</span>
+                      </>
+                    ) : (
+                      '—'
+                    )}
+                  </span>
                   <span className={`text-right tabular-nums ${item.tracksStock ? 'font-mono font-bold' : 'text-xs text-zinc-500'}`}>{item.tracksStock ? item.onHandQty : 'not tracked'}</span>
                   <span>{live ? <span className="text-sm font-semibold text-emerald-400">● active</span> : <InactiveBadge />}</span>
                   <RowButton label={`Edit ${item.displayName}`} onClick={() => dispatch({ type: 'openEdit', item })} iconOnly>
@@ -393,6 +404,7 @@ function NewItemFields({ state, form, conflict, onField }: FieldsProps<NewItemFo
   const department = effectiveDepartment(form, state.items)
   const choices = category ? sizeChoices(category, department) : []
   const kitchen = department === 'KITCHEN'
+  const tracks = state.departments.find((d) => d.code === department)?.tracksStock ?? !kitchen
   const prefix = brand ? brand.prefix : form.codePrefix
   return (
     <div className="flex flex-col gap-4">
@@ -447,17 +459,19 @@ function NewItemFields({ state, form, conflict, onField }: FieldsProps<NewItemFo
 
       {!brand && <DepartmentPicker departments={state.departments} value={form.department} onChange={(value) => onField({ field: 'department', value })} />}
 
-      <div className={`grid gap-4 ${kitchen ? 'grid-cols-3' : 'grid-cols-5'}`}>
-        <TextInput label="Sale ₹" value={form.sale} onChange={(value) => onField({ field: 'sale', value })} inputMode="decimal" mono />
+      <div className={`grid gap-4 ${tracks ? 'grid-cols-4' : 'grid-cols-3'}`}>
+        <TextInput label={tracks ? `Sale ₹ per ${form.saleUnit.trim() || 'unit'}` : 'Sale ₹'} value={form.sale} onChange={(value) => onField({ field: 'sale', value })} inputMode="decimal" mono />
         <TextInput label="Purchase ₹ (opt.)" value={form.buy} onChange={(value) => onField({ field: 'buy', value })} inputMode="decimal" mono />
-        {!kitchen && <TextInput label="Per case" value={form.caseSize} onChange={(value) => onField({ field: 'caseSize', value })} inputMode="numeric" mono />}
         <TextInput label="Barcode (opt.)" value={form.barcode} onChange={(value) => onField({ field: 'barcode', value })} invalid={conflict === 'barcode'} maxLength={40} mono />
-        {!kitchen && <TextInput label="Opening stock" value={form.opening} onChange={(value) => onField({ field: 'opening', value })} inputMode="numeric" placeholder="0" mono />}
+        {tracks && <TextInput label="Opening stock" value={form.opening} onChange={(value) => onField({ field: 'opening', value })} inputMode="numeric" placeholder="0" mono />}
       </div>
+      {tracks && <UnitFields purchaseUnit={form.purchaseUnit} saleUnit={form.saleUnit} caseSize={form.caseSize} onField={onField} />}
       <p className="text-sm text-zinc-400">
         {kitchen
           ? 'Kitchen items are not stock-tracked: they sell without stock and print a KOT to the kitchen.'
-          : 'Opening stock is entered once, now (e.g. at go-live); after that stock comes in only through Purchase. The purchase price pre-fills the GRN unit cost.'}
+          : tracks
+            ? 'Opening stock is entered once, now (e.g. at go-live), in selling units; after that stock comes in only through Purchase. The purchase price (per selling unit) pre-fills the purchase cost.'
+            : 'This center does not track stock: items sell without a shelf count.'}
       </p>
     </div>
   )
@@ -485,12 +499,12 @@ function EditItemFields({ state, form, conflict, onField }: FieldsProps<EditItem
         </p>
       )}
       <CategoryPicker categories={state.categories} value={form.categoryId} onChange={(value) => onField({ field: 'categoryId', value })} />
-      <div className={`grid gap-4 ${kitchen ? 'grid-cols-3' : 'grid-cols-4'}`}>
-        <TextInput label="Sale ₹" value={form.sale} onChange={(value) => onField({ field: 'sale', value })} inputMode="decimal" mono />
+      <div className="grid grid-cols-3 gap-4">
+        <TextInput label={item.tracksStock ? `Sale ₹ per ${form.saleUnit.trim() || 'unit'}` : 'Sale ₹'} value={form.sale} onChange={(value) => onField({ field: 'sale', value })} inputMode="decimal" mono />
         <TextInput label="Purchase ₹ (opt.)" value={form.buy} onChange={(value) => onField({ field: 'buy', value })} inputMode="decimal" mono />
-        {!kitchen && <TextInput label="Per case" value={form.caseSize} onChange={(value) => onField({ field: 'caseSize', value })} inputMode="numeric" mono />}
         <TextInput label="Barcode (opt.)" value={form.barcode} onChange={(value) => onField({ field: 'barcode', value })} invalid={conflict === 'barcode'} maxLength={40} mono />
       </div>
+      {item.tracksStock && <UnitFields purchaseUnit={form.purchaseUnit} saleUnit={form.saleUnit} caseSize={form.caseSize} onField={onField} />}
       {!kitchen && (
         <div className="grid grid-cols-[10rem_1fr] items-end gap-4">
           <TextInput label="Bottle ml (excise)" value={form.volume} onChange={(value) => onField({ field: 'volume', value })} inputMode="numeric" placeholder="none" mono />
@@ -565,6 +579,59 @@ function DepartmentPicker({ departments, value, onChange }: { departments: Depar
 
 function DepartmentChip({ department, name }: { department: DepartmentCode; name: string }) {
   return <span className={`rounded border px-2 py-0.5 text-xs font-bold tracking-widest uppercase ${departmentChip(department)}`}>{name}</span>
+}
+
+/**
+ * Phase 26: how a stock-tracked item is bought and sold — "Bought as Case of 24 Bottles". The count
+ * is the item's case size (units per purchase unit); both names are labels with quick chips.
+ */
+function UnitFields({ purchaseUnit, saleUnit, caseSize, onField }: { purchaseUnit: string; saleUnit: string; caseSize: string; onField: (change: ItemField) => void }) {
+  const pack = purchaseUnit.trim() || 'case'
+  const unit = saleUnit.trim() || 'unit'
+  const count = /^\d+$/.test(caseSize) ? Number(caseSize) : null
+  return (
+    <fieldset className="rounded-md border border-zinc-700 px-4 pt-2 pb-3">
+      <legend className="px-1 text-sm font-semibold text-zinc-300">Purchase unit</legend>
+      <div className="grid grid-cols-[1fr_9rem_1fr] items-start gap-4">
+        <div className="flex flex-col gap-2">
+          <TextInput label="Bought as" value={purchaseUnit} onChange={(value) => onField({ field: 'purchaseUnit', value })} maxLength={20} placeholder="Case" />
+          <UnitChips label="Bought as" choices={PURCHASE_UNIT_CHOICES} value={purchaseUnit} onPick={(value) => onField({ field: 'purchaseUnit', value })} />
+        </div>
+        <TextInput label={`${unitLabel(unit, 2)} per ${pack.toLowerCase()}`} value={caseSize} onChange={(value) => onField({ field: 'caseSize', value })} inputMode="numeric" mono />
+        <div className="flex flex-col gap-2">
+          <TextInput label="Sold as" value={saleUnit} onChange={(value) => onField({ field: 'saleUnit', value })} maxLength={20} placeholder="Bottle" />
+          <UnitChips label="Sold as" choices={SALE_UNIT_CHOICES} value={saleUnit} onPick={(value) => onField({ field: 'saleUnit', value })} />
+        </div>
+      </div>
+      <p className="mt-2 text-sm text-sky-200">
+        {count !== null && count >= 1
+          ? `1 ${pack} = ${count} ${unitLabel(unit, count)} — buying 2 ${unitLabel(pack, 2)} adds ${2 * count} ${unitLabel(unit, 2 * count).toLowerCase()} to stock.`
+          : `Enter how many ${unitLabel(unit, 2).toLowerCase()} come in one ${pack.toLowerCase()}.`}
+      </p>
+    </fieldset>
+  )
+}
+
+function UnitChips({ label, choices, value, onPick }: { label: string; choices: readonly string[]; value: string; onPick: (value: string) => void }) {
+  return (
+    <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label={`${label} choices`}>
+      {choices.map((choice) => {
+        const on = value.trim().toLowerCase() === choice.toLowerCase()
+        return (
+          <button
+            key={choice}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            onClick={() => onPick(choice)}
+            className={`min-h-10 rounded border-2 px-3 text-sm font-bold ${on ? 'border-teal-400 bg-teal-400 text-zinc-950' : 'border-zinc-700 text-zinc-300 hover:border-zinc-400'} ${FOCUS_RING}`}
+          >
+            {choice}
+          </button>
+        )
+      })}
+    </div>
+  )
 }
 
 function ChoiceChip({ on, onClick, invalid = false, children }: { on: boolean; onClick: () => void; invalid?: boolean; children: ReactNode }) {

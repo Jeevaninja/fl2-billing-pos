@@ -9,6 +9,8 @@
  *   gross      = sales − expenses − purchases
  *
  * Supply purchases paid from the drawer also lower Day End's expected cash (pos_day_expected_cash).
+ * Phase 26: a stock-tracked center buys its own stock in bulk units (2 Cases × 24 = 48 bottles) through
+ * recordStockPurchase, which posts a real GRN tagged with the center (drawer or outside).
  */
 import type { SqlClient, SqlDatabase } from '../db/client.js';
 import { NotFoundError, withPosErrors } from '../db/errors.js';
@@ -16,6 +18,7 @@ import { assertPaise, type DbInt, type Paise, paiseParam, toPaise } from '../dom
 import type { DepartmentCode, DepartmentStation } from '../domain/types.js';
 import { COUNTED_BILLS, DayEndService, getDay, getDayFigures, type DaySummary, type ExpenseEntry } from './day-end.service.js';
 import { checkDepartmentCode, getDepartment } from './department.service.js';
+import { insertReceipt, loadReceipt, type ReceiptPaidFrom, type StockReceiptDetail } from './purchase.service.js';
 import { maybeOne, one } from './rows.js';
 
 export type PurchasePaidFrom = 'DRAWER' | 'OUTSIDE';
@@ -67,6 +70,29 @@ export interface CenterPurchaseEntry extends CenterPurchase {
   voidedAt: Date | null;
 }
 
+/** One item bought in purchase units: units = cases × caseSize + looseUnits. */
+export interface CenterStockLineInput {
+  skuId: string;
+  /** Whole purchase units (Cases, Packets…). */
+  cases: number;
+  /** Single units on top, fewer than one purchase unit. */
+  looseUnits: number;
+  /** The item's units per purchase unit as the manager saw it; PS002 if the catalog has changed since. */
+  caseSize: number;
+  /** Cost of one selling unit (D6), 0 for free / scheme units. */
+  unitCostPaise: Paise;
+}
+
+export interface CenterStockPurchaseInput {
+  /** An active, stock-tracked center other than Liquor; every line must be one of its items. */
+  department: DepartmentCode;
+  /** Blank: numbered `<CENTER>-<yyyymmdd>-NN` (D4). */
+  invoiceNo?: string | null | undefined;
+  vendorName?: string | null | undefined;
+  paidFrom: ReceiptPaidFrom;
+  lines: readonly CenterStockLineInput[];
+}
+
 export interface CenterItemSold {
   skuId: string;
   displayName: string;
@@ -87,6 +113,8 @@ export interface RevenueCenterSummary {
   purchasesPaise: Paise;
   /** GRN lines received today for items whose brand is in the center (qty × unit cost). */
   stockPurchasesPaise: Paise;
+  /** … of which on receipts paid from the drawer (Phase 26). */
+  stockDrawerPaise: Paise;
   /** The center's own purchase ledger, voids netted out … */
   supplyPurchasesPaise: Paise;
   /** … of which paid from the drawer. */
@@ -99,6 +127,8 @@ export interface RevenueCenterSummary {
   expenses: ExpenseEntry[];
   /** The center's own purchases (originals, newest first, with lines and voidedAt). */
   purchases: CenterPurchaseEntry[];
+  /** Today's receipts holding the center's items (newest first), with only those lines. */
+  stockReceipts: StockReceiptDetail[];
 }
 
 export interface RevenueCenterOverviewRow {
@@ -187,6 +217,20 @@ async function loadPurchase(db: SqlClient, id: string): Promise<CenterPurchase> 
   return mapPurchase(row, rows);
 }
 
+/** `<CENTER>-<yyyymmdd>-NN` for the open day, the next number not taken by any receipt. */
+async function nextInvoiceNo(tx: SqlClient, code: DepartmentCode): Promise<string> {
+  // Serialises numbering per center (a share lock elsewhere never blocks on this).
+  await tx.query(`SELECT 1 FROM departments WHERE code = $1 FOR UPDATE`, [code]);
+  const { date } = await one<{ date: string }>(tx, `SELECT to_char(business_date, 'YYYYMMDD') AS date FROM business_days WHERE id = pos_require_open_day(NULL)`);
+  const prefix = `${code}-${date}-`;
+  const { rows } = await tx.query<{ invoice_no: string }>(`SELECT invoice_no FROM stock_receipts WHERE left(upper(btrim(invoice_no)), length($1)) = $1`, [prefix]);
+  const taken = new Set(rows.map((r) => r.invoice_no.trim().toUpperCase()));
+  let n = rows.length + 1;
+  const numbered = () => `${prefix}${String(n).padStart(2, '0')}`;
+  while (taken.has(numbered())) n += 1;
+  return numbered();
+}
+
 const live = <T extends { voidedAt: Date | null }>(rows: readonly T[]) => rows.filter((r) => r.voidedAt === null);
 const sum = <T>(rows: readonly T[], pick: (r: T) => Paise) => rows.reduce((total, r) => total + pick(r), 0n);
 
@@ -215,6 +259,26 @@ export class RevenueCenterService {
           );
         }
         return loadPurchase(tx, id);
+      }),
+    );
+  }
+
+  /**
+   * Buys stock for a center in purchase units and posts it as one GRN tagged with the center, so the
+   * shelf count rises by the converted units (2 Packets × 10 = 20 sticks). A blank invoice number is
+   * numbered per center and day. Refused for an unknown center (NotFoundError), Liquor, a disabled or
+   * untracked center, another center's item or a stale case size (PS002), a DRAWER purchase during a
+   * peak (PS007), and a repeated invoice from the same vendor (PS011). Writes nothing on failure.
+   */
+  async recordStockPurchase(input: CenterStockPurchaseInput, staffId: string): Promise<StockReceiptDetail> {
+    checkDepartmentCode(input.department);
+    const lines = input.lines.map((l) => ({ skuId: l.skuId, cases: l.cases, looseBottles: l.looseUnits, caseSize: l.caseSize, unitCostPaise: l.unitCostPaise }));
+    const given = input.invoiceNo?.trim() ?? '';
+    return withPosErrors(() =>
+      this.db.transaction(async (tx) => {
+        const center = await getDepartment(tx, input.department); // NotFoundError for an unknown center
+        const invoiceNo = given !== '' ? given : await nextInvoiceNo(tx, center.code);
+        return insertReceipt(tx, { invoiceNo, vendorName: input.vendorName, paidFrom: input.paidFrom, lines }, staffId, center.code);
       }),
     );
   }
@@ -258,7 +322,7 @@ export class RevenueCenterService {
   async getSummary(businessDayId: string, department: DepartmentCode): Promise<RevenueCenterSummary> {
     const day = await getDay(this.db, businessDayId);
     const center = await getDepartment(this.db, checkDepartmentCode(department));
-    const sums = await one<{ sales: DbInt; open: DbInt; stock: DbInt }>(
+    const sums = await one<{ sales: DbInt; open: DbInt; stock: DbInt; stock_drawer: DbInt }>(
       this.db,
       `WITH counted AS (${COUNTED_BILLS}),
        lines AS (
@@ -273,7 +337,13 @@ export class RevenueCenterService {
                           JOIN stock_receipts r ON r.id = rl.receipt_id
                           JOIN skus k ON k.id = rl.sku_id
                           JOIN products p ON p.id = k.product_id
-                         WHERE r.business_day_id = $1 AND p.department = $2), 0)::text AS stock`,
+                         WHERE r.business_day_id = $1 AND p.department = $2), 0)::text AS stock,
+              coalesce((SELECT sum(rl.qty::bigint * rl.unit_cost_paise)
+                          FROM stock_receipt_lines rl
+                          JOIN stock_receipts r ON r.id = rl.receipt_id
+                          JOIN skus k ON k.id = rl.sku_id
+                          JOIN products p ON p.id = k.product_id
+                         WHERE r.business_day_id = $1 AND p.department = $2 AND r.paid_from = 'DRAWER'), 0)::text AS stock_drawer`,
       [day.id, center.code],
     );
     const { rows: sold } = await this.db.query<{ sku_id: string; display_name: string; quantity: number; amount: DbInt }>(
@@ -306,6 +376,26 @@ export class RevenueCenterService {
     const stockPurchasesPaise = toPaise(sums.stock);
     const purchasesPaise = stockPurchasesPaise + supplyPurchasesPaise;
 
+    const { rows: receiptIds } = await this.db.query<{ id: string }>(
+      `SELECT r.id FROM stock_receipts r
+        WHERE r.business_day_id = $1
+          AND EXISTS (SELECT 1 FROM stock_receipt_lines rl JOIN skus k ON k.id = rl.sku_id JOIN products p ON p.id = k.product_id
+                       WHERE rl.receipt_id = r.id AND p.department = $2)
+        ORDER BY r.created_at DESC, r.id DESC`,
+      [day.id, center.code],
+    );
+    const stockReceipts: StockReceiptDetail[] = [];
+    for (const { id } of receiptIds) {
+      const detail = await loadReceipt(this.db, id);
+      const { rows: mine } = await this.db.query<{ id: string }>(
+        `SELECT rl.id FROM stock_receipt_lines rl JOIN skus k ON k.id = rl.sku_id JOIN products p ON p.id = k.product_id
+          WHERE rl.receipt_id = $1 AND p.department = $2`,
+        [id, center.code],
+      );
+      const keep = new Set(mine.map((r) => r.id));
+      stockReceipts.push({ ...detail, lines: detail.lines.filter((l) => keep.has(l.id)) });
+    }
+
     return {
       center: { code: center.code, name: center.name, tracksStock: center.tracksStock, kotStation: center.kotStation },
       day: { id: day.id, businessDate: day.businessDate, status: day.status },
@@ -314,12 +404,14 @@ export class RevenueCenterService {
       expensesPaise,
       purchasesPaise,
       stockPurchasesPaise,
+      stockDrawerPaise: toPaise(sums.stock_drawer),
       supplyPurchasesPaise,
       supplyDrawerPaise,
       grossPaise: salesPaise - expensesPaise - purchasesPaise,
       itemsSold: sold.map((r) => ({ skuId: r.sku_id, displayName: r.display_name, quantity: r.quantity, amountPaise: toPaise(r.amount) })),
       expenses,
       purchases,
+      stockReceipts,
     };
   }
 

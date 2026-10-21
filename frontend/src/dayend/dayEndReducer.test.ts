@@ -46,6 +46,7 @@ function summary(over: { id?: string; status?: 'OPEN' | 'CLOSED'; expected?: big
       tenderAdjustmentPaise: 0n,
       bankDepositsPaise: 0n,
       centerPurchasesPaise: 0n,
+      stockPurchasesDrawerPaise: 0n,
       expectedCashPaise: over.expected ?? 30550_00n,
       upiTotalPaise: 0n,
     },

@@ -7,7 +7,7 @@ import { counterErrorMessage } from '../billing/errors'
 import { Modal } from '../billing/Modal'
 import { beep } from '../lib/beep'
 import { formatPaise } from '../lib/money'
-import { FOCUS_RING, keepFocus, SIZE_NAME } from '../lib/ui'
+import { FOCUS_RING, keepFocus, SIZE_NAME, unitLabel } from '../lib/ui'
 import {
   countLabel,
   entryCount,
@@ -356,7 +356,7 @@ export default function PurchaseScreen({ onExit, onOpenDayEnd }: PurchaseScreenP
                         >
                           <span className="min-w-0 flex-1 truncate font-semibold">{s.displayName}</span>
                           <SizeChip size={s.sizeCode} />
-                          <span className="w-20 shrink-0 text-right font-mono text-xs text-zinc-500 tabular-nums">case {s.caseSize}</span>
+                          <span className="w-20 shrink-0 text-right font-mono text-xs text-zinc-500 tabular-nums">{s.purchaseUnitName.toLowerCase()} {s.caseSize}</span>
                           <span className="w-24 shrink-0 text-right font-mono text-sm text-zinc-400 tabular-nums">{s.isActive ? `${s.onHandQty} on hand` : 'inactive'}</span>
                         </button>
                       </li>
@@ -366,17 +366,19 @@ export default function PurchaseScreen({ onExit, onOpenDayEnd }: PurchaseScreenP
               </div>
               {state.picked && (
                 <p className="-mt-2 text-sm text-zinc-400">
-                  {state.picked.skuCode} · {SIZE_NAME[state.picked.sizeCode]} · <span className="font-semibold text-zinc-200">case of {state.picked.caseSize}</span> ·{' '}
+                  {state.picked.skuCode} · {SIZE_NAME[state.picked.sizeCode]} · <span className="font-semibold text-zinc-200">
+                    {state.picked.purchaseUnitName.toLowerCase()} of {state.picked.caseSize} {unitLabel(state.picked.saleUnitName, state.picked.caseSize).toLowerCase()}
+                  </span> ·{' '}
                   {state.picked.onHandQty} on hand · sells at {formatPaise(state.picked.pricePaise)}
                 </p>
               )}
               <div className="grid grid-cols-[1fr_1fr_auto] items-end gap-4">
-                <CountField label="Cases" value={state.cases} onChange={(text) => dispatch({ type: 'cases', text })} onEnter={() => looseRef.current?.focus()} inputRef={casesRef} />
-                <CountField label="Loose bottles" value={state.loose} onChange={(text) => dispatch({ type: 'loose', text })} onEnter={() => costRef.current?.focus()} inputRef={looseRef} />
-                <BottleTotal count={entryCount(state)} />
+                <CountField label={state.picked ? unitLabel(state.picked.purchaseUnitName, 2) : 'Cases'} value={state.cases} onChange={(text) => dispatch({ type: 'cases', text })} onEnter={() => looseRef.current?.focus()} inputRef={casesRef} />
+                <CountField label={state.picked ? `Loose ${unitLabel(state.picked.saleUnitName, 2).toLowerCase()}` : 'Loose bottles'} value={state.loose} onChange={(text) => dispatch({ type: 'loose', text })} onEnter={() => costRef.current?.focus()} inputRef={looseRef} />
+                <BottleTotal count={entryCount(state)} unit={state.picked?.saleUnitName ?? 'Bottle'} />
               </div>
               <RupeeField
-                label={state.picked?.purchasePricePaise != null ? 'Unit cost per bottle (catalog default — editable)' : 'Unit cost per bottle (₹0 = free)'}
+                label={`Unit cost per ${state.picked?.saleUnitName.toLowerCase() ?? 'bottle'} ${state.picked?.purchasePricePaise != null ? '(catalog default — editable)' : '(₹0 = free)'}`}
                 value={state.cost}
                 onChange={(text) => dispatch({ type: 'cost', text })}
                 onEnter={addLine}
@@ -432,7 +434,7 @@ export default function PurchaseScreen({ onExit, onOpenDayEnd }: PurchaseScreenP
                     </span>
                     <span className="text-right font-mono tabular-nums">
                       <span className="block text-lg font-bold">{line.quantity}</span>
-                      {line.cases > 0 && <span className="block text-xs text-zinc-500">{countLabel(line)} · case {line.caseSize}</span>}
+                      {line.cases > 0 && <span className="block text-xs text-zinc-500">{countLabel(line)} · {line.sku.purchaseUnitName.toLowerCase()} {line.caseSize}</span>}
                     </span>
                     <span className="text-right font-mono tabular-nums">{line.unitCostPaise === 0n ? <span className="text-emerald-300">FREE</span> : formatPaise(line.unitCostPaise)}</span>
                     <span className="text-right font-mono font-bold tabular-nums">{formatPaise(lineTotal(line))}</span>
@@ -561,13 +563,13 @@ function CountField({ label, value, onChange, onEnter, inputRef }: CountFieldPro
 }
 
 /** The live whole-bottle total for the entry fields ("= 131 bottles"). */
-function BottleTotal({ count }: { count: { total: number } | null }) {
+function BottleTotal({ count, unit }: { count: { total: number } | null; unit: string }) {
   const total = count && Number.isSafeInteger(count.total) ? count.total : 0
   return (
-    <p className="min-w-36 pb-2.5 text-right whitespace-nowrap" aria-live="polite" aria-label="Bottles on this line">
+    <p className="min-w-36 pb-2.5 text-right whitespace-nowrap" aria-live="polite" aria-label="Units on this line">
       <span className="text-zinc-500">= </span>
       <span className="font-mono text-2xl font-black tabular-nums">{total}</span>
-      <span className="text-zinc-400"> bottle{total === 1 ? '' : 's'}</span>
+      <span className="text-zinc-400"> {unitLabel(unit, total).toLowerCase()}</span>
     </p>
   )
 }

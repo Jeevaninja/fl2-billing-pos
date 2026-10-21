@@ -110,9 +110,9 @@ export interface PnlCard {
 export function pnlCards(s: RevenueCenterSummary, formatRupees: (paise: Paise) => string): PnlCard[] {
   const name = s.center.name.toUpperCase()
   const split = [
-    s.stockPurchasesPaise !== 0n ? `${formatRupees(s.stockPurchasesPaise)} stock (GRN)` : null,
+    s.stockPurchasesPaise !== 0n ? `${formatRupees(s.stockPurchasesPaise)} stock` : null,
     s.supplyPurchasesPaise !== 0n ? `${formatRupees(s.supplyPurchasesPaise)} supplies` : null,
-    s.supplyDrawerPaise !== 0n ? `${formatRupees(s.supplyDrawerPaise)} from the drawer` : null,
+    s.supplyDrawerPaise + s.stockDrawerPaise !== 0n ? `${formatRupees(s.supplyDrawerPaise + s.stockDrawerPaise)} from the drawer` : null,
   ].filter(Boolean)
   return [
     { key: 'sales', label: `${name} SALES`, value: s.salesPaise, hint: s.openTabsPaise !== 0n ? `+${formatRupees(s.openTabsPaise)} on open bills` : 'settled bills and ended peaks' },

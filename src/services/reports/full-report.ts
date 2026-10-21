@@ -85,7 +85,7 @@ export async function fullReport(db: SqlClient, head: ReportHeader): Promise<Ful
       cashSales: figures.sales.total.cashPaise,
       waiterCash: figures.sales.waiterRepayments.cashPaise,
       expenses: b.cashExpensesPaise + inPeak.ended,
-      drawerPurchases: b.centerPurchasesPaise,
+      drawerPurchases: b.centerPurchasesPaise + b.stockPurchasesDrawerPaise,
       deposits: b.bankDepositsPaise,
       peakVariance: row.peakVariancePaise,
     };

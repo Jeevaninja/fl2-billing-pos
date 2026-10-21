@@ -165,6 +165,7 @@ describe('DayEndService', () => {
         tenderAdjustmentPaise: 0n,
         bankDepositsPaise: 0n,
         centerPurchasesPaise: 0n,
+        stockPurchasesDrawerPaise: 0n,
         expectedCashPaise: PAISE.full + 700_00n + 200_00n - 150_00n,
         upiTotalPaise: 100_00n + 200_00n, // 700 − 700 + waiter 100 + peak delta 200
       });

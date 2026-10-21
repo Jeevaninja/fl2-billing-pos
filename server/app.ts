@@ -30,6 +30,7 @@ import {
   SIZE_CODES,
   EXCISE_GROUPS,
   WaiterService,
+  type CenterStockLineInput,
   type CounterPayment,
   type ExpenseCategoryPatch,
   type ItemCategoryPatch,
@@ -115,6 +116,21 @@ function newSku(value: unknown, name: string): NewSkuInput {
     purchasePricePaise: sku.purchasePrice === undefined || sku.purchasePrice === null ? null : paise(sku.purchasePrice, `${name}.purchasePrice`),
     caseSize: int(sku.caseSize, `${name}.caseSize`),
     barcode: optNullableStr(sku.barcode, `${name}.barcode`) ?? null,
+    purchaseUnitName: optNullableStr(sku.purchaseUnitName, `${name}.purchaseUnitName`) ?? null,
+    saleUnitName: optNullableStr(sku.saleUnitName, `${name}.saleUnitName`) ?? null,
+  };
+}
+
+/** A center stock line (Phase 26): `{ skuId, cases, looseUnits?, caseSize, unitCost }`. */
+function centerStockLine(value: unknown, i: number): CenterStockLineInput {
+  const line = (value ?? {}) as Body;
+  const name = `lines[${i}]`;
+  return {
+    skuId: id(line.skuId, `${name}.skuId`),
+    cases: int(line.cases, `${name}.cases`),
+    looseUnits: line.looseUnits === undefined ? 0 : int(line.looseUnits, `${name}.looseUnits`),
+    caseSize: int(line.caseSize, `${name}.caseSize`),
+    unitCostPaise: paise(line.unitCost, `${name}.unitCost`),
   };
 }
 
@@ -225,7 +241,9 @@ function buildRoutes(
     route('GET', '/api/skus', async ({ query }) => {
       const limit = query.has('limit') ? int(Number(query.get('limit')), 'limit') : undefined;
       if (limit !== undefined && (limit < 1 || limit > 50)) throw new BadRequestError('limit must be 1–50');
-      return ok(await queries.searchSkus(query.get('q') ?? '', limit, { activeOnly: query.get('active') === '1' }));
+      const department = query.get('department') || null;
+      if (department !== null && !/^[A-Z][A-Z0-9_]{1,29}$/.test(department)) throw new BadRequestError('department must be a revenue center code');
+      return ok(await queries.searchSkus(query.get('q') ?? '', limit, { activeOnly: query.get('active') === '1', department }));
     }),
     route('GET', '/api/members', async ({ query }) => {
       const limit = query.has('limit') ? int(Number(query.get('limit')), 'limit') : undefined;
@@ -421,7 +439,8 @@ function buildRoutes(
       if (!Array.isArray(body.lines)) throw new BadRequestError('lines must be an array');
       const lines = body.lines.map((l: unknown, i) => receiptLine(l, i));
       const vendorName = body.vendorName === undefined || body.vendorName === null ? null : str(body.vendorName, 'vendorName');
-      return created(await purchases.recordReceipt({ invoiceNo: str(body.invoiceNo, 'invoiceNo'), vendorName, lines }, cashierId));
+      const paidFrom = optOneOf(body.paidFrom, 'paidFrom', ['DRAWER', 'OUTSIDE'] as const);
+      return created(await purchases.recordReceipt({ invoiceNo: str(body.invoiceNo, 'invoiceNo'), vendorName, paidFrom, lines }, cashierId));
     }),
 
     // ── Revenue centers (Phase 22; departments are the manager's list) ──
@@ -475,6 +494,23 @@ function buildRoutes(
                 amountPaise: paise(line.amount, `lines[${i}].amount`),
               };
             }),
+          },
+          cashierId,
+        ),
+      );
+    }),
+    route('POST', '/api/revenue-centers/stock-purchases', async ({ body }) => {
+      if (!Array.isArray(body.lines)) throw new BadRequestError('lines must be an array');
+      const department = optDepartment(body.department, 'department');
+      if (!department) throw new BadRequestError('department is required');
+      return created(
+        await centers.recordStockPurchase(
+          {
+            department,
+            invoiceNo: optNullableStr(body.invoiceNo, 'invoiceNo') ?? null,
+            vendorName: optNullableStr(body.vendorName, 'vendorName') ?? null,
+            paidFrom: oneOf(body.paidFrom, 'paidFrom', ['DRAWER', 'OUTSIDE'] as const),
+            lines: body.lines.map((l: unknown, i) => centerStockLine(l, i)),
           },
           cashierId,
         ),
@@ -547,6 +583,8 @@ function buildRoutes(
             purchasePricePaise: body.purchasePrice === undefined || body.purchasePrice === null ? null : paise(body.purchasePrice, 'purchasePrice'),
             caseSize: body.caseSize === undefined ? undefined : int(body.caseSize, 'caseSize'),
             barcode: optNullableStr(body.barcode, 'barcode') ?? null,
+            purchaseUnitName: optNullableStr(body.purchaseUnitName, 'purchaseUnitName') ?? null,
+            saleUnitName: optNullableStr(body.saleUnitName, 'saleUnitName') ?? null,
             codePrefix: body.codePrefix === undefined || body.codePrefix === null ? undefined : str(body.codePrefix, 'codePrefix'),
             openingQty: body.openingQty === undefined ? undefined : int(body.openingQty, 'openingQty'),
             ...(department ? { department } : {}),
@@ -564,6 +602,8 @@ function buildRoutes(
       if (body.purchasePrice !== undefined) patch.purchasePricePaise = body.purchasePrice === null ? null : paise(body.purchasePrice, 'purchasePrice');
       if (body.caseSize !== undefined) patch.caseSize = int(body.caseSize, 'caseSize');
       if (body.barcode !== undefined) patch.barcode = optNullableStr(body.barcode, 'barcode') ?? null;
+      if (body.purchaseUnitName !== undefined) patch.purchaseUnitName = str(body.purchaseUnitName, 'purchaseUnitName');
+      if (body.saleUnitName !== undefined) patch.saleUnitName = str(body.saleUnitName, 'saleUnitName');
       if (body.volumeMl !== undefined) patch.volumeMl = body.volumeMl === null ? null : int(body.volumeMl, 'volumeMl');
       if (body.exciseGroup !== undefined) patch.exciseGroup = body.exciseGroup === null ? null : oneOf(body.exciseGroup, 'exciseGroup', EXCISE_GROUPS);
       const isActive = optBool(body.isActive, 'isActive');
@@ -609,6 +649,8 @@ function buildRoutes(
         purchasePricePaise: body.purchasePrice === null ? null : optPaise(body.purchasePrice, 'purchasePrice'),
         caseSize: body.caseSize === undefined ? undefined : int(body.caseSize, 'caseSize'),
         barcode: optNullableStr(body.barcode, 'barcode'),
+        purchaseUnitName: body.purchaseUnitName === undefined ? undefined : str(body.purchaseUnitName, 'purchaseUnitName'),
+        saleUnitName: body.saleUnitName === undefined ? undefined : str(body.saleUnitName, 'saleUnitName'),
         isActive: optBool(body.isActive, 'isActive'),
       };
       return ok(await catalog.updateSku(id(params.skuId, 'skuId'), patch));

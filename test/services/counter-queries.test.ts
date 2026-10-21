@@ -132,6 +132,8 @@ describe('CounterQueries', () => {
         pricePaise: PAISE.full,
         purchasePricePaise: null,
         caseSize: 12,
+        purchaseUnitName: 'Case',
+        saleUnitName: 'Bottle',
         onHandQty: OPENING_QTY - 2,
         isActive: true,
         department: 'LIQUOR',

@@ -53,13 +53,14 @@ describe('center P&L cards and tabs', () => {
       stockPurchasesPaise: 3000_00n,
       supplyPurchasesPaise: 100_00n,
       supplyDrawerPaise: 0n,
+      stockDrawerPaise: 1200_00n,
       grossPaise: 1100_00n,
     } as RevenueCenterSummary
     const cards = pnlCards(summary, (p) => `₹${p / 100n}`)
     expect(cards.map((c) => [c.label, c.value, c.hint])).toEqual([
       ['CIGARETTES SALES', 4200_00n, '+₹200 on open bills'],
       ['CIGARETTES EXPENSES', 0n, 'petty cash in Cigarettes categories'],
-      ['CIGARETTES PURCHASES', -3100_00n, '₹3000 stock (GRN) · ₹100 supplies'],
+      ['CIGARETTES PURCHASES', -3100_00n, '₹3000 stock · ₹100 supplies · ₹1200 from the drawer'],
       ['CIGARETTES GROSS', 1100_00n, 'sales − expenses − purchases'],
     ])
     expect(cards.reduce((sum, c) => (c.key === 'gross' ? sum : sum + c.value), 0n)).toBe(summary.grossPaise)

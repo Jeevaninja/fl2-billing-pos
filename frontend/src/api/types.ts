@@ -226,8 +226,11 @@ export interface SkuLookup {
   pricePaise: Paise
   /** Default per-bottle cost for a GRN line; null when the catalog has none. */
   purchasePricePaise: Paise | null
-  /** Sealed bottles per supplier case. */
+  /** Units per purchase unit: sealed bottles per case, sticks per packet (Phase 26). */
   caseSize: number
+  /** Labels (Phase 26): bought as "Case" / "Packet", sold as "Bottle" / "Stick". */
+  purchaseUnitName: string
+  saleUnitName: string
   onHandQty: number
   isActive: boolean
   department: DepartmentCode
@@ -298,6 +301,8 @@ export interface CashBreakdown {
   bankDepositsPaise: Paise
   /** Revenue-center purchases paid from the drawer (Phase 21 / 22; subtracted). */
   centerPurchasesPaise: Paise
+  /** Stock (GRN) paid from the drawer, e.g. a center buying packets (Phase 26; subtracted). */
+  stockPurchasesDrawerPaise: Paise
   expectedCashPaise: Paise
   upiTotalPaise: Paise
 }
@@ -388,6 +393,7 @@ export interface PeakStartBaseline {
   tenderAdjustmentPaise: Paise
   bankDepositsPaise: Paise
   centerPurchasesPaise: Paise
+  stockPurchasesDrawerPaise: Paise
   expectedCashPaise: Paise
   billUpiPaise: Paise
   waiterUpiPaise: Paise
@@ -511,12 +517,27 @@ export interface RevenueCenterSummary {
   /** stock (GRN) + supply purchases. */
   purchasesPaise: Paise
   stockPurchasesPaise: Paise
+  /** … of which paid from the drawer (Phase 26). */
+  stockDrawerPaise: Paise
   supplyPurchasesPaise: Paise
   supplyDrawerPaise: Paise
   grossPaise: Paise
   itemsSold: Array<{ skuId: string; displayName: string; quantity: number; amountPaise: Paise }>
   expenses: ExpenseEntry[]
   purchases: CenterPurchaseEntry[]
+  /** Today's receipts holding the center's items, newest first, with only those lines (Phase 26). */
+  stockReceipts: StockReceiptDetail[]
+}
+
+/** Phase 26: a stock-tracked center buys its own stock in purchase units; posted as a GRN. */
+export interface CenterStockPurchasePayload {
+  department: DepartmentCode
+  /** Blank: the server numbers it `<CENTER>-<yyyymmdd>-NN`. */
+  invoiceNo: string | null
+  vendorName: string | null
+  paidFrom: PurchasePaidFrom
+  /** units = cases × caseSize + looseUnits; unitCost per selling unit. */
+  lines: Array<{ skuId: string; cases: number; looseUnits: number; caseSize: number; unitCost: Paise }>
 }
 
 export interface RevenueCenterOverviewRow {
@@ -558,6 +579,9 @@ export interface StockReceipt {
   businessDayId: string
   invoiceNo: string
   vendorName: string | null
+  paidFrom: PurchasePaidFrom
+  /** The revenue center whose purchase modal posted it; null from the Purchase screen. */
+  department: DepartmentCode | null
   receivedByStaffId: string
   receivedBy: string
   createdAt: string
@@ -578,6 +602,8 @@ export interface StockReceiptLine {
   cases: number
   /** Case size the line was counted at; null for a loose-only line. */
   caseSize: number | null
+  /** The purchase unit as named then ("Packet"); null for a loose-only line. */
+  purchaseUnitName: string | null
   looseBottles: number
   unitCostPaise: Paise
   lineTotalPaise: Paise
@@ -649,6 +675,9 @@ export interface NewItemPayload {
   purchasePrice: Paise | null
   caseSize: number
   barcode: string | null
+  /** Phase 26 labels; null takes the brand's, else Case / the center's selling unit. */
+  purchaseUnitName: string | null
+  saleUnitName: string | null
   /** Sent only for a new brand. */
   codePrefix?: string
   /** Optional opening stock (whole bottles); never for Kitchen items. */
@@ -665,6 +694,8 @@ export interface ItemPatchPayload {
   purchasePrice?: Paise | null
   caseSize?: number
   barcode?: string | null
+  purchaseUnitName?: string
+  saleUnitName?: string
   isActive?: boolean
   volumeMl?: number | null
   exciseGroup?: ExciseGroup | null

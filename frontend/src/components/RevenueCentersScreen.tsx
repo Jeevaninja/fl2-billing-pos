@@ -22,11 +22,13 @@ import {
   stepTab,
   type PurchaseForm,
 } from '../centers/purchaseForm'
+import { newStockForm, stockFormError, stockPayload, type StockPurchaseForm } from '../centers/stockPurchase'
 import { beep } from '../lib/beep'
 import { departmentChip } from '../lib/departments'
 import { formatPaise } from '../lib/money'
-import { FOCUS_RING, keepFocus } from '../lib/ui'
+import { FOCUS_RING, keepFocus, unitLabel } from '../lib/ui'
 import { CenterModal } from './centers/CenterModal'
+import { StockPurchaseModal } from './centers/StockPurchaseModal'
 import { Kbd, LiveClock } from './ui'
 
 const POLL_MS = 15_000
@@ -59,6 +61,8 @@ interface State {
   peakRunning: boolean
   selectedId: string | null
   form: PurchaseForm | null
+  /** Phase 26: the Stock items side of New purchase (stock-tracked centers). */
+  stockForm: StockPurchaseForm | null
   centerForm: CenterForm | null
   confirmVoid: CenterPurchaseEntry | null
   saving: boolean
@@ -72,6 +76,7 @@ type Action =
   | { type: 'tab'; code: string }
   | { type: 'select'; id: string }
   | { type: 'form'; form: PurchaseForm | null }
+  | { type: 'stockForm'; form: StockPurchaseForm | null }
   | { type: 'centerForm'; form: CenterForm | null }
   | { type: 'editCenter'; patch: Partial<CenterForm> }
   | { type: 'confirmVoid'; purchase: CenterPurchaseEntry | null }
@@ -103,7 +108,10 @@ function reducer(state: State, action: Action): State {
     case 'select':
       return { ...state, selectedId: action.id }
     case 'form':
-      return { ...state, form: action.form, saving: false, saveError: null }
+      return { ...state, form: action.form, stockForm: null, saving: false, saveError: null }
+    case 'stockForm':
+      // Typing keeps a server refusal on screen only until the form changes.
+      return { ...state, stockForm: action.form, form: null, saving: false, saveError: null }
     case 'centerForm':
       return { ...state, centerForm: action.form, saving: false, saveError: null }
     case 'editCenter':
@@ -129,6 +137,7 @@ function initialState(): State {
     peakRunning: false,
     selectedId: null,
     form: null,
+    stockForm: null,
     centerForm: null,
     confirmVoid: null,
     saving: false,
@@ -178,7 +187,7 @@ export default function RevenueCentersScreen({ onExit }: { onExit: () => void })
     void refresh()
     const timer = setInterval(() => {
       const s = stateRef.current
-      if (!s.form && !s.confirmVoid && !s.centerForm) void refresh()
+      if (!s.form && !s.stockForm && !s.confirmVoid && !s.centerForm) void refresh()
     }, POLL_MS)
     return () => clearInterval(timer)
   }, [refresh])
@@ -202,12 +211,53 @@ export default function RevenueCentersScreen({ onExit }: { onExit: () => void })
   const day = state.overview?.day
   const open = day?.status === 'OPEN'
 
+  const stockCenters = centers.filter((c) => c.tracksStock)
+
+  /** New purchase: Stock items for a stock-tracked center (Phase 26), else the supplies form. */
   const openPurchase = useCallback(() => {
     const s = stateRef.current
     if (s.overview?.day.status !== 'OPEN') return
     const first = s.overview.centers[0]?.code ?? ''
-    dispatch({ type: 'form', form: newPurchaseForm(s.peakRunning, s.tab === ALL_CENTERS ? first : s.tab) })
+    const code = s.tab === ALL_CENTERS ? first : s.tab
+    const tracked = s.departments.find((d) => d.code === code)?.tracksStock ?? false
+    if (tracked) dispatch({ type: 'stockForm', form: newStockForm(s.peakRunning, code) })
+    else dispatch({ type: 'form', form: newPurchaseForm(s.peakRunning, code) })
   }, [])
+
+  /** Switches New purchase between Stock items and Supplies, keeping the center, vendor and payer. */
+  const switchMode = useCallback((mode: 'stock' | 'supplies') => {
+    const s = stateRef.current
+    if (mode === 'supplies' && s.stockForm) {
+      const { department, vendor, paidFrom } = s.stockForm
+      dispatch({ type: 'form', form: { ...newPurchaseForm(s.peakRunning, department), vendor, paidFrom } })
+    } else if (mode === 'stock' && s.form) {
+      const tracked = s.departments.filter((d) => d.tracksStock && d.isActive && d.code !== 'LIQUOR')
+      const department = tracked.some((d) => d.code === s.form?.department) ? s.form.department : (tracked[0]?.code ?? s.form.department)
+      dispatch({ type: 'stockForm', form: { ...newStockForm(s.peakRunning, department), vendor: s.form.vendor, paidFrom: s.form.paidFrom } })
+    }
+  }, [])
+
+  const saveStock = useCallback(() => {
+    const { stockForm, peakRunning, saving } = stateRef.current
+    if (!stockForm || saving) return
+    const problem = stockFormError(stockForm, peakRunning)
+    if (problem) {
+      dispatch({ type: 'saveError', message: problem })
+      return
+    }
+    dispatch({ type: 'saving', on: true })
+    api
+      .recordCenterStockPurchase(stockPayload(stockForm))
+      .then(({ receipt, lines }) => {
+        dispatch({ type: 'stockForm', form: null })
+        const name = stateRef.current.overview?.centers.find((c) => c.code === receipt.department)?.name ?? receipt.department
+        const units = new Set(stockForm.lines.map((l) => l.sku.saleUnitName.toLowerCase()))
+        const unit = units.size === 1 ? unitLabel([...units][0]!, receipt.bottles) : 'units'
+        flash('ok', `${name}: ${receipt.bottles} ${unit} into stock (${lines.length} item${lines.length === 1 ? '' : 's'}, ${formatPaise(receipt.totalCostPaise)}, bill ${receipt.invoiceNo})${receipt.paidFrom === 'DRAWER' ? ' · paid from the drawer' : ''}`)
+        void refresh()
+      })
+      .catch((err: unknown) => dispatch({ type: 'saveError', message: counterErrorMessage(err) }))
+  }, [flash, refresh])
 
   const savePurchase = useCallback(() => {
     const { form, peakRunning, saving } = stateRef.current
@@ -263,7 +313,7 @@ export default function RevenueCentersScreen({ onExit }: { onExit: () => void })
   }, [flash, refresh])
 
   // Page keys (a modal owns the keyboard while open).
-  const modalOpen = state.form !== null || state.confirmVoid !== null || state.centerForm !== null
+  const modalOpen = state.form !== null || state.stockForm !== null || state.confirmVoid !== null || state.centerForm !== null
   useEffect(() => {
     if (modalOpen) return
     function onKeyDown(event: KeyboardEvent) {
@@ -421,7 +471,7 @@ export default function RevenueCentersScreen({ onExit }: { onExit: () => void })
             </tbody>
           </table>
           <p className="text-sm text-zinc-500">
-            Liquor stays on Day End. Purchases = stock received through Purchase (GRN) for the center&rsquo;s items + its own supply purchases. Shared overheads (transport,
+            Liquor stays on Day End. Purchases = stock received for the center&rsquo;s items (here or on the Purchase screen) + its own supply purchases. Shared overheads (transport,
             repairs, wages) are not in any center. <Kbd>←</Kbd>/<Kbd>→</Kbd> or <Kbd>1</Kbd>–<Kbd>9</Kbd> switch centers · <Kbd>Ins</Kbd> new purchase · <Kbd>Esc</Kbd> dashboard.
           </p>
         </main>
@@ -476,7 +526,7 @@ export default function RevenueCentersScreen({ onExit }: { onExit: () => void })
 
             <section className="flex min-h-0 flex-col rounded-lg border-2 border-zinc-800 bg-zinc-900" aria-label="Purchases">
               <div className="flex items-center gap-3 border-b border-zinc-800 px-4 py-2">
-                <h2 className="text-xs font-bold tracking-widest text-zinc-400 uppercase">{summary.center.name} supply purchases</h2>
+                <h2 className="text-xs font-bold tracking-widest text-zinc-400 uppercase">{summary.center.name} purchases</h2>
                 {open && (
                   <button
                     type="button"
@@ -487,10 +537,33 @@ export default function RevenueCentersScreen({ onExit }: { onExit: () => void })
                   </button>
                 )}
               </div>
-              {summary.stockPurchasesPaise !== 0n && (
-                <p className="border-b border-zinc-800 px-4 py-2 text-sm text-sky-200">
-                  + {formatPaise(summary.stockPurchasesPaise)} of stock received through Purchase (GRN) today — see the Purchase screen.
-                </p>
+              {summary.stockReceipts.length > 0 && (
+                <ul className="max-h-56 overflow-y-auto border-b border-zinc-800" aria-label="Stock received today">
+                  {summary.stockReceipts.map(({ receipt, lines }) => (
+                    <li key={receipt.id} className="border-b border-zinc-800/60 px-4 py-2 last:border-b-0">
+                      <div className="flex items-center gap-3">
+                        <span className="font-mono text-sm text-zinc-500">{clock(receipt.createdAt)}</span>
+                        <span className="rounded bg-sky-500/20 px-1.5 py-0.5 text-[11px] font-black text-sky-200 uppercase">stock</span>
+                        <span className="min-w-0 flex-1 truncate font-bold">
+                          {receipt.vendorName ?? 'Stock received'} <span className="font-mono text-sm font-normal text-zinc-500">#{receipt.invoiceNo}</span>
+                        </span>
+                        <span className={`rounded px-1.5 py-0.5 text-[11px] font-black uppercase ${receipt.paidFrom === 'DRAWER' ? 'bg-amber-400 text-zinc-950' : 'bg-zinc-700 text-zinc-200'}`}>
+                          {receipt.paidFrom === 'DRAWER' ? 'drawer' : 'outside'}
+                        </span>
+                        <span className="w-28 text-right font-mono font-bold tabular-nums">{formatPaise(lines.reduce((sum, l) => sum + l.lineTotalPaise, 0n))}</span>
+                      </div>
+                      <p className="mt-0.5 truncate text-sm text-zinc-400">
+                        {lines
+                          .map((l) =>
+                            l.cases > 0 && l.caseSize !== null
+                              ? `${l.displayName} ${l.cases} ${unitLabel(l.purchaseUnitName ?? 'Case', l.cases)}${l.looseBottles > 0 ? ` + ${l.looseBottles}` : ''} = ${l.quantity}`
+                              : `${l.displayName} ${l.quantity}`,
+                          )
+                          .join(' · ')}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
               )}
               <ul className="min-h-0 flex-1 overflow-y-auto" role="listbox" aria-label="Purchases today">
                 {summary.purchases.map((p) => {
@@ -535,7 +608,11 @@ export default function RevenueCentersScreen({ onExit }: { onExit: () => void })
                     </li>
                   )
                 })}
-                {summary.purchases.length === 0 && <li className="p-6 text-center text-zinc-500">No {summary.center.name} supply purchases today.</li>}
+                {summary.purchases.length === 0 && (
+                  <li className="p-6 text-center text-zinc-500">
+                    No {summary.center.name} supply purchases today{summary.center.tracksStock && summary.stockReceipts.length === 0 ? ', and no stock received' : ''}.
+                  </li>
+                )}
               </ul>
             </section>
           </div>
@@ -547,10 +624,26 @@ export default function RevenueCentersScreen({ onExit }: { onExit: () => void })
         </main>
       )}
 
+      {state.stockForm && (
+        <StockPurchaseModal
+          form={state.stockForm}
+          centers={stockCenters}
+          peakRunning={state.peakRunning}
+          error={state.saveError ?? stockFormError(state.stockForm, state.peakRunning)}
+          serverError={state.saveError !== null}
+          saving={state.saving}
+          modeToggle={<PurchaseModeToggle mode="stock" onMode={switchMode} />}
+          onChange={(form) => dispatch({ type: 'stockForm', form })}
+          onEntryError={(message) => flash('error', message)}
+          onSave={saveStock}
+          onClose={() => dispatch({ type: 'stockForm', form: null })}
+        />
+      )}
       {state.form && (
         <PurchaseModal
           form={state.form}
           centers={centers}
+          modeToggle={stockCenters.length > 0 ? <PurchaseModeToggle mode="supplies" onMode={switchMode} /> : null}
           peakRunning={state.peakRunning}
           error={state.saveError ?? purchaseFormError(state.form, state.peakRunning)}
           serverError={state.saveError !== null}
@@ -603,9 +696,35 @@ export default function RevenueCentersScreen({ onExit }: { onExit: () => void })
   )
 }
 
+/** New purchase: Stock items (sellable stock in purchase units) | Supplies (ice, cups, packaging). */
+function PurchaseModeToggle({ mode, onMode }: { mode: 'stock' | 'supplies'; onMode: (mode: 'stock' | 'supplies') => void }) {
+  const options = [
+    { value: 'stock' as const, label: 'Stock items', hint: 'goods to sell — raises the shelf count' },
+    { value: 'supplies' as const, label: 'Supplies', hint: 'ice, cups, packaging — no stock' },
+  ]
+  return (
+    <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Purchase type">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          role="radio"
+          aria-checked={mode === o.value}
+          onClick={() => mode !== o.value && onMode(o.value)}
+          className={`min-h-12 rounded-md border-2 px-4 py-1.5 text-left ${mode === o.value ? 'border-sky-400 bg-sky-400/15' : 'border-zinc-700 hover:border-zinc-400'} ${FOCUS_RING}`}
+        >
+          <span className="block font-black">{o.label}</span>
+          <span className="block text-xs text-zinc-400">{o.hint}</span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function PurchaseModal({
   form,
   centers,
+  modeToggle,
   peakRunning,
   error,
   serverError,
@@ -617,6 +736,8 @@ function PurchaseModal({
   form: PurchaseForm
   /** Active non-liquor centers a purchase can belong to. */
   centers: Array<{ code: string; name: string; tracksStock: boolean }>
+  /** Stock items | Supplies switch, when any center tracks stock. */
+  modeToggle: ReactNode
   peakRunning: boolean
   error: string | null
   serverError: boolean
@@ -660,7 +781,8 @@ function PurchaseModal({
         </div>
       }
     >
-      <div>
+      {modeToggle}
+      <div className={modeToggle ? 'mt-3' : ''}>
         <span className="text-sm font-semibold text-zinc-300">Revenue center</span>
         <div className="mt-1 flex flex-wrap gap-2" role="radiogroup" aria-label="Revenue center">
           {centers.map((c) => (
@@ -678,8 +800,7 @@ function PurchaseModal({
         </div>
         {centers.find((c) => c.code === form.department)?.tracksStock && (
           <p className="mt-1 rounded-md border-l-4 border-sky-500 bg-sky-500/10 px-3 py-1.5 text-sm text-sky-200">
-            Buying stock to sell (e.g. Gold Flake cartons)? Record it in Purchase (GRN) so the shelf count rises — it counts here automatically. Use this for supplies
-            (ice, cups, packaging).
+            Supplies don&rsquo;t change stock. Buying {centers.find((c) => c.code === form.department)?.name} to sell? Switch to <b>Stock items</b> above.
           </p>
         )}
       </div>
@@ -722,7 +843,7 @@ function PurchaseModal({
           ? 'A peak is running: drawer purchases wait until it ends (the peak count would miss them).'
           : form.paidFrom === 'DRAWER'
             ? 'Cash from the till: Day End expects that much less in the drawer.'
-            : 'Paid by the owner, bank, credit or UPI: only the Kitchen P&L counts it.'}
+            : 'Paid by the owner, bank, credit or UPI: only the center’s P&L counts it.'}
       </p>
 
       <div className="mt-4 grid grid-cols-[1fr_9rem_10rem_3rem] gap-2 text-xs font-bold tracking-widest text-zinc-500 uppercase">

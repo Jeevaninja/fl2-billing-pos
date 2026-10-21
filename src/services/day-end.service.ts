@@ -84,6 +84,8 @@ export interface CashBreakdown {
   bankDepositsPaise: Paise;
   /** Revenue-center purchases paid from the drawer (Phase 21 kitchen, Phase 22 every center; subtracted). */
   centerPurchasesPaise: Paise;
+  /** Stock (GRN) paid from the drawer, e.g. a center buying cigarette packets (Phase 26; subtracted). */
+  stockPurchasesDrawerPaise: Paise;
   expectedCashPaise: Paise;
   /** Information only: UPI collected the same way (bill and waiter UPI outside peaks + peak UPI deltas). */
   upiTotalPaise: Paise;
@@ -800,11 +802,13 @@ export async function getDayFigures(db: SqlClient, day: DaySummary): Promise<Day
     [day.id],
   );
 
-  const adjusted = await one<{ cash: DbInt; deposits: DbInt; centers: DbInt }>(
+  const adjusted = await one<{ cash: DbInt; deposits: DbInt; centers: DbInt; stock: DbInt }>(
     db,
     `SELECT coalesce((SELECT sum(cash_delta_paise) FROM tender_adjustments WHERE business_day_id = $1), 0)::text AS cash,
             coalesce((SELECT sum(amount_paise) FROM bank_deposits WHERE business_day_id = $1), 0)::text AS deposits,
-            coalesce((SELECT sum(amount_paise) FROM revenue_center_purchases WHERE business_day_id = $1 AND paid_from = 'DRAWER'), 0)::text AS centers`,
+            coalesce((SELECT sum(amount_paise) FROM revenue_center_purchases WHERE business_day_id = $1 AND paid_from = 'DRAWER'), 0)::text AS centers,
+            coalesce((SELECT sum(l.qty::bigint * l.unit_cost_paise) FROM stock_receipt_lines l JOIN stock_receipts r ON r.id = l.receipt_id
+                       WHERE r.business_day_id = $1 AND r.paid_from = 'DRAWER'), 0)::text AS stock`,
     [day.id],
   );
   const tenderAdjustmentPaise = toPaise(adjusted.cash);
@@ -866,6 +870,7 @@ export async function getDayFigures(db: SqlClient, day: DaySummary): Promise<Day
     tenderAdjustmentPaise,
     bankDepositsPaise: toPaise(adjusted.deposits),
     centerPurchasesPaise: toPaise(adjusted.centers),
+    stockPurchasesDrawerPaise: toPaise(adjusted.stock),
     expectedCashPaise: 0n,
     upiTotalPaise: toPaise(sums.normal_upi) + toPaise(sums.waiter_upi) + sumOf((s) => s.upiDeltaPaise) - tenderAdjustmentPaise,
   };
@@ -877,7 +882,8 @@ export async function getDayFigures(db: SqlClient, day: DaySummary): Promise<Day
     breakdown.cashExpensesPaise +
     breakdown.tenderAdjustmentPaise -
     breakdown.bankDepositsPaise -
-    breakdown.centerPurchasesPaise;
+    breakdown.centerPurchasesPaise -
+    breakdown.stockPurchasesDrawerPaise;
   if (breakdown.expectedCashPaise !== toPaise(sums.expected)) {
     throw new Error(`day ${day.businessDate}: breakdown ${breakdown.expectedCashPaise} disagrees with pos_day_expected_cash ${sums.expected}`);
   }

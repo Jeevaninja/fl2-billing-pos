@@ -38,6 +38,8 @@ export type {
   CenterPurchaseEntry,
   CenterPurchaseInput,
   CenterPurchaseLine,
+  CenterStockLineInput,
+  CenterStockPurchaseInput,
   PurchasePaidFrom,
   RevenueCenterOverview,
   RevenueCenterOverviewRow,
@@ -93,7 +95,7 @@ export type {
 } from './day-end.service.js';
 export { PeakSessionService } from './peak-session.service.js';
 export { MAX_RECEIPT_LINES, MAX_RECEIPT_QTY, PurchaseService } from './purchase.service.js';
-export type { ReceiptInput, ReceiptLineInput, StockReceipt, StockReceiptDetail, StockReceiptLine } from './purchase.service.js';
+export type { ReceiptInput, ReceiptLineInput, ReceiptPaidFrom, StockReceipt, StockReceiptDetail, StockReceiptLine } from './purchase.service.js';
 export { asciiText, formatKot, formatReceipt, PrinterService, receiptMoney } from './printer.service.js';
 export type { KotFormat, KotPrinter, KotPrintResult, KotStation, KotTicket, ReceiptLine, ReceiptPrinter, ReceiptPrintResult, ReceiptTicket } from './printer.service.js';
 export { OrdersQueries, receiptFor } from './orders.queries.js';

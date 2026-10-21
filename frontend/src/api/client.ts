@@ -22,6 +22,7 @@ import type {
   ItemPatchPayload,
   CenterPurchase,
   CenterPurchasePayload,
+  CenterStockPurchasePayload,
   RevenueCenterOverview,
   RevenueCenterSummary,
   DepartmentPatch,
@@ -155,12 +156,15 @@ export const api = {
 
   context: () => call<CounterContext>('GET', '/api/context'),
   lookupSku: (code: string) => call<SkuLookup>('GET', `/api/skus/lookup?code=${encodeURIComponent(code)}`),
-  searchSkus: (q: string) => call<SkuLookup[]>('GET', `/api/skus?q=${encodeURIComponent(q)}&limit=12`),
+  /** `department`: one revenue center's items only (Phase 26 center stock purchase). */
+  searchSkus: (q: string, department?: DepartmentCode) =>
+    call<SkuLookup[]>('GET', `/api/skus?q=${encodeURIComponent(q)}&limit=12${department ? `&department=${encodeURIComponent(department)}` : ''}`),
   /** Phase 21 billing search: active items only, every typed word matched. */
   searchActiveSkus: (q: string, limit = 8) => call<SkuLookup[]>('GET', `/api/skus?q=${encodeURIComponent(q)}&limit=${limit}&active=1`),
   centersOverview: () => call<RevenueCenterOverview>('GET', '/api/revenue-centers/overview'),
   centerSummary: (code: string) => call<RevenueCenterSummary>('GET', `/api/revenue-centers/${encodeURIComponent(code)}/summary`),
   recordCenterPurchase: (payload: CenterPurchasePayload) => call<CenterPurchase>('POST', '/api/revenue-centers/purchases', payload),
+  recordCenterStockPurchase: (payload: CenterStockPurchasePayload) => call<StockReceiptDetail>('POST', '/api/revenue-centers/stock-purchases', payload),
   voidCenterPurchase: (purchaseId: string) => call<CenterPurchase>('POST', `/api/revenue-centers/purchases/${encodeURIComponent(purchaseId)}/void`, {}),
   searchMembers: (q: string) => call<MemberSummary[]>('GET', `/api/members?q=${encodeURIComponent(q)}&limit=12`),
   listWaiters: () => call<WaiterSummary[]>('GET', '/api/waiters'),
