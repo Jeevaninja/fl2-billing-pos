@@ -57,6 +57,7 @@ import {
   signedPaise,
   str,
 } from './json.js';
+import { type DeviceRecord, DeviceRegistryError, listDevices, pairDevice, reissueToken, revokeDevice } from './captain-devices.js';
 import { created, createJsonHandler, HttpError, ok, type RequestContext, route, type Route } from './routing.js';
 import { clearedSessionCookie, type Session, sessionCookie, SessionStore, sessionToken } from './sessions.js';
 
@@ -72,6 +73,45 @@ export interface ApiConfig {
   sessions?: SessionStore;
   /** scrypt cost for PINs set through the API (tests pass a cheap one). */
   scryptCost?: ScryptCost;
+  /** Captain handset pairing from Settings → Staff & PINs; without it those routes answer 503. */
+  captain?: CaptainPairing;
+}
+
+export interface CaptainPairing {
+  /** The devices file the Captain server's registry reads (FL2_CAPTAIN_DEVICES). */
+  devicesFile: string;
+  /** Addresses a handset uses to reach the Captain server; empty while it isn't listening. */
+  serverUrls: () => string[];
+  /** Runs after a pairing, so the Captain server can start when no handset was paired at boot. */
+  onPaired?: () => void;
+}
+
+/** A handset as the counter sees it: never the token hash. */
+export interface HandsetView {
+  id: string;
+  label: string;
+  active: boolean;
+  pairedAt: string;
+}
+
+const MAX_HANDSET_LABEL = 40;
+
+const handsetView = ({ id, label, active, pairedAt }: DeviceRecord): HandsetView => ({ id, label, active, pairedAt });
+
+function requireCaptain(captain: CaptainPairing | undefined): CaptainPairing {
+  if (!captain) throw new HttpError(503, 'CAPTAIN_NOT_CONFIGURED', 'handset pairing is not configured on this till');
+  return captain;
+}
+
+/** Runs a devices-file change, mapping the registry's refusals to HTTP statuses. */
+function onRegistry<T>(change: () => T): T {
+  try {
+    return change();
+  } catch (err) {
+    if (!(err instanceof DeviceRegistryError)) throw err;
+    const status = err.code === 'INVALID' ? 400 : err.code === 'NOT_FOUND' ? 404 : 409;
+    throw new HttpError(status, err.code === 'INVALID' ? 'BAD_REQUEST' : err.code, err.message);
+  }
 }
 
 /** Routes answered without a session: health, and the sign-in endpoints themselves. */
@@ -149,7 +189,7 @@ function receiptLine(value: unknown, i: number): ReceiptLineInput {
 }
 
 function buildRoutes(
-  { db, cashierId, printer = new PrinterService(), kotPrinter = new PrinterService(), scryptCost }: ApiConfig,
+  { db, cashierId, printer = new PrinterService(), kotPrinter = new PrinterService(), scryptCost, captain }: ApiConfig,
   sessions: SessionStore,
 ): Route[] {
   const auth = new AuthService(db, scryptCost);
@@ -230,6 +270,35 @@ function buildRoutes(
       requireAdmin(context.session);
       return ok(await auth.setPin(id(params.staffId, 'staffId'), pinValue(body.pin, 'pin', { nullable: true })));
     }),
+
+    // Captain handsets (Staff & PINs): pair, re-issue a token, revoke. A token is returned once and
+    // never stored; the devices file keeps only its SHA-256.
+    route('GET', '/api/handsets', async ({ context }) => {
+      requireAdmin(context.session);
+      const { devicesFile, serverUrls } = requireCaptain(captain);
+      return ok({ handsets: listDevices(devicesFile).map(handsetView), serverUrls: serverUrls() });
+    }),
+    route('POST', '/api/handsets', async ({ body, context }) => {
+      requireAdmin(context.session);
+      const { devicesFile, serverUrls, onPaired } = requireCaptain(captain);
+      const label = str(body.label, 'label').trim();
+      if (label === '' || label.length > MAX_HANDSET_LABEL) throw new BadRequestError(`label must be 1–${MAX_HANDSET_LABEL} characters`);
+      const { token, record } = onRegistry(() => pairDevice(devicesFile, str(body.id, 'id').trim(), label));
+      onPaired?.();
+      return created({ handset: handsetView(record), token, serverUrls: serverUrls() });
+    }),
+    route('POST', '/api/handsets/:deviceId/token', async ({ params, context }) => {
+      requireAdmin(context.session);
+      const { devicesFile, serverUrls } = requireCaptain(captain);
+      const { token, record } = onRegistry(() => reissueToken(devicesFile, params.deviceId ?? ''));
+      return ok({ handset: handsetView(record), token, serverUrls: serverUrls() });
+    }),
+    route('POST', '/api/handsets/:deviceId/revoke', async ({ params, context }) => {
+      requireAdmin(context.session);
+      const { devicesFile } = requireCaptain(captain);
+      return ok(handsetView(onRegistry(() => revokeDevice(devicesFile, params.deviceId ?? ''))));
+    }),
+
     route('GET', '/api/context', async () => ok(await queries.getCounterContext(cashierId))),
 
     route('GET', '/api/skus/lookup', async ({ query }) => {

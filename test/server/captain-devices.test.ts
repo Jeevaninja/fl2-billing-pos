@@ -9,6 +9,7 @@ import {
   listDevices,
   pairDevice,
   parseDeviceFile,
+  reissueToken,
   revokeDevice,
 } from '../../server/captain-devices.js';
 
@@ -66,6 +67,22 @@ describe('Captain device registry', () => {
       ['handset-01', false],
       ['handset-02', true],
     ]);
+  });
+
+  it('re-issues a token for an active handset: the old token stops working, the id and pairing date stay', () => {
+    const registry = DeviceRegistry.fromFile(file);
+    const first = pairDevice(file, 'handset-01', 'Captain 1', new Date('2026-10-14T10:00:00Z'));
+    const again = reissueToken(file, 'handset-01');
+    expect(again.token).not.toBe(first.token);
+    expect(again.record).toEqual({ ...first.record, tokenSha256: hashToken(again.token) });
+    expect(readFileSync(file, 'utf8')).not.toContain(again.token);
+    expect(registry.authenticate(first.token)).toBeNull();
+    expect(registry.authenticate(again.token)?.id).toBe('handset-01');
+
+    expect(() => reissueToken(file, 'handset-77')).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }));
+    revokeDevice(file, 'handset-01');
+    expect(() => reissueToken(file, 'handset-01')).toThrow(expect.objectContaining({ code: 'REVOKED' }));
+    expect(registry.authenticate(again.token)).toBeNull();
   });
 
   it('treats a missing file as no devices', () => {

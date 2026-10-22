@@ -8,8 +8,8 @@
  *                    terminal; it does not change who the till's bills belong to).
  *   FL2_DEV_SEED=1   seed demo data into an empty database and default to its cashier.
  *
- * Captain (waiter app) server — started only when at least one handset is paired
- * (`npm run captain:devices -- pair <id> <label>`):
+ * Captain (waiter app) server — started once a handset is paired, at boot or later from
+ * Settings → Staff & PINs (or `npm run captain:devices -- pair <id> <label>`):
  *   FL2_CAPTAIN_DEVICES  devices file (default .data/captain-devices.json)
  *   FL2_CAPTAIN_HOST     default 0.0.0.0 (all interfaces, so handsets on the Wi-Fi can reach it)
  *   FL2_CAPTAIN_PORT     default 4311
@@ -45,7 +45,31 @@ async function resolveCashier(db: SqlDatabase): Promise<string> {
 
 const { db, label, close } = await openDatabase();
 const cashierId = await resolveCashier(db);
-const servers = [createApiServer({ db, cashierId })];
+const devices = DeviceRegistry.fromFile(captainDevicesFile);
+let captainUrls: string[] = [];
+
+/** Starts the Captain server once; later calls (each new pairing) are no-ops. */
+function startCaptain(): void {
+  if (servers.length > 1) return;
+  const captain = createCaptainServer({ db, devices });
+  servers.push(captain);
+  captain.listen(captainPort, captainHost, () => {
+    captainUrls = Object.values(networkInterfaces())
+      .flat()
+      .filter((a) => a && a.family === 'IPv4' && !a.internal)
+      .map((a) => `http://${a!.address}:${captainPort}`);
+    console.log(`[fl2-captain] listening on ${captainHost}:${captainPort} for ${devices.activeDevices().length} handset(s) · ${captainUrls.join(', ') || 'no LAN address'}`);
+    console.log('[fl2-captain] plain HTTP: use a staff-only WPA2/WPA3 Wi-Fi network; device tokens travel in clear text');
+  });
+}
+
+const servers = [
+  createApiServer({
+    db,
+    cashierId,
+    captain: { devicesFile: captainDevicesFile, serverUrls: () => captainUrls, onPaired: startCaptain },
+  }),
+];
 
 servers[0]!.listen(port, HOST, () => {
   console.log(`[fl2-api] listening on http://${HOST}:${port} · ${label} · cashier ${cashierId}`);
@@ -54,21 +78,10 @@ if (!(await new AuthService(db).adminConfigured())) {
   console.warn('[fl2-api] no admin can sign in yet — stop the API and run: npm run staff -- set-admin <username>');
 }
 
-const devices = DeviceRegistry.fromFile(captainDevicesFile);
-const paired = devices.activeDevices();
-if (paired.length === 0) {
-  console.log(`[fl2-captain] not started: no paired handsets in ${captainDevicesFile} (npm run captain:devices -- pair handset-01 "Captain 1")`);
+if (devices.activeDevices().length === 0) {
+  console.log(`[fl2-captain] not started: no paired handsets in ${captainDevicesFile} (pair one in Settings → Staff & PINs)`);
 } else {
-  const captain = createCaptainServer({ db, devices });
-  servers.push(captain);
-  captain.listen(captainPort, captainHost, () => {
-    const lan = Object.values(networkInterfaces())
-      .flat()
-      .filter((a) => a && a.family === 'IPv4' && !a.internal)
-      .map((a) => `http://${a!.address}:${captainPort}`);
-    console.log(`[fl2-captain] listening on ${captainHost}:${captainPort} for ${paired.length} handset(s) · ${lan.join(', ') || 'no LAN address'}`);
-    console.log('[fl2-captain] plain HTTP: use a staff-only WPA2/WPA3 Wi-Fi network; device tokens travel in clear text');
-  });
+  startCaptain();
 }
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {

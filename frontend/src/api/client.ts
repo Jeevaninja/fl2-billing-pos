@@ -66,6 +66,9 @@ import type {
   CounterRole,
   StaffMember,
   StaffPatch,
+  Handset,
+  HandsetList,
+  IssuedHandsetToken,
   StaffSummary,
 } from './types'
 
@@ -153,6 +156,11 @@ export const api = {
   updateStaff: (staffId: string, patch: StaffPatch) => call<StaffMember>('PATCH', `/api/staff/${encodeURIComponent(staffId)}`, patch),
   /** null clears the PIN. */
   setStaffPin: (staffId: string, pin: string | null) => call<StaffMember>('PUT', `/api/staff/${encodeURIComponent(staffId)}/pin`, { pin }),
+  // Captain handsets: pair, re-issue a token (the old one stops working), revoke.
+  listHandsets: () => call<HandsetList>('GET', '/api/handsets'),
+  pairHandset: (id: string, label: string) => call<IssuedHandsetToken>('POST', '/api/handsets', { id, label }),
+  reissueHandsetToken: (id: string) => call<IssuedHandsetToken>('POST', `/api/handsets/${encodeURIComponent(id)}/token`, {}),
+  revokeHandset: (id: string) => call<Handset>('POST', `/api/handsets/${encodeURIComponent(id)}/revoke`, {}),
 
   context: () => call<CounterContext>('GET', '/api/context'),
   lookupSku: (code: string) => call<SkuLookup>('GET', `/api/skus/lookup?code=${encodeURIComponent(code)}`),

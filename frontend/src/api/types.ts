@@ -1071,3 +1071,26 @@ export interface StaffPatch {
   role?: CounterRole
   isActive?: boolean
 }
+
+// ── Captain handsets (Staff & PINs) ─────────────────────────────────────────────
+
+/** A paired waiter-app handset. Revoked ones stay listed for audit; their ids can't be reused. */
+export interface Handset {
+  id: string
+  label: string
+  active: boolean
+  pairedAt: string
+}
+
+/** GET /api/handsets. `serverUrls` is where handsets reach the Captain server; empty while it isn't listening. */
+export interface HandsetList {
+  handsets: Handset[]
+  serverUrls: string[]
+}
+
+/** A pairing or a re-issue. The token is returned this once; the till keeps only its hash. */
+export interface IssuedHandsetToken {
+  handset: Handset
+  token: string
+  serverUrls: string[]
+}

@@ -131,7 +131,7 @@ export function createJsonHandler(routes: Route[], admit: (req: IncomingMessage)
       body = parseBody(await readBody(req));
     }
 
-    // Path params are only ever UUIDs, validated by each handler, so they are used undecoded.
+    // Path params are UUIDs or handset ids (URL-safe), validated by each handler, so they are used undecoded.
     const result = await match.r.handler({ params: { ...match.m.groups }, query: url.searchParams, body, context });
     return { status: result.status ?? 200, body: result.body, ...(result.headers ? { headers: result.headers } : {}) };
   }

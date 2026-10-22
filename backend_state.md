@@ -930,8 +930,24 @@ The frontend dev server proxies `/api` to `http://127.0.0.1:4310`.
 | Command | Effect |
 |---|---|
 | `npm run captain:devices -- pair <id> "<label>"` | Pairs a handset (`id` like `handset-01`) and prints its token **once** |
+| `npm run captain:devices -- reissue <id>` | New token for an active handset (old one stops working), printed **once** |
 | `npm run captain:devices -- revoke <id>` | Token stops working on the next request |
 | `npm run captain:devices -- list` | Active and revoked handsets |
+
+The same operations run from Settings → Staff & PINs through admin-only counter routes (`server/app.ts`;
+`ApiConfig.captain: CaptainPairing` = devices file + `serverUrls()` + `onPaired`; without it they answer
+`503 CAPTAIN_NOT_CONFIGURED`). Responses never include `tokenSha256`; a token is returned only by pair/re-issue.
+
+| Route | Effect |
+|---|---|
+| `GET /api/handsets` | `{ handsets: [{ id, label, active, pairedAt }], serverUrls }` (`serverUrls` empty until the Captain server listens) |
+| `POST /api/handsets` `{ id, label }` | 201 `{ handset, token, serverUrls }`; label trimmed, 1–40 chars; 400 bad id, 409 `CONFLICT` taken id (revoked too) |
+| `POST /api/handsets/:id/token` | `{ handset, token, serverUrls }`; 404 `NOT_FOUND`, 409 `REVOKED` |
+| `POST /api/handsets/:id/revoke` | the revoked handset; 404 `NOT_FOUND` |
+
+`server/main.ts` starts the Captain server at boot if any handset is active, otherwise on the first pairing
+(`onPaired`); registry refusals are `DeviceRegistryError` (`INVALID` / `CONFLICT` / `NOT_FOUND` / `REVOKED`).
+Waiters are not staff: they stay in `waiters`, and the handset picks its waiter per shift (Phase 27 D2).
 
 | Variable | Default | Meaning |
 |---|---|---|

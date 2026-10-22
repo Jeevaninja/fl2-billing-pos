@@ -23,6 +23,17 @@ export interface DeviceRecord {
   pairedAt: string;
 }
 
+/** A pairing request the registry refuses: a malformed id, a taken id, or a missing or revoked device. */
+export class DeviceRegistryError extends Error {
+  constructor(
+    readonly code: 'INVALID' | 'CONFLICT' | 'NOT_FOUND' | 'REVOKED',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'DeviceRegistryError';
+  }
+}
+
 export interface CaptainDevice {
   id: string;
   label: string;
@@ -108,12 +119,29 @@ function writeRecords(file: string, records: readonly DeviceRecord[]): void {
 
 /** Pairs a new handset: stores the token's hash and returns the token, which is shown only once. */
 export function pairDevice(file: string, id: string, label: string, now = new Date()): { token: string; record: DeviceRecord } {
-  if (!DEVICE_ID.test(id)) throw new Error(`device id must match ${DEVICE_ID} (e.g. handset-01)`);
+  if (!DEVICE_ID.test(id)) throw new DeviceRegistryError('INVALID', `device id must match ${DEVICE_ID} (e.g. handset-01)`);
   const records = readRecords(file);
-  if (records.some((r) => r.id === id)) throw new Error(`device ${id} is already paired; pick a new id (revoked ids stay reserved for audit)`);
+  if (records.some((r) => r.id === id)) {
+    throw new DeviceRegistryError('CONFLICT', `device ${id} is already paired; pick a new id (revoked ids stay reserved for audit)`);
+  }
   const token = generateToken();
   const record: DeviceRecord = { id, label, tokenSha256: hashToken(token), active: true, pairedAt: now.toISOString() };
   writeRecords(file, [...records, record]);
+  return { token, record };
+}
+
+/**
+ * Issues a fresh token for an active handset (lost or leaked token, or a replacement phone that
+ * keeps the id). The old token stops working at once; like pairing, the new one is shown only once.
+ */
+export function reissueToken(file: string, id: string): { token: string; record: DeviceRecord } {
+  const records = readRecords(file);
+  const target = records.find((r) => r.id === id);
+  if (!target) throw new DeviceRegistryError('NOT_FOUND', `no paired device ${id}`);
+  if (!target.active) throw new DeviceRegistryError('REVOKED', `device ${id} is revoked; pair a new id instead`);
+  const token = generateToken();
+  const record = { ...target, tokenSha256: hashToken(token) };
+  writeRecords(file, records.map((r) => (r.id === id ? record : r)));
   return { token, record };
 }
 
@@ -121,7 +149,7 @@ export function pairDevice(file: string, id: string, label: string, now = new Da
 export function revokeDevice(file: string, id: string): DeviceRecord {
   const records = readRecords(file);
   const target = records.find((r) => r.id === id);
-  if (!target) throw new Error(`no paired device ${id}`);
+  if (!target) throw new DeviceRegistryError('NOT_FOUND', `no paired device ${id}`);
   const revoked = { ...target, active: false };
   writeRecords(file, records.map((r) => (r.id === id ? revoked : r)));
   return revoked;

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, KeyRound, Pencil, Plus, ShieldCheck, Users, WifiOff } from 'lucide-react'
 import { ApiError, api } from '../api/client'
-import type { CounterRole, StaffMember } from '../api/types'
+import type { CounterRole, Handset, HandsetList, IssuedHandsetToken, StaffMember } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
 import { initials, ROLE_LABEL } from '../auth/pinPad'
 import { FlashLine } from '../billing/BillingPanels'
@@ -11,10 +11,17 @@ import { Modal } from '../billing/Modal'
 import { beep } from '../lib/beep'
 import { buttonClass, CARD, FOCUS_RING, keepFocus } from '../lib/ui'
 import { formFor, MAX_STAFF_NAME, NEW_STAFF, pinError, sortStaff, staffChips, staffFormError, staffPatch, type StaffForm } from '../settings/staffForm'
+import { ConfirmHandsetDialog, HandsetsSection, HandsetTokenDialog, PairHandsetDialog } from './settings/Handsets'
 import { CenterNote, Toggle } from './settings/SettingsControls'
 import { Badge, Kbd, LiveClock } from './ui'
 
-type Dialog = { kind: 'form'; form: StaffForm } | { kind: 'pin'; member: StaffMember } | null
+type Dialog =
+  | { kind: 'form'; form: StaffForm }
+  | { kind: 'pin'; member: StaffMember }
+  | { kind: 'pair' }
+  | { kind: 'reissue' | 'revoke'; handset: Handset }
+  | { kind: 'token'; issued: IssuedHandsetToken }
+  | null
 
 const INPUT = `h-12 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-lg hover:border-zinc-500 focus:border-amber-400 ${FOCUS_RING}`
 
@@ -22,6 +29,7 @@ const INPUT = `h-12 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 te
  * Settings → Staff & PINs (Phase 25, D6). Add cashiers and managers, set or reset the PIN that
  * authorises Day Open, rename, switch role, deactivate. Staff are never deleted. Admins sign in with
  * a password set on the till (npm run staff -- set-admin), so their role and password aren't edited here.
+ * Below the staff list: Captain handsets (waiter-app phones), paired with a token shown once.
  */
 export default function StaffScreen({ onExit }: { onExit: () => void }) {
   const { staff: me } = useAuth()
@@ -32,6 +40,8 @@ export default function StaffScreen({ onExit }: { onExit: () => void }) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [dialog, setDialog] = useState<Dialog>(null)
   const [flash, setFlash] = useState<Flash | null>(null)
+  const [handsets, setHandsets] = useState<HandsetList | null>(null)
+  const [handsetError, setHandsetError] = useState<string | null>(null)
 
   const say = useCallback((kind: Flash['kind'], text: string) => {
     beep(kind)
@@ -54,16 +64,33 @@ export default function StaffScreen({ onExit }: { onExit: () => void }) {
   )
   const refresh = useCallback(() => api.listStaff().then(loaded, failed), [loaded, failed])
 
+  const handsetsLoaded = useCallback((list: HandsetList) => {
+    setHandsets(list)
+    setHandsetError(null)
+  }, [])
+  const handsetsFailed = useCallback((err: unknown) => {
+    setHandsetError(err instanceof ApiError && err.code === 'CAPTAIN_NOT_CONFIGURED' ? 'Handset pairing isn’t set up on this till.' : `Handsets: ${counterErrorMessage(err)}`)
+  }, [])
+  const refreshHandsets = useCallback(() => api.listHandsets().then(handsetsLoaded, handsetsFailed), [handsetsLoaded, handsetsFailed])
+  const issued = (result: IssuedHandsetToken) => {
+    setDialog({ kind: 'token', issued: result })
+    void refreshHandsets()
+  }
+
   useEffect(() => {
     let live = true
     api.listStaff().then(
       (members) => live && loaded(members),
       (err: unknown) => live && failed(err),
     )
+    api.listHandsets().then(
+      (list) => live && handsetsLoaded(list),
+      (err: unknown) => live && handsetsFailed(err),
+    )
     return () => {
       live = false
     }
-  }, [loaded, failed])
+  }, [loaded, failed, handsetsLoaded, handsetsFailed])
 
   // Tick PIN-lock countdowns while any are showing.
   const anyLocked = staff?.some((s) => s.pinLockedForSeconds !== null) ?? false
@@ -185,6 +212,13 @@ export default function StaffScreen({ onExit }: { onExit: () => void }) {
             <p className="text-xs text-zinc-500">
               <Kbd>↑</Kbd> <Kbd>↓</Kbd> select · <Kbd>Enter</Kbd> edit · <Kbd>P</Kbd> set PIN · <Kbd>Ins</Kbd> add · <Kbd>Esc</Kbd> back
             </p>
+            <HandsetsSection
+              list={handsets}
+              error={handsetError}
+              onPair={() => setDialog({ kind: 'pair' })}
+              onReissue={(handset) => setDialog({ kind: 'reissue', handset })}
+              onRevoke={(handset) => setDialog({ kind: 'revoke', handset })}
+            />
           </div>
         </main>
       )}
@@ -211,6 +245,29 @@ export default function StaffScreen({ onExit }: { onExit: () => void }) {
             setDialog(null)
             say('ok', saved.hasPin ? `PIN set for ${saved.displayName}` : `PIN cleared for ${saved.displayName}`)
             void refresh()
+          }}
+        />
+      )}
+      {dialog?.kind === 'pair' && handsets && <PairHandsetDialog handsets={handsets.handsets} onClose={() => setDialog(null)} onIssued={issued} />}
+      {(dialog?.kind === 'reissue' || dialog?.kind === 'revoke') && (
+        <ConfirmHandsetDialog
+          action={dialog.kind}
+          handset={dialog.handset}
+          onClose={() => setDialog(null)}
+          onIssued={issued}
+          onRevoked={(revoked) => {
+            setDialog(null)
+            say('ok', `${revoked.label} revoked`)
+            void refreshHandsets()
+          }}
+        />
+      )}
+      {dialog?.kind === 'token' && (
+        <HandsetTokenDialog
+          issued={dialog.issued}
+          onClose={() => {
+            setDialog(null)
+            void refreshHandsets()
           }}
         />
       )}
