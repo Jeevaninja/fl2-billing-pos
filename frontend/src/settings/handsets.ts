@@ -1,7 +1,7 @@
 /**
  * Settings → Staff & PINs → Captain handsets. Pure form rules; the server re-checks every one of them.
  */
-import type { Handset } from '../api/types'
+import type { Handset, IssuedHandsetToken } from '../api/types'
 
 export const MAX_HANDSET_LABEL = 40
 /** Same format the server's devices file and bills.captain_device_id accept. */
@@ -42,4 +42,23 @@ export function phoneAddress(url: string): string {
   } catch {
     return url
   }
+}
+
+/** Marks a QR as an FL2 Captain pairing code; the app checks it and `v` before trusting the rest. */
+export const PAIRING_CODE_TYPE = 'fl2-captain-pair'
+
+/**
+ * What the pairing QR holds, as compact JSON (the phone app's POS Settings parses it):
+ * `{"t":"fl2-captain-pair","v":1,"host":"192.168.1.20","port":4311,"token":"…","device":"handset-01"}`.
+ */
+export function pairingCode(issued: IssuedHandsetToken, serverUrl: string): string {
+  const url = new URL(serverUrl)
+  return JSON.stringify({
+    t: PAIRING_CODE_TYPE,
+    v: 1,
+    host: url.hostname,
+    port: Number(url.port || 80),
+    token: issued.token,
+    device: issued.handset.id,
+  })
 }

@@ -1,10 +1,11 @@
-import { useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Ban, Check, Copy, Plus, RotateCcw, Smartphone } from 'lucide-react'
 import { ApiError, api } from '../../api/client'
 import type { Handset, HandsetList, IssuedHandsetToken } from '../../api/types'
 import { counterErrorMessage } from '../../billing/errors'
 import { Modal } from '../../billing/Modal'
-import { handsetFormError, MAX_HANDSET_LABEL, nextHandsetId, pairedOn, phoneAddress, sortHandsets } from '../../settings/handsets'
+import { handsetFormError, MAX_HANDSET_LABEL, nextHandsetId, pairedOn, pairingCode, phoneAddress, sortHandsets } from '../../settings/handsets'
+import { qrPath } from '../../lib/qr'
 import { buttonClass, CARD, FOCUS_RING } from '../../lib/ui'
 import { Badge, Kbd } from '../ui'
 
@@ -53,7 +54,7 @@ export function HandsetsSection({
       </div>
       {error && <p className="text-sm font-semibold text-rose-300">{error}</p>}
       {list && handsets.length === 0 && (
-        <p className={`${CARD} px-4 py-5 text-sm text-zinc-400`}>No handsets yet. Pair one, then enter the POS IP address and its token in the app’s POS Settings.</p>
+        <p className={`${CARD} px-4 py-5 text-sm text-zinc-400`}>No handsets yet. Pair one, then scan its QR in the app’s POS Settings.</p>
       )}
       {handsets.length > 0 && (
         <ul className={`${CARD} divide-y divide-zinc-800 overflow-hidden`} aria-label="Handsets">
@@ -121,7 +122,7 @@ export function PairHandsetDialog({ handsets, onClose, onIssued }: { handsets: r
             Cancel
           </button>
           <button type="button" onClick={save} disabled={saving || problem !== null} className={buttonClass('primary')}>
-            Pair &amp; show token <Kbd>Enter</Kbd>
+            Pair &amp; show QR <Kbd>Enter</Kbd>
           </button>
         </div>
       }
@@ -215,7 +216,7 @@ export function ConfirmHandsetDialog({
     >
       <p className="text-zinc-300">
         {reissue
-          ? `${handset.label}’s current token stops working at once. Enter the new one in the app’s POS Settings.`
+          ? `${handset.label}’s current token stops working at once. Scan the new QR in the app’s POS Settings.`
           : `${handset.label} (${handset.id}) can no longer send orders. Its past orders keep their handset ID; the ID can’t be paired again.`}
       </p>
       {serverError && (
@@ -227,10 +228,45 @@ export function ConfirmHandsetDialog({
   )
 }
 
-/** The token, shown this once, with a copy button and the server address the app needs. */
+/** Polls the handset list until the Captain server reports its addresses (it starts with the first pairing). */
+function useServerUrls(initial: string[]): string[] {
+  const [urls, setUrls] = useState(initial)
+  const waiting = urls.length === 0
+  useEffect(() => {
+    if (!waiting) return
+    let tries = 0
+    const timer = setInterval(() => {
+      if (++tries > 15) return clearInterval(timer)
+      api.listHandsets().then(
+        (list) => list.serverUrls.length > 0 && setUrls(list.serverUrls),
+        () => undefined,
+      )
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [waiting])
+  return urls
+}
+
+/** The pairing QR: dark on white whatever the theme, since phone cameras need the contrast. */
+function PairingQr({ text, label }: { text: string; label: string }) {
+  const { size, d } = useMemo(() => qrPath(text), [text])
+  return (
+    <svg viewBox={`0 0 ${size} ${size}`} shapeRendering="crispEdges" role="img" aria-label={label} className="size-60 shrink-0 rounded-lg bg-white">
+      <path d={d} fill="#000" />
+    </svg>
+  )
+}
+
+/**
+ * The token, shown this once: as a QR the app's POS Settings scans (IP, port, token and handset id in
+ * one go), and as text with a copy button for typing in by hand.
+ */
 export function HandsetTokenDialog({ issued, onClose }: { issued: IssuedHandsetToken; onClose: () => void }) {
   const [copied, setCopied] = useState<'yes' | 'failed' | null>(null)
   const tokenRef = useRef<HTMLElement>(null)
+  const urls = useServerUrls(issued.serverUrls)
+  const [picked, setPicked] = useState(0)
+  const url = urls[Math.min(picked, urls.length - 1)]
 
   const copy = () => {
     const selectToken = () => {
@@ -257,9 +293,9 @@ export function HandsetTokenDialog({ issued, onClose }: { issued: IssuedHandsetT
 
   return (
     <Modal
-      title={`Token · ${issued.handset.label}`}
+      title={`Pair ${issued.handset.label}`}
       onClose={onClose}
-      width="max-w-lg"
+      width="max-w-2xl"
       onKey={(e) => {
         if ((e.key === 'c' || e.key === 'C') && !e.ctrlKey && !e.metaKey) {
           copy()
@@ -278,30 +314,54 @@ export function HandsetTokenDialog({ issued, onClose }: { issued: IssuedHandsetT
         </div>
       }
     >
-      <div className="flex flex-col gap-4">
-        <p className="text-zinc-300">
-          In the app, open <strong>POS Settings</strong> and enter the POS IP address and this token for <span className="font-mono">{issued.handset.id}</span>.
-        </p>
-        <div className="flex flex-col gap-1.5">
-          <span className="text-sm font-semibold text-zinc-300">Device token</span>
-          <code ref={tokenRef} className="rounded-lg border border-amber-400/40 bg-zinc-950 px-3 py-3 font-mono text-lg break-all text-amber-100 select-all">
-            {issued.token}
-          </code>
+      <div className="flex gap-5">
+        {url ? (
+          <PairingQr text={pairingCode(issued, url)} label={`Pairing code for ${issued.handset.label}`} />
+        ) : (
+          <div className="flex size-60 shrink-0 items-center justify-center rounded-lg border border-dashed border-zinc-700 p-4 text-center text-sm text-zinc-400">
+            Starting the Captain server…
+          </div>
+        )}
+        <div className="flex min-w-0 flex-1 flex-col gap-4">
+          <p className="text-zinc-300">
+            On the phone: <strong>Captain Mode → POS Settings → Scan pairing QR</strong>, and point it at this code. It fills in the IP and token for{' '}
+            <span className="font-mono">{issued.handset.id}</span>.
+          </p>
+          <div className="flex flex-col gap-1.5">
+            <span className="text-sm font-semibold text-zinc-300">POS IP address</span>
+            {urls.length > 1 ? (
+              <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="POS IP address in the QR">
+                {urls.map((u, i) => (
+                  <button
+                    key={u}
+                    type="button"
+                    role="radio"
+                    aria-checked={u === url}
+                    onClick={() => setPicked(i)}
+                    className={`rounded-lg border-2 px-3 py-1 font-mono ${u === url ? 'border-amber-400 bg-amber-400/15 text-amber-100' : 'border-zinc-700 hover:border-zinc-500'} ${FOCUS_RING}`}
+                  >
+                    {phoneAddress(u)}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <span className="font-mono text-lg text-zinc-100">{url ? phoneAddress(url) : '—'}</span>
+            )}
+            {urls.length > 1 && <span className="text-xs text-zinc-500">This PC has several networks: pick the club Wi-Fi’s.</span>}
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <span className="text-sm font-semibold text-zinc-300">Device token (to type in instead)</span>
+            <code ref={tokenRef} className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-sm break-all text-amber-100 select-all">
+              {issued.token}
+            </code>
+          </div>
         </div>
-        <div className="flex flex-col gap-1.5">
-          <span className="text-sm font-semibold text-zinc-300">POS IP address</span>
-          {issued.serverUrls.length > 0 ? (
-            <span className="font-mono text-lg text-zinc-100">{issued.serverUrls.map(phoneAddress).join(' · ')}</span>
-          ) : (
-            <span className="text-sm text-zinc-400">The Captain server is starting; its IP shows above the handset list in a moment.</span>
-          )}
-        </div>
-        <p className={`text-sm font-semibold ${copied === 'failed' ? 'text-rose-300' : 'text-amber-300'}`} role={copied === 'failed' ? 'alert' : undefined}>
-          {copied === 'failed'
-            ? 'Couldn’t reach the clipboard: the token is selected, press Ctrl+C.'
-            : 'This token is not stored and won’t be shown again. If it’s lost, issue a new one.'}
-        </p>
       </div>
+      <p className={`mt-4 text-sm font-semibold ${copied === 'failed' ? 'text-rose-300' : 'text-amber-300'}`} role={copied === 'failed' ? 'alert' : undefined}>
+        {copied === 'failed'
+          ? 'Couldn’t reach the clipboard: the token is selected, press Ctrl+C.'
+          : 'This code is not stored and won’t be shown again. If it’s lost, issue a new token.'}
+      </p>
     </Modal>
   )
 }

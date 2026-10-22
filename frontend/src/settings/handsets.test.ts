@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Handset } from '../api/types'
-import { handsetFormError, nextHandsetId, pairedOn, phoneAddress, sortHandsets } from './handsets'
+import { handsetFormError, nextHandsetId, pairedOn, pairingCode, phoneAddress, sortHandsets } from './handsets'
 
 const handset = (id: string, active = true): Handset => ({ id, label: id, active, pairedAt: '2026-10-22T06:00:00.000Z' })
 
@@ -35,5 +35,17 @@ describe('Captain handset form rules', () => {
   it('gives the bare IP the app asks for', () => {
     expect(phoneAddress('http://192.168.1.20:4311')).toBe('192.168.1.20')
     expect(phoneAddress('not a url')).toBe('not a url')
+  })
+
+  it('encodes the pairing QR as versioned JSON with the bare IP, port, token and handset id', () => {
+    const issued = { handset: handset('handset-03'), token: 'tok_EN-123', serverUrls: [] }
+    expect(JSON.parse(pairingCode(issued, 'http://192.168.1.20:4311'))).toEqual({
+      t: 'fl2-captain-pair',
+      v: 1,
+      host: '192.168.1.20',
+      port: 4311,
+      token: 'tok_EN-123',
+      device: 'handset-03',
+    })
   })
 })

@@ -453,9 +453,16 @@ Plan and QA log: `docs/ui/phase25-auth-polish-qa-plan.md`.
 - Status chips show PIN set / No PIN / PIN locked m:ss / Signs in as … / Inactive.
 - Keys: ↑↓, Enter edit, P PIN, Ins add, Esc.
 - **Captain handsets** (below the staff list; `components/settings/Handsets.tsx`, rules in `settings/handsets.ts`):
-  list (active first, revoked kept), Captain server address, Pair handset (name + id prefilled `handset-NN`),
-  New token (confirm: old token stops at once), Revoke (confirm). Pair / New token open the token dialog: the
-  token shown once with Copy token (C; falls back to selecting it) and the server address for the app's POS Settings.
+  list (active first, revoked kept), the POS IP for phones, Pair handset (name + id prefilled `handset-NN`),
+  New token (confirm: old token stops at once), Revoke (confirm). Pair / New token open the token dialog, shown once:
+  - a **pairing QR** (`lib/qr.ts`: `uqr`, ECC M, drawn as one SVG path, black on white in both themes) that the app's
+    POS Settings → Scan pairing QR reads. Payload (`pairingCode`):
+    `{"t":"fl2-captain-pair","v":1,"host":"<IPv4>","port":4311,"token":"<token>","device":"handset-NN"}`.
+    The app refuses another `t`, a `v` other than 1, a non-IPv4 host or a port other than 4311.
+  - the IP (a picker when the PC has several networks) and the token as text, with Copy token (C; falls back to
+    selecting it) for typing in by hand.
+  - While the Captain server is still starting (first pairing), the dialog polls `GET /api/handsets` each second
+    (up to 15 s) for its address.
 
 **Dashboard (D7)**
 - `MODULE_TILES` is 9 tiles; `HERO_TILE = 'billing'` spans two rows of the 5 × 2 grid (2 × 5 below `lg`,
