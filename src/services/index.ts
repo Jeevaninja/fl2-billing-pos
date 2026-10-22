@@ -28,8 +28,19 @@ export {
 } from './catalog.service.js';
 export type { ExciseGroup } from '../domain/types.js';
 export type { CatalogFilter, CatalogItem, CatalogProduct, CatalogSku, ItemPatch, NewItemInput, NewProductInput, NewSkuInput, ProductCategory, ProductPatch, SkuPatch } from './catalog.service.js';
-export { CaptainService, MAX_ORDER_LINES, orderFingerprint } from './captain.service.js';
-export type { OrderLine, OrderRequest, PlacedOrder, WaiterProfile } from './captain.service.js';
+export { CaptainService, MAX_ORDER_LINES, orderFingerprint, roundFingerprint } from './captain.service.js';
+export type {
+  CaptainCatalogItem,
+  CaptainWaiter,
+  OrderLine,
+  OrderRequest,
+  PlacedOrder,
+  PlacedRound,
+  RoundRequest,
+  SettleRequest,
+  SettleRequestResult,
+  WaiterProfile,
+} from './captain.service.js';
 export { KotService } from './kot.service.js';
 export { MAX_PURCHASE_LINES, MAX_PURCHASE_PAISE, RevenueCenterService } from './revenue-center.service.js';
 export type {

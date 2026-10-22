@@ -491,4 +491,122 @@ describe('Captain API (Wi-Fi server)', () => {
       expect(await call('GET', '/api/captain-orders')).toMatchObject({ status: 404 });
     });
   });
+
+  describe('Phase 27: waiter picker, catalog and member lookup', () => {
+    it('GET /api/captain/waiters lists active waiters without balances', async () => {
+      const { fx, call } = await start();
+      const res = await call('GET', '/api/captain/waiters');
+      expect(res.status).toBe(200);
+      expect(res.body[0]).toEqual({ id: fx.waiter.trusted, code: 'W01', displayName: 'Trusted', isTrusted: true });
+      expect(res.body.map((w: { code: string }) => w.code)).toEqual(['W01', 'W02', 'W03']);
+    });
+
+    it('GET /api/captain/catalog lists orderable items with paise as strings', async () => {
+      const { fx, call } = await start();
+      const res = await call('GET', '/api/captain/catalog');
+      expect(res.status).toBe(200);
+      expect(res.body.find((i: { id: string }) => i.id === fx.sku.half)).toMatchObject({
+        skuCode: 'HRUM-H',
+        sizeCode: 'HALF',
+        pricePaise: String(PRICE.half),
+        onHandQty: OPENING_QTY,
+        tracksStock: true,
+        department: 'LIQUOR',
+        saleUnitName: 'Bottle',
+      });
+      expect(res.body[0]).not.toHaveProperty('purchasePricePaise');
+    });
+
+    it('GET /api/captain/members/lookup resolves a card number; unknown 404, blank 400', async () => {
+      const { call } = await start();
+      const memberId = await addMember();
+      expect(await call('GET', '/api/captain/members/lookup?code=m-42')).toMatchObject({
+        status: 200,
+        body: { id: memberId, membershipNo: 'M-42', displayName: 'Anil Kumar' },
+      });
+      expect(await call('GET', '/api/captain/members/lookup?code=M-99')).toMatchObject({ status: 404, body: { error: { code: 'NOT_FOUND', entity: 'member' } } });
+      expect(await call('GET', '/api/captain/members/lookup?code=%20')).toMatchObject({ status: 400, body: { error: { code: 'BAD_REQUEST' } } });
+    });
+
+    it('needs a paired device token', async () => {
+      const { call } = await start();
+      for (const path of ['/api/captain/waiters', '/api/captain/catalog', '/api/captain/members/lookup?code=M-42']) {
+        expect((await call('GET', path, undefined, bearer(HANDSETS.revoked.token))).status).toBe(401);
+      }
+    });
+  });
+
+  describe('Phase 27: POST /api/captain/bills/:billId/items', () => {
+    it('adds a round (201), prints it, and replays a retry (200) without reprinting', async () => {
+      const { tickets, printer } = fakePrinter();
+      const { fx, call } = await start({ printer });
+      const placed = await kot(call, { waiterId: fx.waiter.untrusted, items: [{ skuId: fx.sku.half, quantity: 1 }] });
+      const body = { requestId: randomUUID(), waiterId: fx.waiter.untrusted, items: [{ skuId: fx.sku.beer650, quantity: 2 }] };
+
+      const added = await call('POST', `/api/captain/bills/${placed.body.bill.id}/items`, body);
+      expect(added).toMatchObject({
+        status: 201,
+        body: {
+          replayed: false,
+          bill: { id: placed.body.bill.id, totalPaise: String(PRICE.half + 2 * PRICE.beer650) },
+          items: [{ lineNo: 2, skuCode: 'HLAG-650', quantity: 2 }],
+          kots: [{ station: 'BAR', printed: true, ticketNo: 2 }],
+        },
+      });
+      expect(tickets).toHaveLength(2);
+
+      const retry = await call('POST', `/api/captain/bills/${placed.body.bill.id}/items`, body);
+      expect(retry).toMatchObject({ status: 200, body: { replayed: true, kots: [], items: [{ id: added.body.items[0].id }] } });
+      expect(tickets).toHaveLength(2);
+
+      const reused = await call('POST', `/api/captain/bills/${placed.body.bill.id}/items`, { ...body, items: [{ skuId: fx.sku.full, quantity: 1 }] });
+      expect(reused).toMatchObject({ status: 409, body: { error: { code: 'IDEMPOTENCY_CONFLICT' } } });
+    });
+
+    it("maps refusals: short stock PS003, another waiter's bill PS002, malformed 400, unknown bill 404", async () => {
+      const { fx, call } = await start({ printer: fakePrinter().printer });
+      const placed = await kot(call, { waiterId: fx.waiter.trusted, items: [{ skuId: fx.sku.half, quantity: 1 }] });
+      const path = `/api/captain/bills/${placed.body.bill.id}/items`;
+      const round = (over: Record<string, unknown>) => call('POST', path, { requestId: randomUUID(), waiterId: fx.waiter.trusted, items: [{ skuId: fx.sku.full, quantity: 1 }], ...over });
+
+      expect(await round({ items: [{ skuId: fx.sku.full, quantity: OPENING_QTY + 1 }] })).toMatchObject({ status: 409, body: { error: { code: 'PS003' } } });
+      expect(await round({ waiterId: fx.waiter.limited })).toMatchObject({ status: 409, body: { error: { code: 'PS002' } } });
+      expect(await round({ items: [{ skuId: fx.sku.full, quantity: '1' }] })).toMatchObject({ status: 400, body: { error: { code: 'BAD_REQUEST' } } });
+      expect(await round({ items: [{ sku_id: fx.sku.full, quantity: 1 }] })).toMatchObject({ status: 400 });
+      expect(await call('POST', `/api/captain/bills/${MISSING}/items`, { requestId: randomUUID(), waiterId: fx.waiter.trusted, items: [{ skuId: fx.sku.full, quantity: 1 }] })).toMatchObject({
+        status: 404,
+        body: { error: { code: 'NOT_FOUND', entity: 'bill' } },
+      });
+    });
+  });
+
+  describe('Phase 27: POST /api/captain/bills/:billId/settle-request', () => {
+    it('flags the bill (201), a repeat answers 200, and both the handset and the counter see it', async () => {
+      const { fx, call, counter } = await start({ printer: fakePrinter().printer });
+      const placed = await kot(call, { waiterId: fx.waiter.trusted, items: [{ skuId: fx.sku.half, quantity: 1 }] });
+      const path = `/api/captain/bills/${placed.body.bill.id}/settle-request`;
+
+      const first = await call('POST', path, { waiterId: fx.waiter.trusted });
+      expect(first).toMatchObject({ status: 201, body: { alreadyRequested: false, bill: { id: placed.body.bill.id, status: 'OPEN' } } });
+      expect(first.body.requestedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      expect(await call('POST', path, { waiterId: fx.waiter.trusted })).toMatchObject({
+        status: 200,
+        body: { alreadyRequested: true, requestedAt: first.body.requestedAt },
+      });
+
+      const open = await call('GET', `/api/captain/waiter/${fx.waiter.trusted}/bills`);
+      expect(open.body[0].settleRequestedAt).toBe(first.body.requestedAt);
+      const queue = await counter('GET', '/api/captain-orders');
+      expect(queue.body[0].settleRequestedAt).toBe(first.body.requestedAt);
+    });
+
+    it("refuses another waiter's bill (PS002) and a settled one (PS001)", async () => {
+      const { fx, call, counter } = await start({ printer: fakePrinter().printer });
+      const placed = await kot(call, { waiterId: fx.waiter.trusted, items: [{ skuId: fx.sku.half, quantity: 1 }] });
+      const path = `/api/captain/bills/${placed.body.bill.id}/settle-request`;
+      expect(await call('POST', path, { waiterId: fx.waiter.untrusted })).toMatchObject({ status: 409, body: { error: { code: 'PS002' } } });
+      await counter('POST', `/api/bills/${placed.body.bill.id}/settle-waiter`, { waiterId: fx.waiter.trusted, tender: 'CASH' });
+      expect(await call('POST', path, { waiterId: fx.waiter.trusted })).toMatchObject({ status: 409, body: { error: { code: 'PS001' } } });
+    });
+  });
 });

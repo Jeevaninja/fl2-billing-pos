@@ -119,6 +119,8 @@ export interface BillDetail {
   waiter: WaiterSummary | null;
   tenderedPaise: Paise;
   duePaise: Paise;
+  /** When a Captain handset asked the counter to settle the bill (Phase 27, 0020); null if never. */
+  settleRequestedAt: Date | null;
 }
 
 export interface CounterContext {
@@ -586,6 +588,8 @@ export class CounterQueries {
       ? await maybeOne<WaiterRow>(this.db, `SELECT ${WAITER_COLUMNS} FROM waiters WHERE id = $1`, [bill.waiterId])
       : undefined;
 
+    const settleRequest = await maybeOne<{ requested_at: Date }>(this.db, `SELECT requested_at FROM bill_settle_requests WHERE bill_id = $1`, [billId]);
+
     const payments = paymentRows.map(mapBillPayment);
     const tenderedPaise = payments.reduce((sum, p) => sum + p.amountPaise, 0n);
     return {
@@ -596,6 +600,7 @@ export class CounterQueries {
       waiter: waiter ? mapWaiter(waiter) : null,
       tenderedPaise,
       duePaise: bill.totalPaise - tenderedPaise,
+      settleRequestedAt: settleRequest?.requested_at ?? null,
     };
   }
 }
