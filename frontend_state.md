@@ -197,7 +197,7 @@ Only the Reports tile still calls `runStub`; every other tile (and F1/F2/F9, whi
   dashboard.
 
 **Waiter Ledger screen** (`waiterLedgerReducer`, pure and unit-tested; Phase 16):
-- **State:** `waiters` (server order), `selectedWaiterId`, `ledger` (that waiter's account), `checked` (ticked bill ids), `cursorBillId` (highlighted bill), `selectedKey` (its line), `focus: 'waiters' | 'bills' | 'lines'`, `seenNewest` / `freshWaiterIds` (new-order detection from `newestOpenAt`; nothing is new on the first load), `lastUpdated`, `dialog: 'settle' | 'receive' | 'member' | null`, `flash`.
+- **State:** `waiters` (server order), `selectedWaiterId`, `ledger` (that waiter's account), `checked` (ticked bill ids), `cursorBillId` (highlighted bill), `selectedKey` (its line), `focus: 'waiters' | 'bills' | 'lines'`, `seenNewest` / `freshWaiterIds` (new-order or new settle-request detection from the later of `newestOpenAt` and `newestSettleRequestAt`; nothing is new on the first load), `lastUpdated`, `dialog: 'settle' | 'receive' | 'member' | null`, `flash`.
 - **Actions:** `listLoaded` (a selected waiter who drops out is replaced by the row in its place), `listFailed`, `ledgerLoaded` (dropped if it belongs to a waiter the cashier already left; keeps ticks and the cursor on bills still open, and a settled cursor moves to the bill in its place), `selectWaiter`, `cursor`, `toggleCheck`, `checkAll` (toggles all / none), `clearChecks`, `selectLine`, `move` (by focused pane), `focus`, `cycleFocus`, `dialog`, `flash`.
 - **Selectors:** `billsToSettle` gives the ticked bills, or the highlighted bill when none are ticked. `allocate(openBills, credit, amount)` previews the server's lump-sum rule: oldest bill first, part-pay the next, then credit, plus `overPaise`. `receiveError` checks a waiter is picked, then trusted, then owing, then the amount (blank / rupees / > ₹0 / ≤ balance).
 - **Polling vs writes:** same as before. Writes run through a serial queue and bump a sequence number, any read that straddles a write is dropped, and every write is followed by a refresh.
@@ -207,6 +207,10 @@ Only the Reports tile still calls `runStub`; every other tile (and F1/F2/F9, whi
   - Line edits: `−`/Delete removes one bottle (restock) · X marks one broken.
   - Other: F2 member on the highlighted bill · R refresh · Esc dashboard.
   - Mutating keys ignore auto-repeat, and line edits are locked once a bill is part-paid.
+- **Settle requested (Phase 27):** a waiter row shows a rose "Settle requested" / "Settle ×N" badge while
+  `settleRequests > 0`; a bill row shows a "Settle" tag and the highlighted bill's header "Settle requested hh:mm"
+  (`BillDetail.settleRequestedAt`). It's a flag only: the cashier settles through F9 / F7 as usual. Bills keep their
+  oldest-first order, because `allocate` and the server's lump-sum rule both follow it.
 
 **Day End screen** (`dayEndReducer`, pure and unit-tested):
 - **State:** `load` (`loading` / `ready` / `offline` / `none` = no day ever opened), `summary` (the open day, or the last closed one), `counted` (typed rupees), `dialog` (`confirm` / `repay` + waiter id / `endPeak`), `flash`.

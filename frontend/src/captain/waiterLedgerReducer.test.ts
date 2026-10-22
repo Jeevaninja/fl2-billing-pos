@@ -23,6 +23,8 @@ const row = (over: Partial<WaiterLedgerRow> = {}): WaiterLedgerRow => ({
   openBills: 0,
   openDuePaise: 0n,
   newestOpenAt: null,
+  settleRequests: 0,
+  newestSettleRequestAt: null,
   ...over,
 })
 
@@ -116,6 +118,19 @@ describe('waiterLedgerReducer', () => {
     expect(selectedWaiter(s)?.code).toBe('W02')
     s = waiterLedgerReducer(s, { type: 'listLoaded', waiters: [], at: 5 })
     expect(s.selectedWaiterId).toBeNull()
+  })
+
+  it('flags a waiter whose handset asked to settle a bill since the last refresh (Phase 27)', () => {
+    let s = loaded()
+    const asked = { ...W1, settleRequests: 1, newestSettleRequestAt: '2026-10-18T10:07:00.000Z' }
+    s = waiterLedgerReducer(s, { type: 'listLoaded', waiters: [asked, W2], at: 2 })
+    expect([...s.freshWaiterIds]).toEqual(['w-1'])
+    s = waiterLedgerReducer(s, { type: 'listLoaded', waiters: [asked, W2], at: 3 })
+    expect(s.freshWaiterIds.size).toBe(0)
+    // An older request than the newest order seen is not news.
+    const late = { ...W2, settleRequests: 1, newestSettleRequestAt: '2026-10-18T10:04:00.000Z' }
+    s = waiterLedgerReducer(s, { type: 'listLoaded', waiters: [asked, late], at: 4 })
+    expect(s.freshWaiterIds.size).toBe(0)
   })
 })
 

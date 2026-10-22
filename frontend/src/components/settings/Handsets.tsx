@@ -4,7 +4,7 @@ import { ApiError, api } from '../../api/client'
 import type { Handset, HandsetList, IssuedHandsetToken } from '../../api/types'
 import { counterErrorMessage } from '../../billing/errors'
 import { Modal } from '../../billing/Modal'
-import { handsetFormError, MAX_HANDSET_LABEL, nextHandsetId, pairedOn, sortHandsets } from '../../settings/handsets'
+import { handsetFormError, MAX_HANDSET_LABEL, nextHandsetId, pairedOn, phoneAddress, sortHandsets } from '../../settings/handsets'
 import { buttonClass, CARD, FOCUS_RING } from '../../lib/ui'
 import { Badge, Kbd } from '../ui'
 
@@ -40,7 +40,7 @@ export function HandsetsSection({
           <span className="text-sm text-zinc-400">
             {list.serverUrls.length > 0 ? (
               <>
-                Server <span className="font-mono text-zinc-200">{list.serverUrls.join(' · ')}</span>
+                POS IP for phones <span className="font-mono text-zinc-200">{list.serverUrls.map(phoneAddress).join(' · ')}</span>
               </>
             ) : (
               'Captain server starts when the first handset is paired'
@@ -53,7 +53,7 @@ export function HandsetsSection({
       </div>
       {error && <p className="text-sm font-semibold text-rose-300">{error}</p>}
       {list && handsets.length === 0 && (
-        <p className={`${CARD} px-4 py-5 text-sm text-zinc-400`}>No handsets yet. Pair one, then enter its server address and token in the app’s POS Settings.</p>
+        <p className={`${CARD} px-4 py-5 text-sm text-zinc-400`}>No handsets yet. Pair one, then enter the POS IP address and its token in the app’s POS Settings.</p>
       )}
       {handsets.length > 0 && (
         <ul className={`${CARD} divide-y divide-zinc-800 overflow-hidden`} aria-label="Handsets">
@@ -280,7 +280,7 @@ export function HandsetTokenDialog({ issued, onClose }: { issued: IssuedHandsetT
     >
       <div className="flex flex-col gap-4">
         <p className="text-zinc-300">
-          In the app, open <strong>POS Settings</strong> and enter the server address and this token for <span className="font-mono">{issued.handset.id}</span>.
+          In the app, open <strong>POS Settings</strong> and enter the POS IP address and this token for <span className="font-mono">{issued.handset.id}</span>.
         </p>
         <div className="flex flex-col gap-1.5">
           <span className="text-sm font-semibold text-zinc-300">Device token</span>
@@ -289,11 +289,11 @@ export function HandsetTokenDialog({ issued, onClose }: { issued: IssuedHandsetT
           </code>
         </div>
         <div className="flex flex-col gap-1.5">
-          <span className="text-sm font-semibold text-zinc-300">Server address</span>
+          <span className="text-sm font-semibold text-zinc-300">POS IP address</span>
           {issued.serverUrls.length > 0 ? (
-            <span className="font-mono text-zinc-100">{issued.serverUrls.join(' · ')}</span>
+            <span className="font-mono text-lg text-zinc-100">{issued.serverUrls.map(phoneAddress).join(' · ')}</span>
           ) : (
-            <span className="text-sm text-zinc-400">The Captain server is starting; its address shows above the handset list in a moment.</span>
+            <span className="text-sm text-zinc-400">The Captain server is starting; its IP shows above the handset list in a moment.</span>
           )}
         </div>
         <p className={`text-sm font-semibold ${copied === 'failed' ? 'text-rose-300' : 'text-amber-300'}`} role={copied === 'failed' ? 'alert' : undefined}>

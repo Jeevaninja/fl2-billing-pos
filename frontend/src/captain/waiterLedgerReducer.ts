@@ -25,9 +25,9 @@ export interface WaiterLedgerState {
   /** Selected line (ItemRow key) of the highlighted bill. */
   selectedKey: string | null
   focus: LedgerPane
-  /** Each waiter's newest open bill as last seen; a later one on a refresh is a new order. */
+  /** Each waiter's newest open bill or settle request as last seen; a later one on a refresh is news. */
   seenNewest: ReadonlyMap<string, string>
-  /** Waiters whose list row got a new order with the latest refresh (highlighted, one beep). */
+  /** Waiters whose list row got a new order or settle request with the latest refresh (highlighted, one beep). */
   freshWaiterIds: ReadonlySet<string>
   lastUpdated: number | null
   dialog: LedgerDialog | null
@@ -194,6 +194,13 @@ function flash(state: WaiterLedgerState, kind: Flash['kind'], text: string): Fla
 
 const PANES: readonly LedgerPane[] = ['waiters', 'bills', 'lines']
 
+/** The later of a waiter's newest open bill and newest settle request (ISO strings compare in time order). */
+function latestActivity(w: WaiterLedgerRow): string | null {
+  const { newestOpenAt: order, newestSettleRequestAt: request } = w
+  if (order === null || request === null) return order ?? request
+  return request > order ? request : order
+}
+
 export function waiterLedgerReducer(state: WaiterLedgerState, action: WaiterLedgerAction): WaiterLedgerState {
   switch (action.type) {
     case 'listLoaded': {
@@ -201,10 +208,11 @@ export function waiterLedgerReducer(state: WaiterLedgerState, action: WaiterLedg
       const fresh = new Set<string>()
       const seenNewest = new Map(state.seenNewest)
       for (const w of action.waiters) {
-        if (w.newestOpenAt === null) continue
+        const newest = latestActivity(w)
+        if (newest === null) continue
         const seen = seenNewest.get(w.id)
-        if (!firstLoad && (seen === undefined || w.newestOpenAt > seen)) fresh.add(w.id)
-        seenNewest.set(w.id, w.newestOpenAt)
+        if (!firstLoad && (seen === undefined || newest > seen)) fresh.add(w.id)
+        seenNewest.set(w.id, newest)
       }
       let next: WaiterLedgerState = { ...state, load: 'ready', offlineMessage: null, waiters: action.waiters, lastUpdated: action.at, seenNewest, freshWaiterIds: fresh }
       const focus = state.pendingFocus

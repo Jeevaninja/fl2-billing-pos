@@ -119,6 +119,8 @@ export interface BillDetail {
   waiter: WaiterSummary | null
   tenderedPaise: Paise
   duePaise: Paise
+  /** When a Captain handset asked the counter to settle this bill (Phase 27); null if never. */
+  settleRequestedAt: string | null
 }
 
 export interface PeakSessionView {
@@ -174,6 +176,9 @@ export interface WaiterLedgerRow extends WaiterSummary {
   openBills: number
   openDuePaise: Paise
   newestOpenAt: string | null
+  /** Open bills a Captain handset asked the counter to settle (Phase 27). */
+  settleRequests: number
+  newestSettleRequestAt: string | null
 }
 
 export type LedgerAllocation =

@@ -50,6 +50,7 @@ export function detail(items: BillDetailItem[] = [], over: Partial<BillDetail> =
     waiter: null,
     tenderedPaise: tendered,
     duePaise: total - tendered,
+    settleRequestedAt: null,
     ...over,
   }
 }

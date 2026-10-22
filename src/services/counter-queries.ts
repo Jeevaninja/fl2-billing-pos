@@ -159,6 +159,10 @@ export interface WaiterLedgerRow extends WaiterSummary {
   openDuePaise: Paise;
   /** When their newest open bill was created (new-order hint); null with none open. */
   newestOpenAt: Date | null;
+  /** Open bills a Captain handset asked the counter to settle (Phase 27). */
+  settleRequests: number;
+  /** The newest of those requests (new-request hint); null with none. */
+  newestSettleRequestAt: Date | null;
 }
 
 export type LedgerAllocation =
@@ -272,7 +276,15 @@ export function mapWaiter(r: WaiterRow): WaiterSummary {
   };
 }
 
-type WaiterLedgerDbRow = WaiterRow & { billed: DbInt; paid: DbInt; open_bills: number; open_due: DbInt; newest_open_at: Date | null };
+type WaiterLedgerDbRow = WaiterRow & {
+  billed: DbInt;
+  paid: DbInt;
+  open_bills: number;
+  open_due: DbInt;
+  newest_open_at: Date | null;
+  settle_requests: number;
+  newest_settle_request_at: Date | null;
+};
 
 /**
  * Per-waiter figures for the open day. Open dues cover every OPEN bill (an open bill can't outlive its
@@ -295,8 +307,10 @@ const WAITER_LEDGER_SQL = `
   ),
   open AS (
     SELECT b.waiter_id, count(*) AS n, max(b.created_at) AS newest,
-           sum(b.total_paise - coalesce((SELECT sum(p.amount_paise) FROM bill_payments p WHERE p.bill_id = b.id), 0)) AS due
+           sum(b.total_paise - coalesce((SELECT sum(p.amount_paise) FROM bill_payments p WHERE p.bill_id = b.id), 0)) AS due,
+           count(sr.bill_id) AS settle_requests, max(sr.requested_at) AS newest_settle_request
       FROM bills b
+      LEFT JOIN bill_settle_requests sr ON sr.bill_id = b.id
      WHERE b.waiter_id IS NOT NULL AND b.status = 'OPEN' AND b.bill_kind = 'SALE'
      GROUP BY b.waiter_id
   )
@@ -305,7 +319,9 @@ const WAITER_LEDGER_SQL = `
          (coalesce(bl.paid, 0) + coalesce(rp.repaid, 0))::text AS paid,
          coalesce(o.n, 0)::int                                AS open_bills,
          coalesce(o.due, 0)::text                             AS open_due,
-         o.newest                                             AS newest_open_at
+         o.newest                                             AS newest_open_at,
+         coalesce(o.settle_requests, 0)::int                  AS settle_requests,
+         o.newest_settle_request                              AS newest_settle_request_at
     FROM waiters w
     LEFT JOIN billed bl ON bl.waiter_id = w.id
     LEFT JOIN repaid rp ON rp.waiter_id = w.id
@@ -323,6 +339,8 @@ function mapLedgerRow(r: WaiterLedgerDbRow): WaiterLedgerRow {
     openBills: r.open_bills,
     openDuePaise,
     newestOpenAt: r.newest_open_at,
+    settleRequests: r.settle_requests,
+    newestSettleRequestAt: r.newest_settle_request_at,
   };
 }
 

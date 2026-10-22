@@ -191,4 +191,28 @@ describe('Waiter ledger (Phase 16)', () => {
     expect(rows[0]?.newestOpenAt).toBeInstanceOf(Date);
     for (const r of rows) expect(r.billedPaise - r.paidPaise).toBe(r.balancePaise);
   });
+
+  it('counts open bills a handset asked to settle (Phase 27); settling one drops it from the count', async () => {
+    const s = setup();
+    const { fx, queries, waiters, captain } = s;
+    const place = () =>
+      captain.placeOrder({ requestId: randomUUID(), deviceId: 'handset-01', waiterId: fx.waiter.trusted, items: [{ skuId: fx.sku.beer650, quantity: 1 }] });
+    const a = await place();
+    const b = await place();
+    await counterBill(s, fx.waiter.trusted, fx.sku.quarter, 1);
+
+    let row = (await queries.listWaiterLedger()).find((r) => r.id === fx.waiter.trusted);
+    expect(row).toMatchObject({ openBills: 3, settleRequests: 0, newestSettleRequestAt: null });
+
+    await captain.requestSettlement({ deviceId: 'handset-01', waiterId: fx.waiter.trusted, billId: a.bill.id });
+    const second = await captain.requestSettlement({ deviceId: 'handset-01', waiterId: fx.waiter.trusted, billId: b.bill.id });
+    row = (await queries.listWaiterLedger()).find((r) => r.id === fx.waiter.trusted);
+    expect(row).toMatchObject({ openBills: 3, settleRequests: 2, newestSettleRequestAt: second.requestedAt });
+
+    const ledger = await queries.getWaiterLedger(fx.waiter.trusted);
+    expect(ledger.openBills.map((d) => d.settleRequestedAt !== null)).toEqual([true, true, false]);
+
+    await waiters.settleWaiterBill(a.bill.id, fx.waiter.trusted, 'CASH');
+    expect((await queries.getWaiterLedger(fx.waiter.trusted)).waiter).toMatchObject({ openBills: 2, settleRequests: 1 });
+  });
 });

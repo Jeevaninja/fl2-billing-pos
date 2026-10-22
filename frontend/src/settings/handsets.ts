@@ -34,3 +34,12 @@ export function pairedOn(iso: string): string {
   const date = new Date(iso)
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
 }
+
+/** The IP the app's "POS IP address" field takes (the app fixes the port), from a server URL. */
+export function phoneAddress(url: string): string {
+  try {
+    return new URL(url).hostname
+  } catch {
+    return url
+  }
+}

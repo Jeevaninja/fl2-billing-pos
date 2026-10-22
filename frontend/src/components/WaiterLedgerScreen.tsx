@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeft, CheckSquare, HandCoins, Minus, PackageX, RefreshCw, Smartphone, Square, UserRound, WifiOff } from 'lucide-react'
+import { ArrowLeft, BellRing, CheckSquare, HandCoins, Minus, PackageX, RefreshCw, Smartphone, Square, UserRound, WifiOff } from 'lucide-react'
 import { api } from '../api/client'
 import type { BillDetail, CounterTender, LedgerReceipt, MemberSummary, Paise, Tender, WaiterLedger, WaiterLedgerRow } from '../api/types'
 import { FlashLine, ItemsGrid } from '../billing/BillingPanels'
@@ -26,7 +26,7 @@ import { beep } from '../lib/beep'
 import { formatPaise, parseRupeesToPaise } from '../lib/money'
 import { FOCUS_RING, formatTime, keepFocus } from '../lib/ui'
 import { RupeeField } from './RupeeField'
-import { Kbd, LiveClock } from './ui'
+import { Badge, Kbd, LiveClock } from './ui'
 
 const POLL_MS = 5_000
 const AGE_TICK_MS = 15_000
@@ -390,6 +390,7 @@ export default function WaiterLedgerScreen({ onExit, focus = null }: { onExit: (
                       <span className="text-zinc-400">
                         {cursor.bill.source === 'WAITER_APP' ? (cursor.bill.captainDeviceId ?? 'handset') : 'counter'} · {formatTime(new Date(cursor.bill.createdAt))}
                       </span>
+                      {cursor.settleRequestedAt && <SettleRequested at={cursor.settleRequestedAt} />}
                       <button
                         type="button"
                         {...keepFocus}
@@ -531,6 +532,15 @@ function Figure({ label, amount, tone = 'plain', big = false }: { label: string;
 
 // ── Waiter list (left) ───────────────────────────────────────────────────────
 
+/** A Captain handset asked the counter to settle this bill (Phase 27). It's a flag only: settle as usual. */
+function SettleRequested({ at }: { at: string }) {
+  return (
+    <Badge tone="rose">
+      <BellRing className="size-3" aria-hidden /> Settle requested {formatTime(new Date(at))}
+    </Badge>
+  )
+}
+
 function WaiterList({
   waiters,
   selectedId,
@@ -572,11 +582,16 @@ function WaiterList({
                   <span className="flex min-w-0 items-center gap-2">
                     <span className="font-mono text-sm text-zinc-400">{w.code}</span>
                     <span className="truncate font-bold">{w.displayName}</span>
-                    {freshIds.has(w.id) && <span className="size-2 shrink-0 rounded-full bg-sky-400" aria-label="new order" />}
+                    {freshIds.has(w.id) && <span className="size-2 shrink-0 rounded-full bg-sky-400" aria-label="new order or settle request" />}
                   </span>
                   <span className="flex items-center gap-2">
                     <TrustBadge trusted={w.isTrusted} />
                     {w.openBills > 0 && <span className="text-xs font-semibold text-amber-300">{w.openBills} open</span>}
+                    {w.settleRequests > 0 && (
+                      <Badge tone="rose">
+                        <BellRing className="size-3" aria-hidden /> Settle {w.settleRequests > 1 ? `×${w.settleRequests}` : 'requested'}
+                      </Badge>
+                    )}
                   </span>
                 </span>
                 <span className="text-right font-mono text-sm tabular-nums text-zinc-300">{formatPaise(w.billedPaise)}</span>
@@ -647,6 +662,11 @@ function OpenBills({
                 <button type="button" {...keepFocus} onClick={() => onCursor(b.bill.id)} className="col-span-5 grid grid-cols-subgrid items-center text-left">
                   <span className="font-mono text-lg font-bold">#{b.bill.billNo}</span>
                   <span className="truncate text-sm text-zinc-300">
+                    {b.settleRequestedAt && (
+                      <span className="mr-1.5 inline-flex items-center gap-1 rounded bg-rose-500/20 px-1.5 py-0.5 text-xs font-bold text-rose-200" title={`Settle requested at ${formatTime(new Date(b.settleRequestedAt))}`}>
+                        <BellRing className="size-3" aria-hidden /> Settle
+                      </span>
+                    )}
                     {b.bill.source === 'WAITER_APP' ? (b.bill.captainDeviceId ?? 'handset') : 'counter'}
                     {b.member && <span className="text-zinc-400"> · {b.member.displayName}</span>}
                     {b.tenderedPaise > 0n && <span className="text-amber-300"> · part-paid {formatPaise(b.tenderedPaise)}</span>}

@@ -8,9 +8,10 @@ Status: **IN PROGRESS (2026-10-22)**. D1–D8 were approved as recommended.
 - the mobile app's Captain Mode (`FL2 Club Mobile ERP/mobile-app`, commit `d2d00ab`): POS settings with the waiter
   picker, Active Bills, Order Entry and bill detail, checked live against this server on a scratch database
 
-**Still to build:**
-- the counter's "Settle requested" badge (§2; the API already returns `settleRequestedAt`)
-- the end-to-end check on a device
+- the counter's "Settle requested" badge on the Waiter Ledger (the Captain Orders tile since Phase 16)
+- pairing, re-issuing and revoking handsets from Settings → Staff & PINs (instead of only the CLI)
+
+**Still to do:** the end-to-end check on a real Android handset (development build, club Wi-Fi). Needs you.
 
 Changes from the plan as written:
 - **Member lookup** is `GET /api/captain/members/lookup?code=…`, not `/members/by-code/:code`. The router passes
@@ -19,6 +20,9 @@ Changes from the plan as written:
   uncommitted 2026-10-15 build reads as unset. Changing the server address clears the waiter.
 - **Member link (D3):** a code the POS doesn't know stops the send with a message instead of sending without a member;
   the waiter fixes the code or clears it. Only a new bill takes a member: a round has no member field.
+- **Settle-requested bills are not listed first.** The Waiter Ledger keeps open bills oldest first, because the
+  lump-sum preview (`allocate`) and the server's allocation both follow that order. Instead, the waiter row gets a
+  badge and a highlight with one beep when a request arrives, and the bill row is tagged.
 - **A round prints everything pending** at the BAR and KITCHEN for that bill. That includes any liquor line the
   counter added to the same waiter bill without a KOT.
 

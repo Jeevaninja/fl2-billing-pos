@@ -407,6 +407,7 @@ interface WaiterLedgerRow extends WaiterSummary {           // Phase 16, open da
   paidPaise: Paise;        // Σ CASH / UPI tenders on those bills + Σ the day's waiter_payments (net of voids)
   balancePaise: Paise;     // Σ due on OPEN waiter bills + outstanding_balance
   openBills: number; openDuePaise: Paise; newestOpenAt: Date | null;
+  settleRequests: number; newestSettleRequestAt: Date | null;   // Phase 27: OPEN bills with a bill_settle_requests row
 }
 interface WaiterLedger {
   waiter: WaiterLedgerRow; creditPaise: Paise;
